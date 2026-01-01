@@ -1,0 +1,6 @@
+[submodule "learn-projects/dumpster"]
+	path = learn-projects/dumpster
+	url = git@github.com:claytonwramsey/dumpster.git
+[submodule "learn-projects/ChezScheme"]
+	path = learn-projects/ChezScheme
+	url = git@github.com:cisco/ChezScheme.git
