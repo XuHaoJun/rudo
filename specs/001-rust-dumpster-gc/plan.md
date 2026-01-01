@@ -1,104 +1,139 @@
-# Implementation Plan: [FEATURE]
+# Implementation Plan: Rust Dumpster GC - BiBOP & Mark-Sweep Engine
 
-**Branch**: `[###-feature-name]` | **Date**: [DATE] | **Spec**: [link]
-**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
-
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
+**Branch**: `001-rust-dumpster-gc` | **Date**: 2026-01-02 | **Spec**: [spec.md](./spec.md)
+**Input**: Feature specification from `/specs/001-rust-dumpster-gc/spec.md`
 
 ## Summary
 
-[Extract from feature spec: primary requirement + technical approach from research]
+Develop a Rust garbage collection library that provides a `Gc<T>` smart pointer with automatic memory reclamation. The implementation uses **BiBOP (Big Bag of Pages)** memory layout for efficient O(1) allocation via size classes, combined with a **Mark-Sweep** garbage collection algorithm (non-moving) to handle cycles. The API is designed to be ergonomic, similar to `dumpster`, with a `#[derive(Trace)]` macro for custom types.
+
+Key technical insights from reference implementations:
+- **From Chez Scheme**: BiBOP segment organization, Page Header with mark bitmap, O(1) interior pointer resolution via page alignment
+- **From dumpster**: Reference counting with cycle detection (we will use full tracing instead), `Trace` trait design, Visitor pattern for traversal
 
 ## Technical Context
 
-<!--
-  ACTION REQUIRED: Replace the content in this section with the technical details
-  for the project. The structure here is presented in advisory capacity to guide
-  the iteration process.
--->
-
-**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]  
-**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]  
-**Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]  
-**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]  
-**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
-**Project Type**: [single/web/mobile - determines source structure]  
-**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]  
-**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]  
-**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
+**Language/Version**: Rust 1.75+ (stable preferred, nightly if `coerce_unsized` needed)  
+**Primary Dependencies**: `std` (core allocator APIs), `proc-macro2`, `syn`, `quote` (for derive macro)  
+**Storage**: N/A (in-memory heap only)  
+**Testing**: `cargo test`, Miri for UB detection  
+**Target Platform**: Linux/macOS/Windows (any platform with `std` support)  
+**Project Type**: Rust crate library (single project, multi-crate workspace)  
+**Performance Goals**: O(1) allocation for small objects, O(live_objects) collection time  
+**Constraints**: No object movement (address stability for Rust's `&T`), Stop-the-World collection for MVP  
+**Scale/Scope**: MVP supports single-threaded GC; concurrent/parallel marking is post-MVP
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+| Principle | Status | Notes |
+|-----------|--------|-------|
+| I. Code Quality Excellence | ✅ Pass | Safe Rust API, unsafe internals well-documented |
+| II. Rigorous Testing Standards | ✅ Pass | Unit tests for allocator/GC, integration tests for cycle collection, Miri for safety |
+| III. Consistent User Experience | ✅ Pass | Ergonomic API (`Gc<T>`, `derive(Trace)`) modeled after `dumpster` |
+| IV. Performance & Efficiency by Design | ✅ Pass | BiBOP for O(1) alloc, Mark-Sweep for cycle handling, designed for latency control |
+
+**Constitution Check Result**: PASS - No violations.
 
 ## Project Structure
 
 ### Documentation (this feature)
 
 ```text
-specs/[###-feature]/
-├── plan.md              # This file (/speckit.plan command output)
-├── research.md          # Phase 0 output (/speckit.plan command)
-├── data-model.md        # Phase 1 output (/speckit.plan command)
-├── quickstart.md        # Phase 1 output (/speckit.plan command)
-├── contracts/           # Phase 1 output (/speckit.plan command)
-└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
+specs/001-rust-dumpster-gc/
+├── spec.md              # Feature specification
+├── plan.md              # This file
+├── research.md          # Phase 0 output
+├── data-model.md        # Phase 1 output
+├── quickstart.md        # Phase 1 output
+├── contracts/           # Phase 1 output (API traits/types)
+├── checklists/          # Quality checklists
+└── tasks.md             # Phase 2 output (via /speckit.tasks)
 ```
 
 ### Source Code (repository root)
-<!--
-  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
-  for this feature. Delete unused options and expand the chosen structure with
-  real paths (e.g., apps/admin, packages/something). The delivered plan must
-  not include Option labels.
--->
 
 ```text
-# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
-src/
-├── models/
-├── services/
-├── cli/
-└── lib/
-
-tests/
-├── contract/
-├── integration/
-└── unit/
-
-# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
-backend/
-├── src/
-│   ├── models/
-│   ├── services/
-│   └── api/
-└── tests/
-
-frontend/
-├── src/
-│   ├── components/
-│   ├── pages/
-│   └── services/
-└── tests/
-
-# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
-api/
-└── [same as backend above]
-
-ios/ or android/
-└── [platform-specific structure: feature modules, UI flows, platform tests]
+crates/
+├── rudo-gc/                  # Main GC library
+│   ├── src/
+│   │   ├── lib.rs            # Public API (Gc<T>, Trace trait, collect())
+│   │   ├── heap.rs           # GlobalHeap and Segment<SIZE> implementation
+│   │   ├── gc.rs             # Mark-Sweep algorithm
+│   │   ├── trace.rs          # Trace trait and Visitor pattern
+│   │   ├── roots.rs          # Root tracking (Shadow Stack or Conservative)
+│   │   └── ptr.rs            # Gc<T> smart pointer implementation
+│   ├── Cargo.toml
+│   └── tests/
+│       ├── basic.rs          # Basic allocation/deallocation
+│       ├── cycles.rs         # Cycle collection tests
+│       └── benchmarks.rs     # Performance tests
+│
+└── rudo-gc-derive/           # Proc-macro crate
+    ├── src/
+    │   └── lib.rs            # #[derive(Trace)] implementation
+    └── Cargo.toml
 ```
 
-**Structure Decision**: [Document the selected structure and reference the real
-directories captured above]
+**Structure Decision**: Multi-crate workspace pattern for Rust library with proc-macro support. The main `rudo-gc` crate provides the GC runtime, while `rudo-gc-derive` provides the derive macro. This mirrors the structure of `dumpster` and `dumpster_derive`.
 
 ## Complexity Tracking
 
-> **Fill ONLY if Constitution Check has violations that must be justified**
+> No violations to justify - Constitution Check passed.
 
-| Violation | Why Needed | Simpler Alternative Rejected Because |
-|-----------|------------|-------------------------------------|
-| [e.g., 4th project] | [current need] | [why 3 projects insufficient] |
-| [e.g., Repository pattern] | [specific problem] | [why direct DB access insufficient] |
+## Technical Design Decisions
+
+### 1. Memory Layout: BiBOP (from Chez Scheme / John McCarthy doc)
+
+Each Page (4KB aligned) contains:
+- **Page Header**: Magic number, block size, object count, mark bitmap
+- **Object Slots**: Fixed-size slots based on size class
+
+Size classes (compile-time determined via `const generics`):
+- Class 16: objects ≤16 bytes (max 255 objects per page)
+- Class 32: objects ≤32 bytes (max 127 objects per page)
+- Class 64: objects ≤64 bytes (max 63 objects per page)
+- Class 128, 256, 512, 1024, 2048: larger size classes
+- Large Object Space (LOS): objects > 2KB get dedicated pages
+
+### 2. Root Tracking Strategy
+
+Two options were researched (see research.md):
+- **Option A (Shadow Stack)**: RAII-based registration of roots. Safer but has runtime overhead.
+- **Option B (Conservative Scanning)**: Scan stack memory, treat anything resembling a heap pointer as a root. More complex but zero overhead during normal execution.
+
+**Decision**: Start with Shadow Stack for MVP (safer, easier to implement). Conservative scanning as future optimization.
+
+### 3. Collection Algorithm
+
+1. **Mark Phase**: Starting from roots, traverse object graph using Trace trait. Set bits in page header mark bitmaps.
+2. **Sweep Phase**: Iterate all pages, reclaim objects with unmarked bits.
+3. **Triggering**: Configurable condition (default: when dropped_count > living_count, similar to dumpster).
+
+### 4. API Design (from dumpster)
+
+```rust
+// User-facing types
+pub struct Gc<T: Trace + ?Sized>(/* ... */);
+
+pub unsafe trait Trace {
+    fn trace(&self, visitor: &mut impl Visitor);
+}
+
+pub trait Visitor {
+    fn visit<T: Trace + ?Sized>(&mut self, gc: &Gc<T>);
+}
+
+// Free functions
+pub fn collect();
+pub fn set_collect_condition(f: fn(&CollectInfo) -> bool);
+```
+
+## Next Steps
+
+1. Create `research.md` documenting technology decisions
+2. Create `data-model.md` with key entity definitions
+3. Create `contracts/` with trait definitions
+4. Create `quickstart.md` with usage examples
+5. Run `/speckit.tasks` to generate implementation tasks
