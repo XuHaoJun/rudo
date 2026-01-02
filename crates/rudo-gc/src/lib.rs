@@ -65,6 +65,7 @@
 
 pub mod cell;
 mod gc;
+mod metrics;
 mod ptr;
 mod stack;
 mod trace;
@@ -76,10 +77,24 @@ mod trace;
 pub mod heap;
 
 // Re-export public API
-pub use gc::{collect, default_collect_condition, set_collect_condition, CollectInfo};
-pub use ptr::Gc;
+pub use gc::{
+    collect, collect_full, default_collect_condition, set_collect_condition, CollectInfo,
+};
+pub use metrics::{last_gc_metrics, CollectionType, GcMetrics};
+pub use ptr::{Gc, Weak};
 pub use trace::{Trace, Visitor};
 
 // Re-export derive macro when feature is enabled
 #[cfg(feature = "derive")]
 pub use rudo_gc_derive::Trace;
+
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
+pub mod test_util {
+    pub use crate::gc::{clear_test_roots, register_test_root};
+
+    /// Get the internal `GcBox` pointer.
+    pub fn internal_ptr<T: crate::Trace + ?Sized>(gc: &crate::Gc<T>) -> *const u8 {
+        crate::Gc::internal_ptr(gc)
+    }
+}

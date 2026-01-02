@@ -10,6 +10,7 @@
 
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ptr::NonNull;
 
 // ============================================================================
@@ -45,22 +46,27 @@ pub const MAX_SMALL_OBJECT_SIZE: usize = 2048;
 pub struct PageHeader {
     /// Magic number to validate this is a GC page.
     pub magic: u32,
-    /// Size of each object slot in bytes.
-    pub block_size: u16,
+    /// Size of each object slot in bytes (u32 to support multi-page large objects).
+    pub block_size: u32,
     /// Maximum number of objects in this page.
     pub obj_count: u16,
+    /// Offset from the start of the page to the first object.
+    pub header_size: u16,
     /// Generation index (for future generational GC).
     pub generation: u8,
     /// Bitflags (`is_large_object`, `is_dirty`, etc.).
     pub flags: u8,
     /// Padding for alignment.
-    _padding: [u8; 6],
+    _padding: [u8; 2],
     /// Bitmap of marked objects (one bit per slot).
     /// Size depends on `obj_count`, but we reserve space for max possible.
     pub mark_bitmap: [u64; 4], // 256 bits = enough for smallest size class (16 bytes)
     /// Bitmap of dirty objects (one bit per slot).
     /// Used for generational GC to track old objects that point to young objects.
     pub dirty_bitmap: [u64; 4],
+    /// Bitmap of allocated objects (one bit per slot).
+    /// Used to distinguish between newly unreachable and already free slots.
+    pub allocated_bitmap: [u64; 4],
     /// Index of first free slot in free list.
     pub free_list_head: Option<u16>,
 }
@@ -70,7 +76,15 @@ impl PageHeader {
     #[must_use]
     pub const fn header_size(block_size: usize) -> usize {
         let base = std::mem::size_of::<Self>();
-        (base + block_size - 1) & !(block_size - 1)
+        // For small objects, block_size is a power-of-two size class (16, 32, ..., 2048).
+        // For large objects, block_size is the actual size (which might not be a power-of-two).
+        if block_size > 0 && block_size.is_power_of_two() && block_size <= MAX_SMALL_OBJECT_SIZE {
+            (base + block_size - 1) & !(block_size - 1)
+        } else {
+            // For large objects, align to at least 16 bytes (standard alignment for GcBox header).
+            // Note: alloc_large will handle stricter alignment if needed.
+            (base + 15) & !15
+        }
     }
 
     /// Calculate maximum objects per page for a given block size.
@@ -134,6 +148,33 @@ impl PageHeader {
     pub const fn clear_all_dirty(&mut self) {
         self.dirty_bitmap = [0; 4];
     }
+
+    /// Check if an object at the given index is allocated.
+    #[must_use]
+    pub const fn is_allocated(&self, index: usize) -> bool {
+        let word = index / 64;
+        let bit = index % 64;
+        (self.allocated_bitmap[word] & (1 << bit)) != 0
+    }
+
+    /// Set the allocated bit for an object at the given index.
+    pub const fn set_allocated(&mut self, index: usize) {
+        let word = index / 64;
+        let bit = index % 64;
+        self.allocated_bitmap[word] |= 1 << bit;
+    }
+
+    /// Clear the allocated bit for an object at the given index.
+    pub const fn clear_allocated(&mut self, index: usize) {
+        let word = index / 64;
+        let bit = index % 64;
+        self.allocated_bitmap[word] &= !(1 << bit);
+    }
+
+    /// Clear all allocated bits.
+    pub const fn clear_all_allocated(&mut self) {
+        self.allocated_bitmap = [0; 4];
+    }
 }
 
 // ============================================================================
@@ -185,17 +226,21 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
 
         // SAFETY: We just allocated this memory
         unsafe {
+            let h_size = PageHeader::header_size(BLOCK_SIZE);
             header.write(PageHeader {
                 magic: MAGIC_GC_PAGE,
                 #[allow(clippy::cast_possible_truncation)]
-                block_size: BLOCK_SIZE as u16,
+                block_size: BLOCK_SIZE as u32,
                 #[allow(clippy::cast_possible_truncation)]
                 obj_count: obj_count as u16,
+                #[allow(clippy::cast_possible_truncation)]
+                header_size: h_size as u16,
                 generation: 0,
                 flags: 0,
-                _padding: [0; 6],
+                _padding: [0; 2],
                 mark_bitmap: [0; 4],
                 dirty_bitmap: [0; 4],
+                allocated_bitmap: [0; 4],
                 free_list_head: None,
             });
         }
@@ -251,6 +296,7 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
                     #[allow(clippy::cast_ptr_alignment)]
                     let next_idx = *(ptr.cast::<Option<u16>>());
                     (*header).free_list_head = next_idx;
+                    (*header).set_allocated(idx as usize);
 
                     return NonNull::new_unchecked(ptr);
                 }
@@ -260,6 +306,16 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
         // 2. Fast path: bump allocation
         if self.bump_ptr < self.bump_end.cast_mut() {
             let ptr = self.bump_ptr;
+            // Record allocation in bitmap
+            if let Some(mut current) = self.current_page {
+                unsafe {
+                    let header = current.as_mut();
+                    let header_size = PageHeader::header_size(BLOCK_SIZE);
+                    let offset = ptr as usize - (current.as_ptr() as usize + header_size);
+                    let idx = offset / BLOCK_SIZE;
+                    header.set_allocated(idx);
+                }
+            }
             self.bump_ptr = unsafe { self.bump_ptr.add(BLOCK_SIZE) };
             // SAFETY: bump_ptr is always valid when less than bump_end
             return unsafe { NonNull::new_unchecked(ptr) };
@@ -408,6 +464,9 @@ pub struct GlobalHeap {
     segment_2048: Segment<2048>,
     /// Pages for objects larger than 2KB.
     large_objects: Vec<NonNull<PageHeader>>,
+    /// Map from page address to its corresponding large object head, size, and `header_size`.
+    /// This enables interior pointer support for multi-page large objects.
+    pub large_object_map: HashMap<usize, (usize, usize, usize)>,
     /// Total bytes allocated in young generation.
     young_allocated: usize,
     /// Total bytes allocated in old generation.
@@ -421,7 +480,7 @@ pub struct GlobalHeap {
 impl GlobalHeap {
     /// Create a new empty heap.
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             segment_16: Segment::new(),
             segment_32: Segment::new(),
@@ -432,6 +491,7 @@ impl GlobalHeap {
             segment_1024: Segment::new(),
             segment_2048: Segment::new(),
             large_objects: Vec::new(),
+            large_object_map: HashMap::new(),
             young_allocated: 0,
             old_allocated: 0,
             min_addr: usize::MAX,
@@ -513,7 +573,10 @@ impl GlobalHeap {
         );
 
         // For large objects, allocate dedicated pages
-        let total_size = PageHeader::header_size(size) + size;
+        // The header must be followed by padding to satisfy the object's alignment.
+        let base_h_size = PageHeader::header_size(size);
+        let h_size = (base_h_size + align - 1) & !(align - 1);
+        let total_size = h_size + size;
         let pages_needed = total_size.div_ceil(PAGE_SIZE);
         let alloc_size = pages_needed * PAGE_SIZE;
 
@@ -535,25 +598,39 @@ impl GlobalHeap {
             header.write(PageHeader {
                 magic: MAGIC_GC_PAGE,
                 #[allow(clippy::cast_possible_truncation)]
-                block_size: size as u16, // Store actual size for large objects
+                block_size: size as u32, // Store actual size for large objects (now u32)
                 obj_count: 1,
+                #[allow(clippy::cast_possible_truncation)]
+                header_size: h_size as u16,
                 generation: 0,
                 flags: 0x01, // Mark as large object
-                _padding: [0; 6],
+                _padding: [0; 2],
                 mark_bitmap: [0; 4],
                 dirty_bitmap: [0; 4],
+                allocated_bitmap: [0; 4],
                 free_list_head: None,
             });
+            // Mark the single object as allocated
+            (*header).set_allocated(0);
         }
 
         let page_ptr = unsafe { NonNull::new_unchecked(header) };
         self.large_objects.push(page_ptr);
 
-        // Update heap range for conservative scanning
-        self.update_range(header as usize, alloc_size);
+        // Register all pages of this large object in the map for interior pointer support.
+        // This allows find_gc_box_from_ptr to find the head GcBox from any interior pointer.
+        let header_addr = header as usize;
+        for p in 0..pages_needed {
+            let page_addr = header_addr + (p * PAGE_SIZE);
+            self.large_object_map
+                .insert(page_addr, (header_addr, size, h_size));
+        }
 
-        let header_size = std::mem::size_of::<PageHeader>();
-        unsafe { NonNull::new_unchecked(ptr.add(header_size)) }
+        // Update heap range for conservative scanning
+        self.update_range(header_addr, alloc_size);
+
+        let gc_box_ptr = unsafe { ptr.add(h_size) };
+        unsafe { NonNull::new_unchecked(gc_box_ptr) }
     }
 
     /// Get total bytes allocated.
@@ -670,7 +747,7 @@ impl Default for GlobalHeap {
 
 thread_local! {
     /// Thread-local heap instance.
-    pub static HEAP: RefCell<GlobalHeap> = const { RefCell::new(GlobalHeap::new()) };
+    pub static HEAP: RefCell<GlobalHeap> = RefCell::new(GlobalHeap::new());
 }
 
 /// Execute a function with access to the thread-local heap.
@@ -695,7 +772,47 @@ where
 pub unsafe fn ptr_to_page_header(ptr: *const u8) -> *mut PageHeader {
     let addr = ptr as usize;
     let page_addr = addr & PAGE_MASK;
-    page_addr as *mut PageHeader
+
+    // Provenance Rescue for Miri:
+    // Pointers derived from stack references (like &self) often have provenance restricted
+    // to just that field. To access the page header (which is outside that field),
+    // we must use a pointer that originally had provenance for the entire page.
+    // We get one from the global heap.
+    #[cfg(miri)]
+    {
+        // Try to find the page in the thread-local heap.
+        // If we can't find it (e.g. during early init), we fall back.
+        let found = HEAP.with(|heap| {
+            if let Ok(h) = heap.try_borrow() {
+                // 1. Check small object segments
+                for p in h.all_pages() {
+                    if p.as_ptr() as usize == page_addr {
+                        return Some(p.as_ptr());
+                    }
+                }
+                // 2. Check large object map (handles multi-page objects)
+                if let Some(&(head_addr, _, _)) = h.large_object_map.get(&page_addr) {
+                    let head_ptr = head_addr as *mut PageHeader;
+                    let offset = page_addr - head_addr;
+                    // Derive from head_ptr to preserve provenance for the whole large object
+                    #[allow(clippy::cast_ptr_alignment)]
+                    return Some(unsafe { head_ptr.cast::<u8>().add(offset).cast::<PageHeader>() });
+                }
+                None
+            } else {
+                None
+            }
+        });
+        if let Some(p) = found {
+            return p;
+        }
+    }
+
+    // Use the pointer itself to derive the header to preserve provenance (if broad enough)
+    #[allow(clippy::cast_ptr_alignment)]
+    ptr.wrapping_add(page_addr.wrapping_sub(addr))
+        .cast_mut()
+        .cast::<PageHeader>()
 }
 
 /// Validate that a pointer is within a GC-managed page.
@@ -764,55 +881,90 @@ pub unsafe fn ptr_to_object_index(ptr: *const u8) -> Option<usize> {
 #[must_use]
 pub unsafe fn find_gc_box_from_ptr(
     heap: &GlobalHeap,
-    ptr: usize,
+    ptr: *const u8,
 ) -> Option<NonNull<crate::ptr::GcBox<()>>> {
+    let addr = ptr as usize;
     // 1. Quick range check
-    if !heap.is_in_range(ptr) {
+    if !heap.is_in_range(addr) {
         return None;
     }
 
-    let page_addr = ptr & PAGE_MASK;
-    let header_ptr = page_addr as *mut PageHeader;
-
-    // SAFETY: We checked that the pointer is within our managed range.
+    // 2. Check if the pointer is aligned to something that could be a pointer
     unsafe {
-        // 2. Check if the pointer is aligned to something that could be a pointer
-        if ptr % std::mem::align_of::<usize>() != 0 {
+        if addr % std::mem::align_of::<usize>() != 0 {
             return None;
         }
 
-        // 3. Fast magic number check
-        if (*header_ptr).magic != MAGIC_GC_PAGE {
-            return None;
-        }
+        // 3. Check large object map first (handles multi-page objects and avoids reading uninit tail pages)
+        let page_addr = addr & crate::heap::PAGE_MASK;
+        let (header_ptr_to_use, block_size_to_use, header_size_to_use, offset_to_use) =
+            if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
+                let h_ptr = head_addr as *mut PageHeader;
 
-        let header = &*header_ptr;
-        let block_size = header.block_size as usize;
-        let header_size = PageHeader::header_size(block_size);
+                // Recover provenance for Miri
+                #[cfg(miri)]
+                let h_ptr = heap
+                    .large_objects
+                    .iter()
+                    .find(|p| p.as_ptr() as usize == head_addr)
+                    .map_or(h_ptr, |p| p.as_ptr());
 
-        // 3. Range check: pointer must be after the header
-        if ptr < page_addr + header_size {
-            return None;
-        }
+                if addr < head_addr + h_size {
+                    return None;
+                }
+                (h_ptr, size, h_size, addr - (head_addr + h_size))
+            } else {
+                // Not in large object map, must be small object page with header
+                let header_ptr = ptr_to_page_header(ptr);
+                if (*header_ptr).magic == MAGIC_GC_PAGE {
+                    let header = &*header_ptr;
+                    let b_size = header.block_size as usize;
+                    let h_size = PageHeader::header_size(b_size);
 
-        // 4. Calculate object index (handles interior pointers!)
-        let offset = ptr - (page_addr + header_size);
-        let index = offset / block_size;
+                    if addr < (header_ptr as usize) + h_size {
+                        return None;
+                    }
+                    (
+                        header_ptr,
+                        b_size,
+                        h_size,
+                        addr - ((header_ptr as usize) + h_size),
+                    )
+                } else {
+                    return None;
+                }
+            };
+
+        let header = &*header_ptr_to_use;
+        let index = offset_to_use / block_size_to_use;
 
         // 5. Index check
         if index >= header.obj_count as usize {
             return None;
         }
 
-        // 6. Large object handling: only accept the exact start for now
-        if header.flags & 0x01 != 0 && offset != 0 {
+        // 6. Large object handling: with the map, we now support interior pointers!
+        // For large objects, we ensure the pointer is within the allocated bounds.
+        if header.flags & 0x01 != 0 {
+            if offset_to_use >= block_size_to_use {
+                return None;
+            }
+        } else if offset_to_use % block_size_to_use != 0 {
+            // For small objects, we still require them to point to the start of an object
+            // unless we want to support interior pointers for small objects too.
+            // Currently, only large objects (which often contain large buffers)
+            // really need interior pointer support for things like array slicing.
             return None;
         }
 
         // Bingo! We found a potential object.
-        let obj_start = page_addr + header_size + (index * block_size);
+        let obj_ptr = header_ptr_to_use
+            .cast::<u8>()
+            .wrapping_add(header_size_to_use)
+            .wrapping_add(index * block_size_to_use);
+        #[allow(clippy::cast_ptr_alignment)]
         Some(NonNull::new_unchecked(
-            obj_start as *mut crate::ptr::GcBox<()>,
+            obj_ptr.cast::<crate::ptr::GcBox<()>>(),
         ))
     }
 }

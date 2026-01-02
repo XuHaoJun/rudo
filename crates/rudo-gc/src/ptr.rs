@@ -14,7 +14,7 @@ use crate::heap::{ptr_to_object_index, ptr_to_page_header, with_heap, GlobalHeap
 use crate::trace::{GcVisitor, Trace, Visitor};
 
 // ============================================================================
-// GcBox - The heap allocation container
+// `GcBox` - The heap allocation container
 // ============================================================================
 
 /// The actual heap allocation wrapping the user's value.
@@ -22,6 +22,8 @@ use crate::trace::{GcVisitor, Trace, Visitor};
 pub struct GcBox<T: Trace + ?Sized> {
     /// Current reference count (for amortized collection triggering).
     ref_count: Cell<NonZeroUsize>,
+    /// Number of weak references to this allocation.
+    weak_count: Cell<usize>,
     /// Type-erased destructor for the value.
     pub(crate) drop_fn: unsafe fn(*mut u8),
     /// Type-erased trace function for the value.
@@ -61,6 +63,47 @@ impl<T: Trace + ?Sized> GcBox<T> {
     pub const fn value(&self) -> &T {
         &self.value
     }
+
+    /// Get the weak reference count.
+    pub fn weak_count(&self) -> usize {
+        self.weak_count.get() & !(1 << (std::mem::size_of::<usize>() * 8 - 1))
+    }
+
+    /// Increment the weak reference count.
+    pub fn inc_weak(&self) {
+        let current = self.weak_count.get();
+        let flag = current & (1 << (std::mem::size_of::<usize>() * 8 - 1));
+        let count = current & !(1 << (std::mem::size_of::<usize>() * 8 - 1));
+        self.weak_count.set(flag | count.saturating_add(1));
+    }
+
+    /// Decrement the weak reference count. Returns true if count reached zero.
+    pub fn dec_weak(&self) -> bool {
+        let current = self.weak_count.get();
+        let flag = current & (1 << (std::mem::size_of::<usize>() * 8 - 1));
+        let count = current & !(1 << (std::mem::size_of::<usize>() * 8 - 1));
+
+        if count == 0 {
+            true
+        } else if count == 1 {
+            self.weak_count.set(flag);
+            true
+        } else {
+            self.weak_count.set(flag | (count - 1));
+            false
+        }
+    }
+
+    /// Check if the value has been dropped (only weak refs remain).
+    pub fn is_value_dead(&self) -> bool {
+        (self.weak_count.get() & (1 << (std::mem::size_of::<usize>() * 8 - 1))) != 0
+    }
+
+    /// Mark the value as dropped.
+    pub(crate) fn set_dead(&self) {
+        self.weak_count
+            .set(self.weak_count.get() | (1 << (std::mem::size_of::<usize>() * 8 - 1)));
+    }
 }
 
 impl<T: Trace> GcBox<T> {
@@ -74,11 +117,9 @@ impl<T: Trace> GcBox<T> {
             // Mark as dropped to avoid double-dropping during sweep
             (*gc_box).drop_fn = GcBox::<()>::no_op_drop;
             (*gc_box).trace_fn = GcBox::<()>::no_op_trace;
+            (*gc_box).set_dead();
         }
     }
-
-    /// A no-op drop function for already-dropped objects.
-    pub(crate) const unsafe fn no_op_drop(_ptr: *mut u8) {}
 
     /// Type-erased trace function for any Sized T.
     pub(crate) unsafe fn trace_fn_for(ptr: *const u8, visitor: &mut GcVisitor) {
@@ -88,8 +129,13 @@ impl<T: Trace> GcBox<T> {
             (*gc_box).value.trace(visitor);
         }
     }
+}
 
-    /// A no-op trace function.
+impl GcBox<()> {
+    /// A no-op drop function for already-dropped objects.
+    pub(crate) const unsafe fn no_op_drop(_ptr: *mut u8) {}
+
+    /// A no-op trace function for already-dropped objects.
     pub(crate) const unsafe fn no_op_trace(_ptr: *const u8, _visitor: &mut GcVisitor) {}
 }
 
@@ -98,9 +144,6 @@ impl<T: Trace> GcBox<T> {
 // ============================================================================
 
 /// A nullable pointer for `?Sized` types.
-///
-/// We need this because `Option<NonNull<T>>` doesn't work well with
-/// unsized types in some contexts.
 #[derive(Debug)]
 pub struct Nullable<T: ?Sized>(*mut T);
 
@@ -112,8 +155,6 @@ impl<T: ?Sized> Nullable<T> {
     }
 
     /// Create a null pointer.
-    #[allow(dead_code)]
-    #[must_use]
     pub const fn null() -> Self
     where
         T: Sized,
@@ -239,6 +280,7 @@ impl<T: Trace> Gc<T> {
         unsafe {
             gc_box.write(GcBox {
                 ref_count: Cell::new(NonZeroUsize::MIN),
+                weak_count: Cell::new(0),
                 drop_fn: GcBox::<T>::drop_fn_for,
                 trace_fn: GcBox::<T>::trace_fn_for,
                 value,
@@ -286,6 +328,7 @@ impl<T: Trace> Gc<T> {
                     unsafe {
                         gc_box.write(GcBox {
                             ref_count: Cell::new(NonZeroUsize::MIN),
+                            weak_count: Cell::new(0),
                             drop_fn: GcBox::<T>::drop_fn_for,
                             trace_fn: GcBox::<T>::trace_fn_for,
                             value,
@@ -354,6 +397,7 @@ impl<T: Trace> Gc<T> {
         unsafe {
             gc_box.write(GcBox {
                 ref_count: Cell::new(NonZeroUsize::MIN),
+                weak_count: Cell::new(0),
                 drop_fn: GcBox::<T>::drop_fn_for,
                 trace_fn: GcBox::<T>::trace_fn_for,
                 value,
@@ -411,6 +455,11 @@ impl<T: Trace + ?Sized> Gc<T> {
         unsafe { std::ptr::addr_of!((*ptr.as_ptr()).value) }
     }
 
+    /// Get the internal `GcBox` pointer.
+    pub fn internal_ptr(gc: &Self) -> *const u8 {
+        gc.ptr.get().unwrap().as_ptr().cast()
+    }
+
     /// Check if two Gcs point to the same allocation.
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
         this.ptr.get().as_option() == other.ptr.get().as_option()
@@ -424,6 +473,47 @@ impl<T: Trace + ?Sized> Gc<T> {
     pub fn ref_count(gc: &Self) -> NonZeroUsize {
         let ptr = gc.ptr.get().unwrap();
         unsafe { (*ptr.as_ptr()).ref_count() }
+    }
+
+    /// Get the current weak reference count.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the Gc is dead.
+    pub fn weak_count(gc: &Self) -> usize {
+        let ptr = gc.ptr.get().unwrap();
+        unsafe { (*ptr.as_ptr()).weak_count() }
+    }
+
+    /// Create a `Weak<T>` pointer to this allocation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the Gc is dead.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use rudo_gc::{Gc, Weak};
+    ///
+    /// let gc = Gc::new(42);
+    /// let weak = Gc::downgrade(&gc);
+    ///
+    /// assert!(weak.upgrade().is_some());
+    ///
+    /// drop(gc);
+    /// // After collection, the weak reference cannot upgrade
+    /// ```
+    pub fn downgrade(gc: &Self) -> Weak<T> {
+        let ptr = gc.ptr.get().unwrap();
+        // Increment the weak count
+        unsafe {
+            (*ptr.as_ptr()).inc_weak();
+        }
+        Weak {
+            ptr: Cell::new(Nullable::new(ptr)),
+            _marker: PhantomData,
+        }
     }
 
     /// Check if this Gc is "dead" (refers to a collected value).
@@ -593,6 +683,199 @@ impl<T: Trace + ?Sized> std::borrow::Borrow<T> for Gc<T> {
 // We use PhantomData<*const ()> to ensure this, which is !Send and !Sync.
 // The marker is already in the struct, so these impls are not needed.
 // Note: Negative trait impls require nightly, so we rely on the marker type instead.
+
+// ============================================================================
+// Weak<T> - Weak reference to a garbage-collected value
+// ============================================================================
+
+/// A weak reference to a garbage-collected value.
+///
+/// `Weak<T>` does not keep the value alive. Use `upgrade()` to get a `Gc<T>`
+/// if the value still exists.
+///
+/// Unlike strong `Gc<T>` references, weak references do not prevent garbage
+/// collection. After the value is collected, `upgrade()` will return `None`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use rudo_gc::{Gc, Weak};
+///
+/// let strong = Gc::new(42);
+/// let weak = Gc::downgrade(&strong);
+///
+/// // The weak reference can be upgraded while strong exists
+/// assert_eq!(*weak.upgrade().unwrap(), 42);
+///
+/// drop(strong);
+/// rudo_gc::collect();
+///
+/// // After collection, upgrade returns None
+/// assert!(weak.upgrade().is_none());
+/// ```
+pub struct Weak<T: Trace + ?Sized + 'static> {
+    /// Pointer to the `GcBox`.
+    /// Points to the allocation even after the value is dropped.
+    ptr: Cell<Nullable<GcBox<T>>>,
+    /// Marker to make Weak !Send and !Sync.
+    _marker: PhantomData<*const ()>,
+}
+
+impl<T: Trace + ?Sized> Weak<T> {
+    /// Attempt to upgrade to a strong `Gc<T>` reference.
+    ///
+    /// Returns `None` if the value has been collected.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use rudo_gc::{Gc, Weak};
+    ///
+    /// let gc = Gc::new(42);
+    /// let weak = Gc::downgrade(&gc);
+    ///
+    /// assert!(weak.upgrade().is_some());
+    /// ```
+    pub fn upgrade(&self) -> Option<Gc<T>> {
+        let ptr = self.ptr.get().as_option()?;
+
+        // SAFETY: The pointer is valid because we have a weak reference
+        unsafe {
+            // Check if the value is still alive
+            if (*ptr.as_ptr()).is_value_dead() {
+                return None;
+            }
+
+            // Increment the strong reference count
+            (*ptr.as_ptr()).inc_ref();
+
+            // Notify the GC about the new Gc
+            crate::gc::notify_created_gc();
+
+            Some(Gc {
+                ptr: Cell::new(Nullable::new(ptr)),
+                _marker: PhantomData,
+            })
+        }
+    }
+
+    /// Check if the referenced value is still alive.
+    ///
+    /// Returns `true` if the value can still be `upgrade()`d.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use rudo_gc::{Gc, Weak};
+    ///
+    /// let gc = Gc::new(42);
+    /// let weak = Gc::downgrade(&gc);
+    ///
+    /// assert!(weak.is_alive());
+    ///
+    /// drop(gc);
+    /// rudo_gc::collect();
+    ///
+    /// assert!(!weak.is_alive());
+    /// ```
+    #[must_use]
+    pub fn is_alive(&self) -> bool {
+        let Some(ptr) = self.ptr.get().as_option() else {
+            return false;
+        };
+
+        // SAFETY: The pointer is valid because we have a weak reference
+        unsafe { !(*ptr.as_ptr()).is_value_dead() }
+    }
+
+    /// Gets the number of strong `Gc<T>` pointers pointing to this allocation.
+    ///
+    /// Returns 0 if the value has been dropped.
+    #[must_use]
+    pub fn strong_count(&self) -> usize {
+        let Some(ptr) = self.ptr.get().as_option() else {
+            return 0;
+        };
+
+        unsafe {
+            if (*ptr.as_ptr()).is_value_dead() {
+                0
+            } else {
+                (*ptr.as_ptr()).ref_count().get()
+            }
+        }
+    }
+
+    /// Gets the number of `Weak<T>` pointers pointing to this allocation.
+    #[must_use]
+    pub fn weak_count(&self) -> usize {
+        let Some(ptr) = self.ptr.get().as_option() else {
+            return 0;
+        };
+
+        unsafe { (*ptr.as_ptr()).weak_count() }
+    }
+
+    /// Returns `true` if the two `Weak`s point to the same allocation.
+    ///
+    /// # Note
+    ///
+    /// Since a `Weak` reference does not own the value, the allocation
+    /// may have been reclaimed. In that case, both `Weak`s may appear
+    /// to point to different (invalid) memory.
+    #[must_use]
+    pub fn ptr_eq(this: &Self, other: &Self) -> bool {
+        this.ptr.get().as_option() == other.ptr.get().as_option()
+    }
+}
+
+impl<T: Trace + ?Sized> Clone for Weak<T> {
+    fn clone(&self) -> Self {
+        if let Some(ptr) = self.ptr.get().as_option() {
+            // Increment the weak count
+            unsafe {
+                (*ptr.as_ptr()).inc_weak();
+            }
+        }
+        Self {
+            ptr: self.ptr.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: Trace + ?Sized> Drop for Weak<T> {
+    fn drop(&mut self) {
+        if let Some(ptr) = self.ptr.get().as_option() {
+            // Decrement the weak count
+            // SAFETY: The pointer is valid because we have a weak reference
+            unsafe {
+                (*ptr.as_ptr()).dec_weak();
+            }
+            // Note: Memory is managed by the GC, not deallocated here.
+            // The `GcBox` memory is reclaimed during sweep when both
+            // strong and weak counts are zero.
+        }
+    }
+}
+
+impl<T: Trace + ?Sized> std::fmt::Debug for Weak<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(Weak)")
+    }
+}
+
+impl<T: Trace> Default for Weak<T> {
+    /// Constructs a new `Weak<T>` that is dangling (cannot be upgraded).
+    fn default() -> Self {
+        Self {
+            ptr: Cell::new(Nullable::null()),
+            _marker: PhantomData,
+        }
+    }
+}
+
+// Weak is NOT Send or Sync (same as Gc)
 
 // ============================================================================
 // Helper functions

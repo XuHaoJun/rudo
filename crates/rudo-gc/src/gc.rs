@@ -95,6 +95,22 @@ thread_local! {
     static COLLECT_CONDITION: Cell<CollectCondition> = const { Cell::new(default_collect_condition) };
     /// Whether a collection is currently in progress.
     static IN_COLLECT: Cell<bool> = const { Cell::new(false) };
+
+    #[cfg(any(test, feature = "test-util"))]
+    static TEST_ROOTS: std::cell::RefCell<Vec<*const u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Register a root for GC marking. This is useful for tests where Miri cannot find
+/// roots via conservative stack scanning.
+#[cfg(any(test, feature = "test-util"))]
+pub fn register_test_root(ptr: *const u8) {
+    TEST_ROOTS.with(|roots| roots.borrow_mut().push(ptr));
+}
+
+/// Clear all registered test roots.
+#[cfg(any(test, feature = "test-util"))]
+pub fn clear_test_roots() {
+    TEST_ROOTS.with(|roots| roots.borrow_mut().clear());
 }
 
 /// Notify that a Gc was created.
@@ -102,15 +118,28 @@ pub fn notify_created_gc() {
     N_EXISTING.with(|n| n.set(n.get() + 1));
 }
 
-/// Notify that a Gc was dropped.
 pub fn notify_dropped_gc() {
     N_DROPS.with(|n| n.set(n.get() + 1));
+    maybe_collect();
+}
+
+fn maybe_collect() {
+    if IN_COLLECT.with(Cell::get) {
+        return;
+    }
 
     // Check if we should collect
-    let (total, young, old) = HEAP.with(|heap| {
-        let h = heap.borrow();
-        (h.total_allocated(), h.young_allocated(), h.old_allocated())
+    // Use try_borrow to avoid panics if we are already mutably borrowing the heap
+    // (e.g. during a sweep phase that triggers a drop)
+    let stats = HEAP.with(|heap| {
+        heap.try_borrow()
+            .map(|h| (h.total_allocated(), h.young_allocated(), h.old_allocated()))
+            .ok()
     });
+
+    let Some((total, young, old)) = stats else {
+        return; // Already borrowed, skip collection check
+    };
 
     let info = CollectInfo {
         n_gcs_dropped: N_DROPS.with(Cell::get),
@@ -121,7 +150,7 @@ pub fn notify_dropped_gc() {
     };
 
     let condition = COLLECT_CONDITION.with(Cell::get);
-    if condition(&info) && !IN_COLLECT.with(Cell::get) {
+    if condition(&info) {
         collect();
     }
 }
@@ -154,59 +183,147 @@ pub fn collect() {
     }
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
+    let start = std::time::Instant::now();
+    let before_bytes = HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+
     // Reset drop counter
     N_DROPS.with(|n| n.set(0));
+
+    let mut objects_reclaimed = 0;
+    let mut collection_type = crate::metrics::CollectionType::None;
 
     with_heap(|heap| {
         let young_size = heap.young_allocated();
         let total_size = heap.total_allocated();
 
-        // Heuristic:
-        // - Minor if young > 1MB (or some ratio)
-        // - Major if total > 10MB (or some ratio)
-        // For now, simple logic:
-        // If we have substantial young gen, try Minor.
-        // If Old Gen is getting full, do Major.
-
         if total_size > MAJOR_THRESHOLD {
-            collect_major(heap);
+            collection_type = crate::metrics::CollectionType::Major;
+            objects_reclaimed = collect_major(heap);
         } else if young_size > MINOR_THRESHOLD {
-            collect_minor(heap);
+            collection_type = crate::metrics::CollectionType::Minor;
+            objects_reclaimed = collect_minor(heap);
         } else {
-            // Default to Minor to keep latency low
-            collect_minor(heap);
+            // Default to Minor if we got here (some threshold was met in notify_dropped_gc)
+            collection_type = crate::metrics::CollectionType::Minor;
+            objects_reclaimed = collect_minor(heap);
         }
+    });
+
+    let duration = start.elapsed();
+    let after_bytes = HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+
+    crate::metrics::record_metrics(crate::metrics::GcMetrics {
+        duration,
+        bytes_reclaimed: before_bytes.saturating_sub(after_bytes),
+        bytes_surviving: after_bytes,
+        objects_reclaimed,
+        objects_surviving: N_EXISTING.with(Cell::get),
+        collection_type,
+        total_collections: 0, // Set by record_metrics
+    });
+
+    IN_COLLECT.with(|in_collect| in_collect.set(false));
+}
+
+/// Perform a full garbage collection (Major GC).
+///
+/// This will collect all unreachable objects in both Young and Old generations.
+pub fn collect_full() {
+    // Reentrancy guard
+    if IN_COLLECT.with(Cell::get) {
+        return;
+    }
+    IN_COLLECT.with(|in_collect| in_collect.set(true));
+
+    let start = std::time::Instant::now();
+    let before_bytes = HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+
+    let mut objects_reclaimed = 0;
+    with_heap(|heap| {
+        objects_reclaimed = collect_major(heap);
+    });
+
+    let duration = start.elapsed();
+    let after_bytes = HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+
+    crate::metrics::record_metrics(crate::metrics::GcMetrics {
+        duration,
+        bytes_reclaimed: before_bytes.saturating_sub(after_bytes),
+        bytes_surviving: after_bytes,
+        objects_reclaimed,
+        objects_surviving: N_EXISTING.with(Cell::get),
+        collection_type: crate::metrics::CollectionType::Major,
+        total_collections: 0,
     });
 
     IN_COLLECT.with(|in_collect| in_collect.set(false));
 }
 
 /// Minor Collection: Collect Young Generation only.
-fn collect_minor(heap: &mut GlobalHeap) {
+fn collect_minor(heap: &mut GlobalHeap) -> usize {
     // 1. Mark Phase
-    // Roots: Stack + Dirty Old Objects
     mark_minor_roots(heap);
 
-    // 2. Sweep Phase: Only Young Pages
-    sweep_young_pages(heap);
+    // 2. Sweep Phase
+    let reclaimed = sweep_segment_pages(heap, true);
+    let reclaimed_large = sweep_large_objects(heap, true);
 
     // 3. Promotion Phase
     promote_young_pages(heap);
+    reclaimed + reclaimed_large
+}
+
+/// Promote Young Pages to Old Generation.
+fn promote_young_pages(heap: &mut GlobalHeap) {
+    let mut promoted_bytes = 0;
+
+    for page_ptr in heap.all_pages() {
+        unsafe {
+            let header = page_ptr.as_ptr();
+            if (*header).generation == 0 {
+                // Determine if page has survivors
+                let mut has_survivors = false;
+                let mut survivors_count = 0;
+
+                for i in 0..4 {
+                    let bits = (*header).allocated_bitmap[i];
+                    if bits != 0 {
+                        has_survivors = true;
+                        survivors_count += bits.count_ones() as usize;
+                    }
+                }
+
+                if has_survivors {
+                    (*header).generation = 1; // Promote!
+
+                    let block_size = (*header).block_size as usize;
+                    promoted_bytes += survivors_count * block_size;
+                }
+            }
+        }
+    }
+
+    // Update GlobalHeap stats
+    // After Minor GC, all small young objects are either promoted or swept.
+    // So young generation usage for small objects is effectively 0.
+    let old = heap.old_allocated();
+    heap.update_allocated_bytes(0, old + promoted_bytes);
 }
 
 /// Major Collection: Collect Entire Heap.
-fn collect_major(heap: &mut GlobalHeap) {
-    // 1. Clear ALL marks and dirty bits
+fn collect_major(heap: &mut GlobalHeap) -> usize {
+    // 1. Mark Phase
+    // Clear marks first
     clear_all_marks_and_dirty(heap);
-
-    // 2. Mark Phase: Full Trace
     mark_major_roots(heap);
 
-    // 3. Sweep Phase: All Pages
-    sweep_unmarked(heap);
+    // 2. Sweep Phase
+    let reclaimed = sweep_segment_pages(heap, false);
+    let reclaimed_large = sweep_large_objects(heap, false);
 
-    // 4. Update Generations: All survivors become Old
+    // 3. Promotion Phase (All to Old)
     promote_all_pages(heap);
+    reclaimed + reclaimed_large
 }
 
 /// Clear all mark bits and dirty bits in the heap.
@@ -230,10 +347,21 @@ fn mark_minor_roots(heap: &GlobalHeap) {
     // 1. Scan Stack
     unsafe {
         crate::stack::spill_registers_and_scan(|potential_ptr| {
-            if let Some(gc_box_ptr) = crate::heap::find_gc_box_from_ptr(heap, potential_ptr) {
+            if let Some(gc_box_ptr) =
+                crate::heap::find_gc_box_from_ptr(heap, potential_ptr as *const u8)
+            {
                 // Only mark if it points to Young object.
                 // But mark_object_minor handles the check.
                 mark_object_minor(gc_box_ptr, &mut visitor);
+            }
+        });
+
+        #[cfg(any(test, feature = "test-util"))]
+        TEST_ROOTS.with(|roots| {
+            for &ptr in roots.borrow().iter() {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    mark_object_minor(gc_box, &mut visitor);
+                }
             }
         });
     }
@@ -279,9 +407,19 @@ fn mark_major_roots(heap: &GlobalHeap) {
         kind: VisitorKind::Major,
     };
     unsafe {
-        crate::stack::spill_registers_and_scan(|potential_ptr| {
-            if let Some(gc_box_ptr) = crate::heap::find_gc_box_from_ptr(heap, potential_ptr) {
-                mark_object(gc_box_ptr, &mut visitor);
+        // 1. Mark stack roots (Conservative)
+        crate::stack::spill_registers_and_scan(|ptr| {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                mark_object(gc_box, &mut visitor);
+            }
+        });
+
+        #[cfg(any(test, feature = "test-util"))]
+        TEST_ROOTS.with(|roots| {
+            for &ptr in roots.borrow().iter() {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    mark_object(gc_box, &mut visitor);
+                }
             }
         });
     }
@@ -291,7 +429,8 @@ fn mark_major_roots(heap: &GlobalHeap) {
 unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     let ptr_addr = ptr.as_ptr() as *const u8;
     let page_addr = (ptr_addr as usize) & crate::heap::PAGE_MASK;
-    let header = page_addr as *mut PageHeader;
+    // SAFETY: ptr_addr is a valid pointer to a GcBox
+    let header = unsafe { crate::heap::ptr_to_page_header(ptr_addr) };
 
     // SAFETY: We're inside an unsafe fn, but unsafe_op_in_unsafe_fn requires block
     unsafe {
@@ -321,27 +460,32 @@ unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     }
 }
 
-/// Sweep Young Pages.
-fn sweep_young_pages(heap: &GlobalHeap) {
+/// Sweep pages in regular segments.
+fn sweep_segment_pages(heap: &GlobalHeap, only_young: bool) -> usize {
+    let mut total_reclaimed = 0;
     for page_ptr in heap.all_pages() {
         unsafe {
             let header = page_ptr.as_ptr();
-            // Skip Old Pages
-            if (*header).generation > 0 {
-                continue;
-            }
+
+            // Skip large objects (handled separately)
             if (*header).flags & 0x01 != 0 {
                 continue;
             }
 
-            // Sweep logic using shared helper
-            copy_sweep_logic(header);
+            // If we are only sweeping young gen, skip old objects
+            if only_young && (*header).generation > 0 {
+                continue;
+            }
+
+            total_reclaimed += copy_sweep_logic(header);
         }
     }
+    total_reclaimed
 }
 
 /// Shared sweep logic (inlined from `sweep_segment_pages` for now to avoid borrow issues)
-unsafe fn copy_sweep_logic(header: *mut PageHeader) {
+unsafe fn copy_sweep_logic(header: *mut PageHeader) -> usize {
+    let mut reclaimed = 0;
     // SAFETY: unsafe_op_in_unsafe_fn
     unsafe {
         let block_size = (*header).block_size as usize;
@@ -351,62 +495,52 @@ unsafe fn copy_sweep_logic(header: *mut PageHeader) {
 
         let mut free_head: Option<u16> = None;
         for i in (0..obj_count).rev() {
-            if !(*header).is_marked(i) {
+            if (*header).is_marked(i) {
+                // Object is reachable - keep it and clear mark for next collection
+                (*header).clear_mark(i);
+            } else if (*header).is_allocated(i) {
+                // Object is unreachable but was allocated - potentially reclaim
                 let obj_ptr = page_addr.add(header_size + (i * block_size));
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                ((*gc_box_ptr).drop_fn)(obj_ptr);
+                let weak_count = (*gc_box_ptr).weak_count();
+                if weak_count > 0 {
+                    // There are weak references - drop the value but keep the GcBox allocation
+                    if !(*gc_box_ptr).is_value_dead() {
+                        ((*gc_box_ptr).drop_fn)(obj_ptr);
+                        (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                        (*gc_box_ptr).set_dead();
+                    }
+                } else {
+                    // No weak references - fully reclaim the slot
+                    ((*gc_box_ptr).drop_fn)(obj_ptr);
 
+                    (*header).clear_allocated(i);
+                    #[allow(clippy::cast_possible_truncation)]
+                    let idx = i as u16;
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let obj_cast = obj_ptr.cast::<Option<u16>>();
+                    *obj_cast = free_head;
+                    free_head = Some(idx);
+
+                    reclaimed += 1;
+                    N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
+                }
+            } else {
+                // Slot was already free - add it back to the free list
+                let obj_ptr = page_addr.add(header_size + (i * block_size));
                 #[allow(clippy::cast_possible_truncation)]
                 let idx = i as u16;
                 #[allow(clippy::cast_ptr_alignment)]
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
                 *obj_cast = free_head;
                 free_head = Some(idx);
-
-                N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
             }
         }
         (*header).free_list_head = free_head;
     }
-}
-
-/// Promote Young Pages to Old Generation.
-fn promote_young_pages(heap: &mut GlobalHeap) {
-    let mut promoted_bytes = 0;
-
-    for page_ptr in heap.all_pages() {
-        unsafe {
-            let header = page_ptr.as_ptr();
-            if (*header).generation == 0 {
-                // Determine if page has survivors
-                let mut has_survivors = false;
-                let mut survivors_count = 0;
-
-                for i in 0..4 {
-                    let bits = (*header).mark_bitmap[i];
-                    if bits != 0 {
-                        has_survivors = true;
-                        survivors_count += bits.count_ones() as usize;
-                    }
-                }
-
-                if has_survivors {
-                    (*header).generation = 1; // Promote!
-
-                    let block_size = (*header).block_size as usize;
-                    promoted_bytes += survivors_count * block_size;
-                }
-            }
-        }
-    }
-
-    // Update GlobalHeap stats
-    // After Minor GC, all small young objects are either promoted or swept.
-    // So young generation usage for small objects is effectively 0.
-    let old = heap.old_allocated();
-    heap.update_allocated_bytes(0, old + promoted_bytes);
+    reclaimed
 }
 
 /// Promote ALL pages (after Major GC).
@@ -427,7 +561,8 @@ unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     // Get the page header
     let ptr_addr = ptr.as_ptr() as *const u8;
     let page_addr = (ptr_addr as usize) & crate::heap::PAGE_MASK;
-    let header = page_addr as *mut PageHeader;
+    // SAFETY: ptr is a valid GcBox pointer
+    let header = unsafe { crate::heap::ptr_to_page_header(ptr_addr) };
 
     // SAFETY: We're inside an unsafe fn and caller guarantees ptr is valid
     unsafe {
@@ -448,6 +583,9 @@ unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
             return;
         }
 
+        #[cfg(miri)]
+        eprintln!("MIRI: major marking object at {:p} index {}", ptr, index);
+
         // Mark this object
         (*header).set_mark(index);
 
@@ -456,72 +594,17 @@ unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     }
 }
 
-/// Sweep all unmarked objects.
-///
-/// This includes both regular segments and Large Object Space (LOS).
-fn sweep_unmarked(heap: &mut GlobalHeap) {
-    // Phase 1: Sweep regular segment pages
-    sweep_segment_pages(heap);
-
-    // Phase 2: Sweep Large Object Space
-    sweep_large_objects(heap);
-}
-
-/// Sweep pages in regular segments.
-#[allow(clippy::cast_ptr_alignment)]
-fn sweep_segment_pages(heap: &GlobalHeap) {
-    for page_ptr in heap.all_pages() {
-        // SAFETY: Page pointers from all_pages are always valid
-        unsafe {
-            let header = page_ptr.as_ptr();
-
-            // Skip large objects (handled separately)
-            if (*header).flags & 0x01 != 0 {
-                continue;
-            }
-
-            let block_size = (*header).block_size as usize;
-            let obj_count = (*header).obj_count as usize;
-            let header_size = PageHeader::header_size(block_size);
-            let page_addr = header.cast::<u8>();
-
-            // Build free list from unmarked objects
-            let mut free_head: Option<u16> = None;
-            for i in (0..obj_count).rev() {
-                if !(*header).is_marked(i) {
-                    // Object is unmarked - it is garbage!
-                    let obj_ptr = page_addr.add(header_size + (i * block_size));
-                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-
-                    // 1. Call the destructor
-                    // SAFETY: Unmarked objects are unreachable from roots.
-                    // We call the drop_fn which was initialized in Gc::new.
-                    ((*gc_box_ptr).drop_fn)(obj_ptr);
-
-                    // 2. Add to free list
-                    #[allow(clippy::cast_possible_truncation)]
-                    let idx = i as u16;
-
-                    // Store the current free_head in the object's memory
-                    // SAFETY: We just dropped the value, so we can use its memory
-                    *(obj_ptr.cast::<Option<u16>>()) = free_head;
-                    free_head = Some(idx);
-
-                    // 3. Update statistics
-                    N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
-                }
-            }
-
-            // Update free list head
-            (*header).free_list_head = free_head;
-        }
-    }
-}
-
 /// Sweep Large Object Space.
 ///
 /// Large objects that are unmarked should be deallocated entirely.
-fn sweep_large_objects(heap: &mut GlobalHeap) {
+fn sweep_large_objects(heap: &mut GlobalHeap, only_young: bool) -> usize {
+    #[cfg(miri)]
+    eprintln!(
+        "MIRI: sweep_large_objects: starting on {} pages",
+        heap.large_object_pages().len()
+    );
+
+    let mut reclaimed = 0;
     // We need to iterate and potentially remove items from large_objects
     let mut i = 0;
     while i < heap.large_object_pages().len() {
@@ -530,32 +613,74 @@ fn sweep_large_objects(heap: &mut GlobalHeap) {
         unsafe {
             let header = page_ptr.as_ptr();
 
+            // If we are only sweeping young gen, skip old objects
+            if only_young && (*header).generation > 0 {
+                i += 1;
+                continue;
+            }
+
             if !(*header).is_marked(0) {
-                // The object is unreachable - deallocate it
+                // The object is unreachable - check for weak references
                 let block_size = (*header).block_size as usize;
-                let header_size = std::mem::size_of::<PageHeader>();
+                let header_size = (*header).header_size as usize;
                 let obj_ptr = header.cast::<u8>().add(header_size);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+                // Check if there are weak references
+                let weak_count = (*gc_box_ptr).weak_count();
+
+                if weak_count > 0 {
+                    #[cfg(miri)]
+                    eprintln!(
+                        "MIRI: sweep: object at index {} has WEAK count {}",
+                        0, weak_count
+                    );
+                    // There are weak references - drop the value but keep the allocation
+                    if !(*gc_box_ptr).is_value_dead() {
+                        #[cfg(miri)]
+                        eprintln!("MIRI: sweep: dropping value for object at index {}", 0);
+                        // Only drop if not already dropped
+                        ((*gc_box_ptr).drop_fn)(obj_ptr);
+                        // Mark as dead by setting drop_fn to no_op
+                        (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                        (*gc_box_ptr).set_dead();
+                    }
+                    // Don't deallocate - allocation is still needed for weak refs
+                    i += 1;
+                    continue;
+                }
+
+                // No weak references - fully deallocate
 
                 // 1. Call the destructor
                 ((*gc_box_ptr).drop_fn)(obj_ptr);
 
                 // 2. Deallocate the pages
                 // Note: Large objects are allocated with Layout::from_size_align
-                let total_size = PageHeader::header_size(block_size) + block_size;
+                let h_size = (*header).header_size as usize;
+                let total_size = h_size + block_size;
                 let pages_needed = total_size.div_ceil(crate::heap::PAGE_SIZE);
                 let alloc_size = pages_needed * crate::heap::PAGE_SIZE;
+
                 let layout =
                     std::alloc::Layout::from_size_align(alloc_size, crate::heap::PAGE_SIZE)
                         .expect("Invalid large object layout");
 
                 std::alloc::dealloc(header.cast::<u8>(), layout);
 
-                // 3. Remove from the heap's list
+                // 3. Remove pages from the map
+                let header_addr = header as usize;
+                for p in 0..pages_needed {
+                    let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
+                    heap.large_object_map.remove(&page_addr);
+                }
+
+                // 4. Remove from the heap's list
                 heap.large_object_pages_mut().swap_remove(i);
 
-                // 4. Update statistics
+                // 5. Update statistics
+                reclaimed += 1;
                 N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
 
                 // Don't increment i because we swap_removed
@@ -564,6 +689,7 @@ fn sweep_large_objects(heap: &mut GlobalHeap) {
         }
         i += 1;
     }
+    reclaimed
 }
 
 // ============================================================================
@@ -635,10 +761,36 @@ mod tests {
     fn test_minor_collection() {
         // 1. Allocate objects in Young Gen
         crate::heap::with_heap(|_| {}); // Ensure heap initialized
+        clear_test_roots();
 
-        let mut keep = Vec::new();
-        for _ in 0..100 {
-            keep.push(crate::Gc::new(42));
+        // ROOTING: Use a stack-allocated array to ensure pointers are visible
+        // to the conservative stack scanner. A Vec's buffer is on the heap
+        // and would be invisible.
+        let keep: [crate::Gc<i32>; 20] = [
+            crate::Gc::new(0),
+            crate::Gc::new(1),
+            crate::Gc::new(2),
+            crate::Gc::new(3),
+            crate::Gc::new(4),
+            crate::Gc::new(5),
+            crate::Gc::new(6),
+            crate::Gc::new(7),
+            crate::Gc::new(8),
+            crate::Gc::new(9),
+            crate::Gc::new(10),
+            crate::Gc::new(11),
+            crate::Gc::new(12),
+            crate::Gc::new(13),
+            crate::Gc::new(14),
+            crate::Gc::new(15),
+            crate::Gc::new(16),
+            crate::Gc::new(17),
+            crate::Gc::new(18),
+            crate::Gc::new(19),
+        ];
+
+        for g in &keep {
+            register_test_root(crate::ptr::Gc::internal_ptr(g));
         }
 
         let drop_me = crate::Gc::new(123);
@@ -668,6 +820,7 @@ mod tests {
             );
             assert!(heap.old_allocated() > 0, "Old gen should contain survivors");
         });
+        clear_test_roots();
     }
 
     #[test]
@@ -675,7 +828,9 @@ mod tests {
         use crate::cell::GcCell;
 
         // 1. Create Old Gen object
+        clear_test_roots();
         let old_cell = crate::Gc::new(GcCell::new(None));
+        register_test_root(crate::ptr::Gc::internal_ptr(&old_cell));
 
         // Force promotion
         crate::heap::with_heap(collect_minor);
@@ -713,5 +868,20 @@ mod tests {
 
         // 6. Verify Young object survived (accessible via old_cell)
         assert_eq!(**old_cell.borrow().as_ref().unwrap(), 100);
+        clear_test_roots();
+    }
+
+    #[test]
+    fn test_metrics() {
+        let _x = crate::Gc::new(42);
+        crate::collect_full();
+
+        let metrics = crate::last_gc_metrics();
+        assert!(metrics.total_collections > 0, "No metrics recorded!");
+        assert!(metrics.bytes_surviving > 0, "No surviving bytes recorded!");
+        assert_eq!(
+            metrics.collection_type,
+            crate::metrics::CollectionType::Major
+        );
     }
 }
