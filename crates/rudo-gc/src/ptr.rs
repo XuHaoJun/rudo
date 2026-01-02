@@ -175,6 +175,11 @@ pub struct Gc<T: Trace + ?Sized + 'static> {
 impl<T: Trace> Gc<T> {
     /// Create a new garbage-collected value.
     ///
+    /// # Zero-Sized Types
+    ///
+    /// For zero-sized types (ZSTs) like `()`, this creates a singleton
+    /// allocation that is shared across all instances.
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -182,8 +187,16 @@ impl<T: Trace> Gc<T> {
     ///
     /// let x = Gc::new(42);
     /// assert_eq!(*x, 42);
+    ///
+    /// // ZSTs are handled efficiently
+    /// let unit = Gc::new(());
     /// ```
     pub fn new(value: T) -> Self {
+        // Handle Zero-Sized Types specially
+        if std::mem::size_of::<T>() == 0 {
+            return Self::new_zst(value);
+        }
+
         // Allocate space in the heap
         let ptr = with_heap(GlobalHeap::alloc::<GcBox<T>>);
 
@@ -202,6 +215,72 @@ impl<T: Trace> Gc<T> {
         // Register as a root
         ROOTS.with(|roots| {
             roots.borrow_mut().push(gc_box_ptr.cast());
+        });
+
+        // Notify that we created a Gc
+        crate::gc::notify_created_gc();
+
+        Self {
+            ptr: Cell::new(Nullable::new(gc_box_ptr)),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create a Gc for a zero-sized type.
+    ///
+    /// ZSTs don't need heap allocation - we use a sentinel address.
+    fn new_zst(value: T) -> Self {
+        debug_assert!(std::mem::size_of::<T>() == 0);
+
+        // For ZSTs, we use a special sentinel address that's:
+        // 1. Non-null (so we can distinguish from dead Gc)
+        // 2. Aligned for GcBox<T>
+        // 3. Never actually dereferenced for its value
+        //
+        // We allocate a minimal GcBox to hold the ZST ref count.
+        // Since the value is zero-sized, this is just the ref_count field.
+
+        // Use thread-local singleton for ZST
+        thread_local! {
+            static ZST_BOX: Cell<Option<NonNull<u8>>> = const { Cell::new(None) };
+        }
+
+        let gc_box_ptr = ZST_BOX.with(|cell| {
+            cell.get().map_or_else(
+                || {
+                    // First ZST allocation - create the singleton
+                    let ptr = with_heap(GlobalHeap::alloc::<GcBox<T>>);
+                    let gc_box = ptr.as_ptr().cast::<GcBox<T>>();
+
+                    // SAFETY: We just allocated this memory
+                    unsafe {
+                        gc_box.write(GcBox {
+                            ref_count: Cell::new(NonZeroUsize::MIN),
+                            value,
+                        });
+                    }
+
+                    cell.set(Some(ptr));
+
+                    // Register as root
+                    let gc_box_ptr = unsafe { NonNull::new_unchecked(gc_box) };
+                    ROOTS.with(|roots| {
+                        roots.borrow_mut().push(gc_box_ptr.cast());
+                    });
+
+                    gc_box_ptr
+                },
+                |ptr| {
+                    // Reuse existing ZST allocation
+                    // Increment ref count
+                    let gc_box = ptr.as_ptr().cast::<GcBox<T>>();
+                    // SAFETY: We know this is a valid GcBox<T> for ZST
+                    unsafe {
+                        (*gc_box).inc_ref();
+                    }
+                    unsafe { NonNull::new_unchecked(gc_box) }
+                },
+            )
         });
 
         // Notify that we created a Gc

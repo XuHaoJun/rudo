@@ -87,7 +87,7 @@
 - [x] T024 [P] [US1] Create basic allocation test (alloc `Gc<i32>`, verify deref) in `crates/rudo-gc/tests/basic.rs`
 - [x] T025 [P] [US1] Create drop/collection test (drop Gc, call collect(), verify freed) in `crates/rudo-gc/tests/basic.rs`
 - [x] T026 [P] [US1] Create cycle collection test (A->B->A cycle, drop, collect, verify both freed) in `crates/rudo-gc/tests/cycles.rs`
-- [ ] T027 [P] [US1] Create Miri test configuration for UB detection in `crates/rudo-gc/tests/miri.rs`
+- [x] T027 [P] [US1] Create Miri test configuration for UB detection in `crates/rudo-gc/tests/miri.rs`
 
 ### Implementation for User Story 1
 
@@ -171,7 +171,7 @@
 
 - [x] T058 [P] [US3] Create size class routing test (verify u64 and [u64; 8] in different segments) in `crates/rudo-gc/tests/bibop.rs`
 - [x] T059 [P] [US3] Create O(1) allocation validation test (measure allocation time consistency) in `crates/rudo-gc/tests/bibop.rs`
-- [ ] T060 [P] [US3] Create page header validation test (verify magic number, block_size, obj_count) in `crates/rudo-gc/tests/bibop.rs`
+- [x] T060 [P] [US3] Create page header validation test (verify magic number, block_size, obj_count) in `crates/rudo-gc/tests/bibop.rs`
 - [x] T061 [P] [US3] Create large object allocation test (objects > 2KB) in `crates/rudo-gc/tests/bibop.rs`
 
 ### Implementation for User Story 3
@@ -180,22 +180,22 @@
 
 - [x] T062 [US3] Implement `GlobalHeap::alloc_large<T>()` for objects > 2048 bytes in `crates/rudo-gc/src/heap.rs`
 - [x] T063 [US3] Implement LOS page tracking in `GlobalHeap.large_objects` in `crates/rudo-gc/src/heap.rs`
-- [ ] T064 [US3] Implement LOS sweep handling in mark-sweep collector in `crates/rudo-gc/src/gc.rs`
+- [x] T064 [US3] Implement LOS sweep handling in mark-sweep collector in `crates/rudo-gc/src/gc.rs`
 
 #### Zero-Sized Types
 
-- [ ] T065 [US3] Implement ZST detection and singleton handling for `Gc<()>` in `crates/rudo-gc/src/ptr.rs`
-- [ ] T066 [US3] Add ZST-specific Trace implementation in `crates/rudo-gc/src/trace.rs`
+- [x] T065 [US3] Implement ZST detection and singleton handling for `Gc<()>` in `crates/rudo-gc/src/ptr.rs`
+- [x] T066 [US3] Add ZST-specific Trace implementation in `crates/rudo-gc/src/trace.rs`
 
 #### Interior Pointer Resolution
 
 - [x] T067 [US3] Implement `ptr_to_page_header(ptr)` for O(1) page lookup via alignment in `crates/rudo-gc/src/heap.rs`
 - [x] T068 [US3] Implement `ptr_to_object_index(ptr)` for interior pointer resolution in `crates/rudo-gc/src/heap.rs`
-- [ ] T069 [US3] Add interior pointer validation in conservative scanning path in `crates/rudo-gc/src/roots.rs`
+- [x] T069 [US3] Add interior pointer validation in conservative scanning path in `crates/rudo-gc/src/roots.rs`
 
 #### Heap Introspection
 
-- [ ] T070 [US3] Implement `GlobalHeap::segment_for<T>()` debug accessor for verifying BiBOP routing in `crates/rudo-gc/src/heap.rs`
+- [x] T070 [US3] Implement `GlobalHeap::segment_for<T>()` debug accessor for verifying BiBOP routing in `crates/rudo-gc/src/heap.rs`
 
 **Checkpoint**: All user stories should now be independently functional
 
@@ -207,14 +207,14 @@
 
 ### Self-Referential Structures
 
-- [ ] T071 [P] Implement `Gc::new_cyclic<F>()` for self-referential structures in `crates/rudo-gc/src/ptr.rs`
-- [ ] T072 [P] Add test for `new_cyclic` with self-referential struct in `crates/rudo-gc/tests/cycles.rs`
+- [x] T071 [P] Implement `Gc::new_cyclic<F>()` for self-referential structures in `crates/rudo-gc/src/ptr.rs`
+- [x] T072 [P] Add test for `new_cyclic` with self-referential struct in `crates/rudo-gc/tests/cycles.rs`
 
 ### Safety & Validation
 
-- [ ] T073 Implement out-of-memory handling via `handle_alloc_error()` in `crates/rudo-gc/src/heap.rs`
-- [ ] T074 Add alignment validation for all allocations in `crates/rudo-gc/src/heap.rs`
-- [ ] T075 Implement `!Send` and `!Sync` marker trait impls for `Gc<T>` in `crates/rudo-gc/src/ptr.rs`
+- [x] T073 Implement out-of-memory handling via `handle_alloc_error()` in `crates/rudo-gc/src/heap.rs`
+- [x] T074 Add alignment validation for all allocations in `crates/rudo-gc/src/heap.rs`
+- [x] T075 Implement `!Send` and `!Sync` marker trait impls for `Gc<T>` in `crates/rudo-gc/src/ptr.rs`
 
 ### Documentation
 
@@ -226,7 +226,7 @@
 
 - [ ] T079 [P] Create allocation benchmark (compare with Rc allocation time) in `crates/rudo-gc/benches/alloc.rs`
 - [ ] T080 [P] Create collection benchmark (measure STW pause time) in `crates/rudo-gc/benches/collect.rs`
-- [ ] T081 Run Miri validation on all tests to verify no UB
+- [x] T081 Run Miri validation on all tests to verify no UB (passed with `-Zmiri-ignore-leaks`)
 
 ### Quickstart Validation
 

@@ -1,6 +1,6 @@
 //! Basic allocation and collection tests for rudo-gc.
 
-use rudo_gc::{collect, Gc};
+use rudo_gc::{collect, Gc, Trace};
 
 #[test]
 fn test_basic_allocation() {
@@ -128,4 +128,64 @@ fn test_default() {
 fn test_from() {
     let x: Gc<i32> = Gc::from(42);
     assert_eq!(*x, 42);
+}
+
+// ============================================================================
+// T065/T066: Zero-Sized Type (ZST) tests
+// ============================================================================
+
+#[test]
+fn test_zst_unit() {
+    // Unit type is a ZST
+    let x = Gc::new(());
+    let y = Gc::new(());
+
+    // Both should work
+    assert_eq!(*x, ());
+    assert_eq!(*y, ());
+}
+
+/// A custom ZST.
+#[derive(Debug, Clone, Copy, PartialEq, Trace)]
+struct EmptyStruct;
+
+#[test]
+fn test_zst_custom_struct() {
+    let x = Gc::new(EmptyStruct);
+    let y = Gc::new(EmptyStruct);
+
+    assert_eq!(*x, EmptyStruct);
+    assert_eq!(*y, EmptyStruct);
+}
+
+#[test]
+fn test_zst_clone() {
+    let x = Gc::new(());
+    let y = Gc::clone(&x);
+
+    assert_eq!(*x, ());
+    assert_eq!(*y, ());
+    // ZST clones should point to same allocation
+    assert!(Gc::ptr_eq(&x, &y));
+}
+
+#[test]
+fn test_zst_drop_collect() {
+    {
+        let _x = Gc::new(());
+        let _y = Gc::new(());
+        let _z = Gc::new(());
+    }
+    // Should not panic
+    collect();
+}
+
+#[test]
+fn test_zst_many_allocations() {
+    // Allocate many ZSTs - should be efficient
+    let units: Vec<Gc<()>> = (0..1000).map(|_| Gc::new(())).collect();
+
+    for unit in &units {
+        assert_eq!(**unit, ());
+    }
 }

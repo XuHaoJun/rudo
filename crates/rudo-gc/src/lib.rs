@@ -64,10 +64,15 @@
 #![allow(clippy::module_name_repetitions)]
 
 mod gc;
-mod heap;
 mod ptr;
 mod roots;
 mod trace;
+
+/// `BiBOP` memory management internals.
+///
+/// This module is public for testing and advanced use cases.
+/// Most users should use `Gc<T>` directly.
+pub mod heap;
 
 // Re-export public API
 pub use gc::{collect, default_collect_condition, set_collect_condition, CollectInfo};

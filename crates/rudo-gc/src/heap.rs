@@ -336,13 +336,28 @@ impl GlobalHeap {
     /// Allocate space for a value of type T.
     ///
     /// Returns a pointer to uninitialized memory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the type's alignment exceeds the size class alignment.
+    /// This should be extremely rare in practice since size classes are
+    /// powers of two starting at 16.
     pub fn alloc<T>(&mut self) -> NonNull<u8> {
         let size = std::mem::size_of::<T>();
+        let align = std::mem::align_of::<T>();
         self.total_allocated += size;
 
         if size > MAX_SMALL_OBJECT_SIZE {
-            return self.alloc_large(size);
+            return self.alloc_large(size, align);
         }
+
+        // Validate alignment - size class must satisfy alignment requirement
+        let size_class = compute_size_class(size);
+        assert!(
+            size_class >= align,
+            "Type alignment ({align}) exceeds size class ({size_class}). \
+             Consider using a larger wrapper type."
+        );
 
         match compute_class_index(size) {
             0 => self.segment_16.allocate(),
@@ -357,7 +372,18 @@ impl GlobalHeap {
     }
 
     /// Allocate a large object (> 2KB).
-    fn alloc_large(&mut self, size: usize) -> NonNull<u8> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the alignment requirement exceeds `PAGE_SIZE`.
+    fn alloc_large(&mut self, size: usize, align: usize) -> NonNull<u8> {
+        // Validate alignment - page alignment (4096) should satisfy most types
+        assert!(
+            PAGE_SIZE >= align,
+            "Type alignment ({align}) exceeds page size ({PAGE_SIZE}). \
+             Such extreme alignment requirements are not supported."
+        );
+
         // For large objects, allocate dedicated pages
         let total_size = PageHeader::header_size(size) + size;
         let pages_needed = total_size.div_ceil(PAGE_SIZE);
@@ -419,6 +445,66 @@ impl GlobalHeap {
             .chain(self.segment_2048.pages().iter().copied())
             .chain(self.large_objects.iter().copied())
     }
+
+    /// Get large object pages.
+    #[must_use]
+    pub fn large_object_pages(&self) -> &[NonNull<PageHeader>] {
+        &self.large_objects
+    }
+
+    /// Get mutable access to large object pages (for sweep phase).
+    #[allow(dead_code)]
+    pub const fn large_object_pages_mut(&mut self) -> &mut Vec<NonNull<PageHeader>> {
+        &mut self.large_objects
+    }
+
+    /// Get the size class index for a type.
+    ///
+    /// This is useful for debugging and verifying `BiBOP` routing.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(index)` - Size class index (0-7) for small objects
+    /// - `None` - Type is a large object (> 2KB)
+    #[must_use]
+    #[allow(dead_code)]
+    pub const fn size_class_for<T>() -> Option<usize> {
+        let size = std::mem::size_of::<T>();
+        if size > MAX_SMALL_OBJECT_SIZE {
+            None
+        } else {
+            Some(compute_class_index(size))
+        }
+    }
+
+    /// Get the segment index and size class name for debugging.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use rudo_gc::heap::GlobalHeap;
+    ///
+    /// let (class, name) = GlobalHeap::debug_size_class::<u64>();
+    /// assert_eq!(name, "16-byte");
+    /// ```
+    #[must_use]
+    #[allow(dead_code)]
+    pub const fn debug_size_class<T>() -> (usize, &'static str) {
+        let size = std::mem::size_of::<T>();
+        let class = compute_size_class(size);
+        let name = match class {
+            16 => "16-byte",
+            32 => "32-byte",
+            64 => "64-byte",
+            128 => "128-byte",
+            256 => "256-byte",
+            512 => "512-byte",
+            1024 => "1024-byte",
+            2048 => "2048-byte",
+            _ => "large-object",
+        };
+        (class, name)
+    }
 }
 
 impl Default for GlobalHeap {
@@ -454,6 +540,7 @@ where
 ///
 /// The pointer must point to memory within a valid GC page.
 #[allow(dead_code)]
+#[must_use]
 pub unsafe fn ptr_to_page_header(ptr: *const u8) -> *mut PageHeader {
     let addr = ptr as usize;
     let page_addr = addr & PAGE_MASK;
@@ -466,6 +553,7 @@ pub unsafe fn ptr_to_page_header(ptr: *const u8) -> *mut PageHeader {
 ///
 /// The pointer must be valid for reading.
 #[allow(dead_code)]
+#[must_use]
 pub unsafe fn is_gc_pointer(ptr: *const u8) -> bool {
     // SAFETY: Caller guarantees ptr is valid
     unsafe {
@@ -483,6 +571,7 @@ pub unsafe fn is_gc_pointer(ptr: *const u8) -> bool {
 ///
 /// The pointer must point to memory within a valid GC page.
 #[allow(dead_code)]
+#[must_use]
 pub unsafe fn ptr_to_object_index(ptr: *const u8) -> Option<usize> {
     // SAFETY: Caller guarantees ptr is valid and within a GC page
     unsafe {
