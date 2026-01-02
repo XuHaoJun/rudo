@@ -172,8 +172,24 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
         let page_ptr = unsafe { NonNull::new_unchecked(header) };
         self.pages.push(page_ptr);
 
-        // Set up bump allocation for this page
+        // Update range will be done by GlobalHeap
+
+        // Initialize all slots with no-op drop to avoid crashes during sweep
+        // if they are swept before being allocated.
         let header_size = PageHeader::header_size(BLOCK_SIZE);
+        unsafe {
+            for i in 0..obj_count {
+                let obj_ptr = ptr.add(header_size + (i * BLOCK_SIZE));
+                // We only need to set drop_fn. We can use GcBox<()> for this.
+                // SAFETY: We just allocated this page and it's aligned.
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                std::ptr::addr_of_mut!((*gc_box_ptr).drop_fn)
+                    .write(crate::ptr::GcBox::<()>::no_op_drop);
+            }
+        }
+
+        // Set up bump allocation for this page
         self.current_page = Some(page_ptr);
         self.bump_ptr = unsafe { ptr.add(header_size) };
         self.bump_end = unsafe { ptr.add(PAGE_SIZE) };
@@ -185,7 +201,29 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
     ///
     /// Returns a pointer to uninitialized memory of size `BLOCK_SIZE`.
     pub fn allocate(&mut self) -> NonNull<u8> {
-        // Fast path: bump allocation
+        // 1. Try free list of current page
+        if let Some(current) = self.current_page {
+            unsafe {
+                let header = current.as_ptr();
+                if let Some(idx) = (*header).free_list_head {
+                    let header_size = PageHeader::header_size(BLOCK_SIZE);
+                    let ptr = current
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(header_size + (idx as usize * BLOCK_SIZE));
+
+                    // Read next index from the memory itself
+                    // SAFETY: The memory at ptr was previously an object or a free slot
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let next_idx = *(ptr.cast::<Option<u16>>());
+                    (*header).free_list_head = next_idx;
+
+                    return NonNull::new_unchecked(ptr);
+                }
+            }
+        }
+
+        // 2. Fast path: bump allocation
         if self.bump_ptr < self.bump_end.cast_mut() {
             let ptr = self.bump_ptr;
             self.bump_ptr = unsafe { self.bump_ptr.add(BLOCK_SIZE) };
@@ -193,7 +231,32 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
             return unsafe { NonNull::new_unchecked(ptr) };
         }
 
-        // Slow path: need a new page
+        // 3. Slow path: Search other pages for free slots
+        for &page in &self.pages {
+            unsafe {
+                let header = page.as_ptr();
+                if let Some(idx) = (*header).free_list_head {
+                    // Found a page with a free slot! Make it current.
+                    self.current_page = Some(page);
+                    // Disable bump allocation for this page as it's potentially fragmented
+                    self.bump_ptr = self.bump_end.cast_mut();
+
+                    let header_size = PageHeader::header_size(BLOCK_SIZE);
+                    let ptr = page
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(header_size + (idx as usize * BLOCK_SIZE));
+
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let next_idx = *(ptr.cast::<Option<u16>>());
+                    (*header).free_list_head = next_idx;
+
+                    return NonNull::new_unchecked(ptr);
+                }
+            }
+        }
+
+        // 4. Ultra-slow path: need a new page
         self.allocate_page();
         self.allocate()
     }
@@ -313,6 +376,10 @@ pub struct GlobalHeap {
     large_objects: Vec<NonNull<PageHeader>>,
     /// Total bytes allocated.
     total_allocated: usize,
+    /// Minimum address managed by this heap.
+    min_addr: usize,
+    /// Maximum address managed by this heap.
+    max_addr: usize,
 }
 
 impl GlobalHeap {
@@ -330,7 +397,25 @@ impl GlobalHeap {
             segment_2048: Segment::new(),
             large_objects: Vec::new(),
             total_allocated: 0,
+            min_addr: usize::MAX,
+            max_addr: 0,
         }
+    }
+
+    /// Update the address range of the heap.
+    const fn update_range(&mut self, addr: usize, size: usize) {
+        if addr < self.min_addr {
+            self.min_addr = addr;
+        }
+        if addr + size > self.max_addr {
+            self.max_addr = addr + size;
+        }
+    }
+
+    /// Check if an address is within the heap's range.
+    #[must_use]
+    pub const fn is_in_range(&self, addr: usize) -> bool {
+        addr >= self.min_addr && addr < self.max_addr
     }
 
     /// Allocate space for a value of type T.
@@ -359,7 +444,7 @@ impl GlobalHeap {
              Consider using a larger wrapper type."
         );
 
-        match compute_class_index(size) {
+        let ptr = match compute_class_index(size) {
             0 => self.segment_16.allocate(),
             1 => self.segment_32.allocate(),
             2 => self.segment_64.allocate(),
@@ -368,7 +453,12 @@ impl GlobalHeap {
             5 => self.segment_512.allocate(),
             6 => self.segment_1024.allocate(),
             _ => self.segment_2048.allocate(),
-        }
+        };
+
+        // Update heap range for conservative scanning
+        self.update_range(ptr.as_ptr() as usize & PAGE_MASK, PAGE_SIZE);
+
+        ptr
     }
 
     /// Allocate a large object (> 2KB).
@@ -419,6 +509,9 @@ impl GlobalHeap {
 
         let page_ptr = unsafe { NonNull::new_unchecked(header) };
         self.large_objects.push(page_ptr);
+
+        // Update heap range for conservative scanning
+        self.update_range(header as usize, alloc_size);
 
         let header_size = std::mem::size_of::<PageHeader>();
         unsafe { NonNull::new_unchecked(ptr.add(header_size)) }
@@ -597,5 +690,71 @@ pub unsafe fn ptr_to_object_index(ptr: *const u8) -> Option<usize> {
         }
 
         Some(index)
+    }
+}
+
+/// Try to find a valid GC object starting address from a potential interior pointer.
+///
+/// This is the core of conservative stack scanning. It takes a potential pointer
+/// and, if it points into the GC heap, returns the address of the start of the
+/// containing `GcBox`.
+///
+/// # Safety
+///
+/// The pointer must be safe to read if it is a valid pointer.
+#[allow(dead_code)]
+#[must_use]
+pub unsafe fn find_gc_box_from_ptr(
+    heap: &GlobalHeap,
+    ptr: usize,
+) -> Option<NonNull<crate::ptr::GcBox<()>>> {
+    // 1. Quick range check
+    if !heap.is_in_range(ptr) {
+        return None;
+    }
+
+    let page_addr = ptr & PAGE_MASK;
+    let header_ptr = page_addr as *mut PageHeader;
+
+    // SAFETY: We checked that the pointer is within our managed range.
+    unsafe {
+        // 2. Check if the pointer is aligned to something that could be a pointer
+        if ptr % std::mem::align_of::<usize>() != 0 {
+            return None;
+        }
+
+        // 3. Fast magic number check
+        if (*header_ptr).magic != MAGIC_GC_PAGE {
+            return None;
+        }
+
+        let header = &*header_ptr;
+        let block_size = header.block_size as usize;
+        let header_size = PageHeader::header_size(block_size);
+
+        // 3. Range check: pointer must be after the header
+        if ptr < page_addr + header_size {
+            return None;
+        }
+
+        // 4. Calculate object index (handles interior pointers!)
+        let offset = ptr - (page_addr + header_size);
+        let index = offset / block_size;
+
+        // 5. Index check
+        if index >= header.obj_count as usize {
+            return None;
+        }
+
+        // 6. Large object handling: only accept the exact start for now
+        if header.flags & 0x01 != 0 && offset != 0 {
+            return None;
+        }
+
+        // Bingo! We found a potential object.
+        let obj_start = page_addr + header_size + (index * block_size);
+        Some(NonNull::new_unchecked(
+            obj_start as *mut crate::ptr::GcBox<()>,
+        ))
     }
 }

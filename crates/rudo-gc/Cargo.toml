@@ -16,6 +16,7 @@ derive = ["dep:rudo-gc-derive"]
 
 [dependencies]
 rudo-gc-derive = { path = "../rudo-gc-derive", optional = true }
+libc = "0.2"
 
 [dev-dependencies]
 # For benchmarking (future)

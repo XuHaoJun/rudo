@@ -65,7 +65,7 @@
 
 mod gc;
 mod ptr;
-mod roots;
+mod stack;
 mod trace;
 
 /// `BiBOP` memory management internals.

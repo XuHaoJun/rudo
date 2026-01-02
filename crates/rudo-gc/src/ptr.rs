@@ -9,9 +9,8 @@ use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ptr::NonNull;
 
-use crate::gc::notify_dropped_gc;
-use crate::heap::{with_heap, GlobalHeap};
-use crate::roots::ROOTS;
+use crate::gc::{is_collecting, notify_dropped_gc};
+use crate::heap::{ptr_to_object_index, ptr_to_page_header, with_heap, GlobalHeap};
 use crate::trace::{Trace, Visitor};
 
 // ============================================================================
@@ -23,6 +22,8 @@ use crate::trace::{Trace, Visitor};
 pub struct GcBox<T: Trace + ?Sized> {
     /// Current reference count (for amortized collection triggering).
     ref_count: Cell<NonZeroUsize>,
+    /// Type-erased destructor for the value.
+    pub(crate) drop_fn: unsafe fn(*mut u8),
     /// The user's data.
     value: T,
 }
@@ -58,6 +59,23 @@ impl<T: Trace + ?Sized> GcBox<T> {
     pub const fn value(&self) -> &T {
         &self.value
     }
+}
+
+impl<T: Trace> GcBox<T> {
+    /// Type-erased drop function for any Sized T.
+    pub(crate) unsafe fn drop_fn_for(ptr: *mut u8) {
+        // SAFETY: The caller must ensure ptr points to a GcBox<T> where T: Sized.
+        // This is true for all objects allocated via Gc::new.
+        let gc_box = ptr.cast::<Self>();
+        unsafe {
+            std::ptr::drop_in_place(std::ptr::addr_of_mut!((*gc_box).value));
+            // Mark as dropped to avoid double-dropping during sweep
+            (*gc_box).drop_fn = GcBox::<()>::no_op_drop;
+        }
+    }
+
+    /// A no-op drop function for already-dropped objects.
+    pub(crate) const unsafe fn no_op_drop(_ptr: *mut u8) {}
 }
 
 // ============================================================================
@@ -206,16 +224,12 @@ impl<T: Trace> Gc<T> {
         unsafe {
             gc_box.write(GcBox {
                 ref_count: Cell::new(NonZeroUsize::MIN),
+                drop_fn: GcBox::<T>::drop_fn_for,
                 value,
             });
         }
 
         let gc_box_ptr = unsafe { NonNull::new_unchecked(gc_box) };
-
-        // Register as a root
-        ROOTS.with(|roots| {
-            roots.borrow_mut().push(gc_box_ptr.cast());
-        });
 
         // Notify that we created a Gc
         crate::gc::notify_created_gc();
@@ -256,19 +270,14 @@ impl<T: Trace> Gc<T> {
                     unsafe {
                         gc_box.write(GcBox {
                             ref_count: Cell::new(NonZeroUsize::MIN),
+                            drop_fn: GcBox::<T>::drop_fn_for,
                             value,
                         });
                     }
 
                     cell.set(Some(ptr));
 
-                    // Register as root
-                    let gc_box_ptr = unsafe { NonNull::new_unchecked(gc_box) };
-                    ROOTS.with(|roots| {
-                        roots.borrow_mut().push(gc_box_ptr.cast());
-                    });
-
-                    gc_box_ptr
+                    unsafe { NonNull::new_unchecked(gc_box) }
                 },
                 |ptr| {
                     // Reuse existing ZST allocation
@@ -328,16 +337,12 @@ impl<T: Trace> Gc<T> {
         unsafe {
             gc_box.write(GcBox {
                 ref_count: Cell::new(NonZeroUsize::MIN),
+                drop_fn: GcBox::<T>::drop_fn_for,
                 value,
             });
         }
 
         let gc_box_ptr = unsafe { NonNull::new_unchecked(gc_box) };
-
-        // Register as a root
-        ROOTS.with(|roots| {
-            roots.borrow_mut().push(gc_box_ptr.cast());
-        });
 
         // Create the live Gc
         let gc = Self {
@@ -446,11 +451,6 @@ impl<T: Trace + ?Sized> Clone for Gc<T> {
             (*ptr.as_ptr()).inc_ref();
         }
 
-        // Register as a root
-        ROOTS.with(|roots| {
-            roots.borrow_mut().push(ptr.cast());
-        });
-
         Self {
             ptr: self.ptr.clone(),
             _marker: PhantomData,
@@ -464,10 +464,22 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
             return;
         };
 
-        // Remove from roots
-        ROOTS.with(|roots| {
-            roots.borrow_mut().pop(ptr.cast());
-        });
+        // SAFETY: If we are in the middle of a sweep, the target object
+        // might have already been swept and its memory reused or invalidated.
+        // We check if the object is unmarked (garbage) and skip if so.
+        if is_collecting() {
+            unsafe {
+                let header = ptr_to_page_header(ptr.as_ptr().cast());
+                // Valid GC pointers always have a magic number
+                if (*header).magic == crate::heap::MAGIC_GC_PAGE {
+                    if let Some(index) = ptr_to_object_index(ptr.as_ptr().cast()) {
+                        if !(*header).is_marked(index) {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
 
         // Decrement reference count
         let is_last = unsafe { (*ptr.as_ptr()).dec_ref() };
@@ -476,7 +488,8 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
             // This was the last reference; drop unconditionally
             // SAFETY: We have exclusive access
             unsafe {
-                std::ptr::drop_in_place(std::ptr::addr_of_mut!((*ptr.as_ptr()).value));
+                // Call the drop_fn to drop the inner value and mark as dropped
+                ((*ptr.as_ptr()).drop_fn)(ptr.as_ptr().cast());
                 // Note: Memory is managed by the heap, not deallocated here
             }
         } else {

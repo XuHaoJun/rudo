@@ -8,7 +8,6 @@ use std::ptr::NonNull;
 
 use crate::heap::{with_heap, GlobalHeap, PageHeader, HEAP};
 use crate::ptr::GcBox;
-use crate::roots::{with_roots, ShadowStack};
 use crate::trace::{Trace, Visitor};
 
 // ============================================================================
@@ -73,6 +72,8 @@ thread_local! {
     static N_EXISTING: Cell<usize> = const { Cell::new(0) };
     /// The current collection condition.
     static COLLECT_CONDITION: Cell<CollectCondition> = const { Cell::new(default_collect_condition) };
+    /// Whether a collection is currently in progress.
+    static IN_COLLECT: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Notify that a Gc was created.
@@ -92,9 +93,15 @@ pub fn notify_dropped_gc() {
     };
 
     let condition = COLLECT_CONDITION.with(Cell::get);
-    if condition(&info) {
+    if condition(&info) && !IN_COLLECT.with(Cell::get) {
         collect();
     }
+}
+
+/// Returns true if a garbage collection is currently in progress.
+#[must_use]
+pub fn is_collecting() -> bool {
+    IN_COLLECT.with(Cell::get)
 }
 
 /// Set the function which determines whether the garbage collector should be run.
@@ -111,23 +118,27 @@ pub fn set_collect_condition(f: CollectCondition) {
 /// This function runs the mark-sweep collector synchronously, freeing all
 /// unreachable allocations.
 pub fn collect() {
+    // Reentrancy guard
+    if IN_COLLECT.with(Cell::get) {
+        return;
+    }
+    IN_COLLECT.with(|in_collect| in_collect.set(true));
+
     // Reset drop counter
     N_DROPS.with(|n| n.set(0));
 
     // Phase 1: Clear all marks
     with_heap(|heap| {
         clear_all_marks(heap);
-    });
 
-    // Phase 2: Mark all reachable objects
-    with_roots(|roots| {
-        mark_from_roots(roots);
-    });
+        // Phase 2: Mark all reachable objects
+        mark_from_roots(heap);
 
-    // Phase 3: Sweep unmarked objects
-    with_heap(|heap| {
+        // Phase 3: Sweep unmarked objects
         sweep_unmarked(heap);
     });
+
+    IN_COLLECT.with(|in_collect| in_collect.set(false));
 }
 
 /// Clear all mark bits in the heap.
@@ -142,14 +153,17 @@ fn clear_all_marks(heap: &GlobalHeap) {
 }
 
 /// Mark all objects reachable from roots.
-fn mark_from_roots(roots: &ShadowStack) {
+fn mark_from_roots(heap: &GlobalHeap) {
     let mut visitor = MarkVisitor;
 
-    for root in roots.iter() {
-        // SAFETY: Root pointers are valid GcBox pointers
-        unsafe {
-            mark_object(root, &mut visitor);
-        }
+    // Use conservative stack scanning to find roots.
+    // This replaces the explicit ShadowStack.
+    unsafe {
+        crate::stack::spill_registers_and_scan(|potential_ptr| {
+            if let Some(gc_box_ptr) = crate::heap::find_gc_box_from_ptr(heap, potential_ptr) {
+                mark_object(gc_box_ptr, &mut visitor);
+            }
+        });
     }
 }
 
@@ -196,7 +210,7 @@ unsafe fn mark_object(ptr: NonNull<GcBox<()>>, _visitor: &mut MarkVisitor) {
 /// Sweep all unmarked objects.
 ///
 /// This includes both regular segments and Large Object Space (LOS).
-fn sweep_unmarked(heap: &GlobalHeap) {
+fn sweep_unmarked(heap: &mut GlobalHeap) {
     // Phase 1: Sweep regular segment pages
     sweep_segment_pages(heap);
 
@@ -205,6 +219,7 @@ fn sweep_unmarked(heap: &GlobalHeap) {
 }
 
 /// Sweep pages in regular segments.
+#[allow(clippy::cast_ptr_alignment)]
 fn sweep_segment_pages(heap: &GlobalHeap) {
     for page_ptr in heap.all_pages() {
         // SAFETY: Page pointers from all_pages are always valid
@@ -216,33 +231,39 @@ fn sweep_segment_pages(heap: &GlobalHeap) {
                 continue;
             }
 
+            let block_size = (*header).block_size as usize;
             let obj_count = (*header).obj_count as usize;
-
-            // For each unmarked object, we would:
-            // 1. Call its destructor (if we had type info)
-            // 2. Add to free list
-            //
-            // Current limitation: We can't call destructors because objects
-            // are type-erased. The reference counting in Gc<T> handles this.
-            // This sweep phase only clears marks for the next cycle.
+            let header_size = PageHeader::header_size(block_size);
+            let page_addr = header.cast::<u8>();
 
             // Build free list from unmarked objects
             let mut free_head: Option<u16> = None;
             for i in (0..obj_count).rev() {
                 if !(*header).is_marked(i) {
-                    // Object is unmarked - could be added to free list
-                    // For now, we just track it (actual freeing needs type info)
+                    // Object is unmarked - it is garbage!
+                    let obj_ptr = page_addr.add(header_size + (i * block_size));
+                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+                    // 1. Call the destructor
+                    // SAFETY: Unmarked objects are unreachable from roots.
+                    // We call the drop_fn which was initialized in Gc::new.
+                    ((*gc_box_ptr).drop_fn)(obj_ptr);
+
+                    // 2. Add to free list
                     #[allow(clippy::cast_possible_truncation)]
                     let idx = i as u16;
-                    // Note: In a full implementation, we'd store the next free
-                    // pointer in the freed object's memory
-                    if free_head.is_none() {
-                        free_head = Some(idx);
-                    }
+
+                    // Store the current free_head in the object's memory
+                    // SAFETY: We just dropped the value, so we can use its memory
+                    *(obj_ptr.cast::<Option<u16>>()) = free_head;
+                    free_head = Some(idx);
+
+                    // 3. Update statistics
+                    N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
                 }
             }
 
-            // Update free list head (best-effort without type info)
+            // Update free list head
             (*header).free_list_head = free_head;
         }
     }
@@ -251,29 +272,49 @@ fn sweep_segment_pages(heap: &GlobalHeap) {
 /// Sweep Large Object Space.
 ///
 /// Large objects that are unmarked should be deallocated entirely.
-fn sweep_large_objects(heap: &GlobalHeap) {
-    // Note: Full LOS sweep would remove unmarked pages from large_objects vec
-    // and deallocate them. This requires careful coordination with Gc<T>.
-    //
-    // Current implementation: Mark bits are cleared for next cycle.
-    // Actual deallocation happens when the last Gc<T> reference is dropped.
-
-    for page_ptr in heap.large_object_pages() {
+fn sweep_large_objects(heap: &mut GlobalHeap) {
+    // We need to iterate and potentially remove items from large_objects
+    let mut i = 0;
+    while i < heap.large_object_pages().len() {
+        let page_ptr = heap.large_object_pages()[i];
         // SAFETY: Large object pointers are valid
         unsafe {
             let header = page_ptr.as_ptr();
 
-            // If the single object is unmarked, it's eligible for collection
             if !(*header).is_marked(0) {
-                // The object is unreachable
-                // Deallocation will happen when Gc<T> drops
-                // For now, just clear the mark for next cycle
+                // The object is unreachable - deallocate it
+                let block_size = (*header).block_size as usize;
+                let header_size = std::mem::size_of::<PageHeader>();
+                let obj_ptr = header.cast::<u8>().add(header_size);
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+                // 1. Call the destructor
+                ((*gc_box_ptr).drop_fn)(obj_ptr);
+
+                // 2. Deallocate the pages
+                // Note: Large objects are allocated with Layout::from_size_align
+                let total_size = PageHeader::header_size(block_size) + block_size;
+                let pages_needed = total_size.div_ceil(crate::heap::PAGE_SIZE);
+                let alloc_size = pages_needed * crate::heap::PAGE_SIZE;
+                let layout =
+                    std::alloc::Layout::from_size_align(alloc_size, crate::heap::PAGE_SIZE)
+                        .expect("Invalid large object layout");
+
+                std::alloc::dealloc(header.cast::<u8>(), layout);
+
+                // 3. Remove from the heap's list
+                heap.large_object_pages_mut().swap_remove(i);
+
+                // 4. Update statistics
+                N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
+
+                // Don't increment i because we swap_removed
+                continue;
             }
         }
+        i += 1;
     }
-
-    // TODO: Remove and deallocate truly dead large objects
-    // This requires storing drop function pointers with the allocation
 }
 
 // ============================================================================
