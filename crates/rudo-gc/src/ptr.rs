@@ -11,7 +11,7 @@ use std::ptr::NonNull;
 
 use crate::gc::{is_collecting, notify_dropped_gc};
 use crate::heap::{ptr_to_object_index, ptr_to_page_header, with_heap, GlobalHeap};
-use crate::trace::{Trace, Visitor};
+use crate::trace::{GcVisitor, Trace, Visitor};
 
 // ============================================================================
 // GcBox - The heap allocation container
@@ -24,6 +24,8 @@ pub struct GcBox<T: Trace + ?Sized> {
     ref_count: Cell<NonZeroUsize>,
     /// Type-erased destructor for the value.
     pub(crate) drop_fn: unsafe fn(*mut u8),
+    /// Type-erased trace function for the value.
+    pub(crate) trace_fn: unsafe fn(*const u8, &mut GcVisitor),
     /// The user's data.
     value: T,
 }
@@ -71,11 +73,24 @@ impl<T: Trace> GcBox<T> {
             std::ptr::drop_in_place(std::ptr::addr_of_mut!((*gc_box).value));
             // Mark as dropped to avoid double-dropping during sweep
             (*gc_box).drop_fn = GcBox::<()>::no_op_drop;
+            (*gc_box).trace_fn = GcBox::<()>::no_op_trace;
         }
     }
 
     /// A no-op drop function for already-dropped objects.
     pub(crate) const unsafe fn no_op_drop(_ptr: *mut u8) {}
+
+    /// Type-erased trace function for any Sized T.
+    pub(crate) unsafe fn trace_fn_for(ptr: *const u8, visitor: &mut GcVisitor) {
+        let gc_box = ptr.cast::<Self>();
+        // SAFETY: The caller ensures ptr points to a valid GcBox<T>
+        unsafe {
+            (*gc_box).value.trace(visitor);
+        }
+    }
+
+    /// A no-op trace function.
+    pub(crate) const unsafe fn no_op_trace(_ptr: *const u8, _visitor: &mut GcVisitor) {}
 }
 
 // ============================================================================
@@ -225,6 +240,7 @@ impl<T: Trace> Gc<T> {
             gc_box.write(GcBox {
                 ref_count: Cell::new(NonZeroUsize::MIN),
                 drop_fn: GcBox::<T>::drop_fn_for,
+                trace_fn: GcBox::<T>::trace_fn_for,
                 value,
             });
         }
@@ -271,6 +287,7 @@ impl<T: Trace> Gc<T> {
                         gc_box.write(GcBox {
                             ref_count: Cell::new(NonZeroUsize::MIN),
                             drop_fn: GcBox::<T>::drop_fn_for,
+                            trace_fn: GcBox::<T>::trace_fn_for,
                             value,
                         });
                     }
@@ -338,6 +355,7 @@ impl<T: Trace> Gc<T> {
             gc_box.write(GcBox {
                 ref_count: Cell::new(NonZeroUsize::MIN),
                 drop_fn: GcBox::<T>::drop_fn_for,
+                trace_fn: GcBox::<T>::trace_fn_for,
                 value,
             });
         }

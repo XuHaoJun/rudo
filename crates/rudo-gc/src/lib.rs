@@ -63,6 +63,7 @@
 #![warn(clippy::nursery)]
 #![allow(clippy::module_name_repetitions)]
 
+pub mod cell;
 mod gc;
 mod ptr;
 mod stack;

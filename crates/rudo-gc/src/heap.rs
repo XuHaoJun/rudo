@@ -58,6 +58,9 @@ pub struct PageHeader {
     /// Bitmap of marked objects (one bit per slot).
     /// Size depends on `obj_count`, but we reserve space for max possible.
     pub mark_bitmap: [u64; 4], // 256 bits = enough for smallest size class (16 bytes)
+    /// Bitmap of dirty objects (one bit per slot).
+    /// Used for generational GC to track old objects that point to young objects.
+    pub dirty_bitmap: [u64; 4],
     /// Index of first free slot in free list.
     pub free_list_head: Option<u16>,
 }
@@ -102,6 +105,34 @@ impl PageHeader {
     /// Clear all mark bits.
     pub const fn clear_all_marks(&mut self) {
         self.mark_bitmap = [0; 4];
+    }
+
+    /// Check if an object at the given index is dirty.
+    #[must_use]
+    pub const fn is_dirty(&self, index: usize) -> bool {
+        let word = index / 64;
+        let bit = index % 64;
+        (self.dirty_bitmap[word] & (1 << bit)) != 0
+    }
+
+    /// Set the dirty bit for an object at the given index.
+    pub const fn set_dirty(&mut self, index: usize) {
+        let word = index / 64;
+        let bit = index % 64;
+        self.dirty_bitmap[word] |= 1 << bit;
+    }
+
+    /// Clear the dirty bit for an object at the given index.
+    #[allow(dead_code)]
+    pub const fn clear_dirty(&mut self, index: usize) {
+        let word = index / 64;
+        let bit = index % 64;
+        self.dirty_bitmap[word] &= !(1 << bit);
+    }
+
+    /// Clear all dirty bits.
+    pub const fn clear_all_dirty(&mut self) {
+        self.dirty_bitmap = [0; 4];
     }
 }
 
@@ -164,6 +195,7 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
                 flags: 0,
                 _padding: [0; 6],
                 mark_bitmap: [0; 4],
+                dirty_bitmap: [0; 4],
                 free_list_head: None,
             });
         }
@@ -186,6 +218,8 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
                 let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
                 std::ptr::addr_of_mut!((*gc_box_ptr).drop_fn)
                     .write(crate::ptr::GcBox::<()>::no_op_drop);
+                std::ptr::addr_of_mut!((*gc_box_ptr).trace_fn)
+                    .write(crate::ptr::GcBox::<()>::no_op_trace);
             }
         }
 
@@ -374,8 +408,10 @@ pub struct GlobalHeap {
     segment_2048: Segment<2048>,
     /// Pages for objects larger than 2KB.
     large_objects: Vec<NonNull<PageHeader>>,
-    /// Total bytes allocated.
-    total_allocated: usize,
+    /// Total bytes allocated in young generation.
+    young_allocated: usize,
+    /// Total bytes allocated in old generation.
+    old_allocated: usize,
     /// Minimum address managed by this heap.
     min_addr: usize,
     /// Maximum address managed by this heap.
@@ -396,7 +432,8 @@ impl GlobalHeap {
             segment_1024: Segment::new(),
             segment_2048: Segment::new(),
             large_objects: Vec::new(),
-            total_allocated: 0,
+            young_allocated: 0,
+            old_allocated: 0,
             min_addr: usize::MAX,
             max_addr: 0,
         }
@@ -430,7 +467,8 @@ impl GlobalHeap {
     pub fn alloc<T>(&mut self) -> NonNull<u8> {
         let size = std::mem::size_of::<T>();
         let align = std::mem::align_of::<T>();
-        self.total_allocated += size;
+        // All new allocations start in young generation
+        self.young_allocated += size;
 
         if size > MAX_SMALL_OBJECT_SIZE {
             return self.alloc_large(size, align);
@@ -503,6 +541,7 @@ impl GlobalHeap {
                 flags: 0x01, // Mark as large object
                 _padding: [0; 6],
                 mark_bitmap: [0; 4],
+                dirty_bitmap: [0; 4],
                 free_list_head: None,
             });
         }
@@ -520,7 +559,26 @@ impl GlobalHeap {
     /// Get total bytes allocated.
     #[must_use]
     pub const fn total_allocated(&self) -> usize {
-        self.total_allocated
+        self.young_allocated + self.old_allocated
+    }
+
+    /// Get bytes allocated in young generation.
+    #[must_use]
+    pub const fn young_allocated(&self) -> usize {
+        self.young_allocated
+    }
+
+    /// Get bytes allocated in old generation.
+    #[must_use]
+    pub const fn old_allocated(&self) -> usize {
+        self.old_allocated
+    }
+
+    /// Update allocation counters given a change in young/old bytes.
+    /// This is used by the collector during promotion and sweeping.
+    pub const fn update_allocated_bytes(&mut self, young: usize, old: usize) {
+        self.young_allocated = young;
+        self.old_allocated = old;
     }
 
     /// Iterate over all pages in all segments.

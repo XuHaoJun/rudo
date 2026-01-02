@@ -68,6 +68,29 @@ pub trait Visitor {
 }
 
 // ============================================================================
+// Concrete Visitor for GC
+// ============================================================================
+
+/// distinct modes for the GC visitor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisitorKind {
+    /// Full Major GC (Mark everything).
+    Major,
+    /// Minor GC (Mark only Young, stop at Old).
+    Minor,
+}
+
+/// A concrete visitor struct used by the GC.
+///
+/// We use a single struct with a 'kind' field to handle both Major and Minor
+/// GC passes. This allows `GcBox` to store a single function pointer for tracing
+/// that takes `&mut GcVisitor`.
+pub struct GcVisitor {
+    /// The kind of collection being performed.
+    pub kind: VisitorKind,
+}
+
+// ============================================================================
 // Trace implementations for Gc<T>
 // ============================================================================
 
