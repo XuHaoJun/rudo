@@ -1,0 +1,20 @@
+[package]
+name = "rudo-gc-derive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Derive macro for the rudo-gc Trace trait"
+keywords = ["garbage-collection", "gc", "derive", "macro"]
+categories = ["memory-management", "rust-patterns"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "derive"] }
+
+[lints]
+workspace = true

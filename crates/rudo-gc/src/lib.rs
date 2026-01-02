@@ -1,0 +1,79 @@
+//! A garbage-collected smart pointer library for Rust.
+//!
+//! `rudo-gc` provides a `Gc<T>` smart pointer with automatic memory reclamation
+//! and cycle detection. It uses a **BiBOP (Big Bag of Pages)** memory layout for
+//! efficient O(1) allocation and a **Mark-Sweep** garbage collection algorithm.
+//!
+//! # Features
+//!
+//! - **Automatic cycle detection**: Unlike `Rc<T>`, `Gc<T>` can collect cyclic references
+//! - **BiBOP memory layout**: O(1) allocation with size-class based segments
+//! - **Non-moving GC**: Address stability for Rust's `&T` references
+//! - **Ergonomic API**: Similar to `Rc<T>` with `#[derive(Trace)]` for custom types
+//!
+//! # Quick Start
+//!
+//! ```ignore
+//! use rudo_gc::{Gc, Trace};
+//!
+//! // Simple allocation
+//! let x = Gc::new(42);
+//! println!("Value: {}", *x);
+//!
+//! // Custom types with derive
+//! #[derive(Trace)]
+//! struct Node {
+//!     value: i32,
+//!     next: Option<Gc<Node>>,
+//! }
+//!
+//! let node = Gc::new(Node { value: 1, next: None });
+//! ```
+//!
+//! # Handling Cycles
+//!
+//! ```ignore
+//! use rudo_gc::{Gc, Trace, collect};
+//! use std::cell::RefCell;
+//!
+//! #[derive(Trace)]
+//! struct Node {
+//!     next: RefCell<Option<Gc<Node>>>,
+//! }
+//!
+//! let a = Gc::new(Node { next: RefCell::new(None) });
+//! let b = Gc::new(Node { next: RefCell::new(None) });
+//!
+//! // Create cycle: a -> b -> a
+//! *a.next.borrow_mut() = Some(Gc::clone(&b));
+//! *b.next.borrow_mut() = Some(Gc::clone(&a));
+//!
+//! drop(a);
+//! drop(b);
+//! collect(); // Cycle is detected and freed
+//! ```
+//!
+//! # Thread Safety
+//!
+//! `Gc<T>` is `!Send` and `!Sync`. It can only be used within a single thread.
+//! For multi-threaded garbage collection, consider future `sync::Gc<T>` support.
+
+#![warn(missing_docs)]
+#![warn(clippy::pedantic)]
+#![warn(clippy::nursery)]
+#![allow(clippy::module_name_repetitions)]
+
+mod gc;
+mod heap;
+mod ptr;
+mod roots;
+mod trace;
+
+// Re-export public API
+pub use gc::{collect, default_collect_condition, set_collect_condition, CollectInfo};
+pub use ptr::Gc;
+pub use trace::{Trace, Visitor};
+
+// Re-export derive macro when feature is enabled
+#[cfg(feature = "derive")]
+pub use rudo_gc_derive::Trace;

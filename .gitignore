@@ -1,0 +1,56 @@
+# Rust build artifacts
+/target/
+**/target/
+
+# Cargo lock for libraries (optional - can be committed for applications)
+# Cargo.lock
+
+# Debug and profiling
+*.prof*
+*.profdata
+*.profraw
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Log files
+*.log
+
+# Backup files
+*.bak
+*.backup
+
+# Temporary files
+*.tmp
+*.temp
+
+# Coverage
+*.gcno
+*.gcda
+coverage/
+lcov.info
+tarpaulin-report.html
+
+# Documentation builds (generated)
+# /docs/ - keep this, it's our learn docs
+
+# Benchmark results
+*.bench
+
+# Rust-specific
+**/*.rs.bk
+rustc-ice-*.txt

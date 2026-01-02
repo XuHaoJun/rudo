@@ -1,0 +1,32 @@
+[package]
+name = "rudo-gc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "A garbage-collected smart pointer with automatic cycle detection using BiBOP memory layout and Mark-Sweep collection"
+readme = "README.md"
+keywords = ["garbage-collection", "gc", "memory", "smart-pointer", "cycle-detection"]
+categories = ["memory-management", "rust-patterns"]
+
+[features]
+default = ["derive"]
+derive = ["dep:rudo-gc-derive"]
+
+[dependencies]
+rudo-gc-derive = { path = "../rudo-gc-derive", optional = true }
+
+[dev-dependencies]
+# For benchmarking (future)
+# criterion = "0.5"
+
+[lints]
+workspace = true
+
+# [[bench]]
+# name = "alloc"
+# harness = false
+
+# [[bench]]
+# name = "collect"
+# harness = false
