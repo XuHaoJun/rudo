@@ -1,7 +1,12 @@
-//! BiBOP (Big Bag of Pages) memory management.
+//! `BiBOP` (Big Bag of Pages) memory management.
 //!
 //! This module implements the core memory layout using page-aligned segments
 //! with size-class based allocation for O(1) allocation performance.
+//!
+//! # `BiBOP` Memory Layout
+//!
+//! Memory is divided into 4KB pages. Each page contains objects of a single
+//! size class. This allows O(1) lookup of object metadata from its address.
 
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::cell::RefCell;
@@ -22,6 +27,7 @@ pub const MAGIC_GC_PAGE: u32 = 0x5255_4447;
 
 /// Size classes for object allocation.
 /// Objects are routed to the smallest size class that fits them.
+#[allow(dead_code)]
 pub const SIZE_CLASSES: [usize; 8] = [16, 32, 64, 128, 256, 512, 1024, 2048];
 
 /// Objects larger than this go to the Large Object Space.
@@ -45,12 +51,12 @@ pub struct PageHeader {
     pub obj_count: u16,
     /// Generation index (for future generational GC).
     pub generation: u8,
-    /// Bitflags (is_large_object, is_dirty, etc.).
+    /// Bitflags (`is_large_object`, `is_dirty`, etc.).
     pub flags: u8,
     /// Padding for alignment.
     _padding: [u8; 6],
     /// Bitmap of marked objects (one bit per slot).
-    /// Size depends on obj_count, but we reserve space for max possible.
+    /// Size depends on `obj_count`, but we reserve space for max possible.
     pub mark_bitmap: [u64; 4], // 256 bits = enough for smallest size class (16 bytes)
     /// Index of first free slot in free list.
     pub free_list_head: Option<u16>,
@@ -58,39 +64,43 @@ pub struct PageHeader {
 
 impl PageHeader {
     /// Calculate the header size, rounded up to block alignment.
+    #[must_use]
     pub const fn header_size(block_size: usize) -> usize {
         let base = std::mem::size_of::<Self>();
         (base + block_size - 1) & !(block_size - 1)
     }
 
     /// Calculate maximum objects per page for a given block size.
+    #[must_use]
     pub const fn max_objects(block_size: usize) -> usize {
         (PAGE_SIZE - Self::header_size(block_size)) / block_size
     }
 
     /// Check if an object at the given index is marked.
-    pub fn is_marked(&self, index: usize) -> bool {
+    #[must_use]
+    pub const fn is_marked(&self, index: usize) -> bool {
         let word = index / 64;
         let bit = index % 64;
         (self.mark_bitmap[word] & (1 << bit)) != 0
     }
 
     /// Set the mark bit for an object at the given index.
-    pub fn set_mark(&mut self, index: usize) {
+    pub const fn set_mark(&mut self, index: usize) {
         let word = index / 64;
         let bit = index % 64;
         self.mark_bitmap[word] |= 1 << bit;
     }
 
     /// Clear the mark bit for an object at the given index.
-    pub fn clear_mark(&mut self, index: usize) {
+    #[allow(dead_code)]
+    pub const fn clear_mark(&mut self, index: usize) {
         let word = index / 64;
         let bit = index % 64;
         self.mark_bitmap[word] &= !(1 << bit);
     }
 
     /// Clear all mark bits.
-    pub fn clear_all_marks(&mut self) {
+    pub const fn clear_all_marks(&mut self) {
         self.mark_bitmap = [0; 4];
     }
 }
@@ -116,7 +126,8 @@ pub struct Segment<const BLOCK_SIZE: usize> {
 
 impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
     /// Create a new empty segment.
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             pages: Vec::new(),
             current_page: None,
@@ -127,8 +138,7 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
 
     /// Allocate a new page for this segment.
     fn allocate_page(&mut self) -> NonNull<PageHeader> {
-        let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE)
-            .expect("Invalid page layout");
+        let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).expect("Invalid page layout");
 
         // SAFETY: Layout is valid and non-zero sized
         let ptr = unsafe { alloc(layout) };
@@ -136,15 +146,19 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
             handle_alloc_error(layout);
         }
 
-        // Initialize the page header
+        // SAFETY: ptr is page-aligned, which is more strict than PageHeader's alignment.
+        // PageHeader contains u64, so it needs 8-byte alignment. PAGE_SIZE is 4096.
+        #[allow(clippy::cast_ptr_alignment)]
         let header = ptr.cast::<PageHeader>();
         let obj_count = PageHeader::max_objects(BLOCK_SIZE);
-        
+
         // SAFETY: We just allocated this memory
         unsafe {
             header.write(PageHeader {
                 magic: MAGIC_GC_PAGE,
+                #[allow(clippy::cast_possible_truncation)]
                 block_size: BLOCK_SIZE as u16,
+                #[allow(clippy::cast_possible_truncation)]
                 obj_count: obj_count as u16,
                 generation: 0,
                 flags: 0,
@@ -172,7 +186,7 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
     /// Returns a pointer to uninitialized memory of size `BLOCK_SIZE`.
     pub fn allocate(&mut self) -> NonNull<u8> {
         // Fast path: bump allocation
-        if self.bump_ptr < self.bump_end as *mut u8 {
+        if self.bump_ptr < self.bump_end.cast_mut() {
             let ptr = self.bump_ptr;
             self.bump_ptr = unsafe { self.bump_ptr.add(BLOCK_SIZE) };
             // SAFETY: bump_ptr is always valid when less than bump_end
@@ -185,12 +199,15 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
     }
 
     /// Get all pages in this segment.
+    #[must_use]
     pub fn pages(&self) -> &[NonNull<PageHeader>] {
         &self.pages
     }
 
     /// Get all pages mutably.
-    pub fn pages_mut(&mut self) -> &mut Vec<NonNull<PageHeader>> {
+    #[allow(dead_code)]
+    #[must_use]
+    pub const fn pages_mut(&mut self) -> &mut Vec<NonNull<PageHeader>> {
         &mut self.pages
     }
 }
@@ -218,6 +235,7 @@ impl<const BLOCK_SIZE: usize> Drop for Segment<BLOCK_SIZE> {
 // ============================================================================
 
 /// Trait for computing size class at compile time.
+#[allow(dead_code)]
 pub trait SizeClass {
     /// The size of the type.
     const SIZE: usize;
@@ -234,27 +252,46 @@ impl<T> SizeClass for T {
 }
 
 /// Compute the size class for a given size.
+#[allow(dead_code)]
 const fn compute_size_class(size: usize) -> usize {
-    if size <= 16 { 16 }
-    else if size <= 32 { 32 }
-    else if size <= 64 { 64 }
-    else if size <= 128 { 128 }
-    else if size <= 256 { 256 }
-    else if size <= 512 { 512 }
-    else if size <= 1024 { 1024 }
-    else { 2048 }
+    if size <= 16 {
+        16
+    } else if size <= 32 {
+        32
+    } else if size <= 64 {
+        64
+    } else if size <= 128 {
+        128
+    } else if size <= 256 {
+        256
+    } else if size <= 512 {
+        512
+    } else if size <= 1024 {
+        1024
+    } else {
+        2048
+    }
 }
 
 /// Compute the index into the segments array.
 const fn compute_class_index(size: usize) -> usize {
-    if size <= 16 { 0 }
-    else if size <= 32 { 1 }
-    else if size <= 64 { 2 }
-    else if size <= 128 { 3 }
-    else if size <= 256 { 4 }
-    else if size <= 512 { 5 }
-    else if size <= 1024 { 6 }
-    else { 7 }
+    if size <= 16 {
+        0
+    } else if size <= 32 {
+        1
+    } else if size <= 64 {
+        2
+    } else if size <= 128 {
+        3
+    } else if size <= 256 {
+        4
+    } else if size <= 512 {
+        5
+    } else if size <= 1024 {
+        6
+    } else {
+        7
+    }
 }
 
 // ============================================================================
@@ -280,7 +317,8 @@ pub struct GlobalHeap {
 
 impl GlobalHeap {
     /// Create a new empty heap.
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             segment_16: Segment::new(),
             segment_32: Segment::new(),
@@ -301,7 +339,7 @@ impl GlobalHeap {
     pub fn alloc<T>(&mut self) -> NonNull<u8> {
         let size = std::mem::size_of::<T>();
         self.total_allocated += size;
-        
+
         if size > MAX_SMALL_OBJECT_SIZE {
             return self.alloc_large(size);
         }
@@ -322,11 +360,11 @@ impl GlobalHeap {
     fn alloc_large(&mut self, size: usize) -> NonNull<u8> {
         // For large objects, allocate dedicated pages
         let total_size = PageHeader::header_size(size) + size;
-        let pages_needed = (total_size + PAGE_SIZE - 1) / PAGE_SIZE;
+        let pages_needed = total_size.div_ceil(PAGE_SIZE);
         let alloc_size = pages_needed * PAGE_SIZE;
 
-        let layout = Layout::from_size_align(alloc_size, PAGE_SIZE)
-            .expect("Invalid large object layout");
+        let layout =
+            Layout::from_size_align(alloc_size, PAGE_SIZE).expect("Invalid large object layout");
 
         // SAFETY: Layout is valid
         let ptr = unsafe { alloc(layout) };
@@ -335,11 +373,14 @@ impl GlobalHeap {
         }
 
         // Initialize header for large object
+        // SAFETY: ptr is page-aligned, which is more strict than PageHeader's alignment.
+        #[allow(clippy::cast_ptr_alignment)]
         let header = ptr.cast::<PageHeader>();
         // SAFETY: We just allocated this memory
         unsafe {
             header.write(PageHeader {
                 magic: MAGIC_GC_PAGE,
+                #[allow(clippy::cast_possible_truncation)]
                 block_size: size as u16, // Store actual size for large objects
                 obj_count: 1,
                 generation: 0,
@@ -358,13 +399,17 @@ impl GlobalHeap {
     }
 
     /// Get total bytes allocated.
-    pub fn total_allocated(&self) -> usize {
+    #[must_use]
+    pub const fn total_allocated(&self) -> usize {
         self.total_allocated
     }
 
     /// Iterate over all pages in all segments.
     pub fn all_pages(&self) -> impl Iterator<Item = NonNull<PageHeader>> + '_ {
-        self.segment_16.pages().iter().copied()
+        self.segment_16
+            .pages()
+            .iter()
+            .copied()
             .chain(self.segment_32.pages().iter().copied())
             .chain(self.segment_64.pages().iter().copied())
             .chain(self.segment_128.pages().iter().copied())
@@ -388,7 +433,7 @@ impl Default for GlobalHeap {
 
 thread_local! {
     /// Thread-local heap instance.
-    pub static HEAP: RefCell<GlobalHeap> = RefCell::new(GlobalHeap::new());
+    pub static HEAP: RefCell<GlobalHeap> = const { RefCell::new(GlobalHeap::new()) };
 }
 
 /// Execute a function with access to the thread-local heap.
@@ -408,6 +453,7 @@ where
 /// # Safety
 ///
 /// The pointer must point to memory within a valid GC page.
+#[allow(dead_code)]
 pub unsafe fn ptr_to_page_header(ptr: *const u8) -> *mut PageHeader {
     let addr = ptr as usize;
     let page_addr = addr & PAGE_MASK;
@@ -419,6 +465,7 @@ pub unsafe fn ptr_to_page_header(ptr: *const u8) -> *mut PageHeader {
 /// # Safety
 ///
 /// The pointer must be valid for reading.
+#[allow(dead_code)]
 pub unsafe fn is_gc_pointer(ptr: *const u8) -> bool {
     // SAFETY: Caller guarantees ptr is valid
     unsafe {
@@ -435,6 +482,7 @@ pub unsafe fn is_gc_pointer(ptr: *const u8) -> bool {
 /// # Safety
 ///
 /// The pointer must point to memory within a valid GC page.
+#[allow(dead_code)]
 pub unsafe fn ptr_to_object_index(ptr: *const u8) -> Option<usize> {
     // SAFETY: Caller guarantees ptr is valid and within a GC page
     unsafe {

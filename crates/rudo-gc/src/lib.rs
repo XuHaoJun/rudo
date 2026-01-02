@@ -1,13 +1,13 @@
 //! A garbage-collected smart pointer library for Rust.
 //!
 //! `rudo-gc` provides a `Gc<T>` smart pointer with automatic memory reclamation
-//! and cycle detection. It uses a **BiBOP (Big Bag of Pages)** memory layout for
+//! and cycle detection. It uses a **`BiBOP` (Big Bag of Pages)** memory layout for
 //! efficient O(1) allocation and a **Mark-Sweep** garbage collection algorithm.
 //!
 //! # Features
 //!
 //! - **Automatic cycle detection**: Unlike `Rc<T>`, `Gc<T>` can collect cyclic references
-//! - **BiBOP memory layout**: O(1) allocation with size-class based segments
+//! - **`BiBOP` memory layout**: O(1) allocation with size-class based segments
 //! - **Non-moving GC**: Address stability for Rust's `&T` references
 //! - **Ergonomic API**: Similar to `Rc<T>` with `#[derive(Trace)]` for custom types
 //!

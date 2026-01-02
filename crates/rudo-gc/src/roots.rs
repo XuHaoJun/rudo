@@ -20,12 +20,14 @@ pub struct ShadowStack {
     /// Type-erased pointers to all active roots.
     roots: Vec<NonNull<GcBox<()>>>,
     /// Stack of frame markers for scope-based rooting (future optimization).
+    #[allow(dead_code)]
     frame_markers: Vec<usize>,
 }
 
 impl ShadowStack {
     /// Create a new empty shadow stack.
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             roots: Vec::new(),
             frame_markers: Vec::new(),
@@ -45,11 +47,15 @@ impl ShadowStack {
     }
 
     /// Get the number of roots.
+    #[allow(dead_code)]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.roots.len()
     }
 
     /// Check if there are no roots.
+    #[allow(dead_code)]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.roots.is_empty()
     }
@@ -60,17 +66,20 @@ impl ShadowStack {
     }
 
     /// Clear all roots.
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.roots.clear();
         self.frame_markers.clear();
     }
 
     /// Push a frame marker (for scope-based rooting).
+    #[allow(dead_code)]
     pub fn push_frame(&mut self) {
         self.frame_markers.push(self.roots.len());
     }
 
     /// Pop a frame marker and remove all roots added since.
+    #[allow(dead_code)]
     pub fn pop_frame(&mut self) {
         if let Some(marker) = self.frame_markers.pop() {
             self.roots.truncate(marker);
@@ -90,7 +99,7 @@ impl Default for ShadowStack {
 
 thread_local! {
     /// Thread-local shadow stack for root tracking.
-    pub static ROOTS: RefCell<ShadowStack> = RefCell::new(ShadowStack::new());
+    pub static ROOTS: RefCell<ShadowStack> = const { RefCell::new(ShadowStack::new()) };
 }
 
 /// Execute a function with access to the shadow stack.
@@ -109,6 +118,7 @@ where
 ///
 /// When dropped, all roots registered since this guard was created
 /// are automatically unregistered.
+#[allow(dead_code)]
 pub struct RootScope {
     /// Dummy field to prevent construction outside this module.
     _private: (),
@@ -116,6 +126,8 @@ pub struct RootScope {
 
 impl RootScope {
     /// Create a new root scope.
+    #[allow(dead_code)]
+    #[must_use]
     pub fn new() -> Self {
         ROOTS.with(|roots| {
             roots.borrow_mut().push_frame();

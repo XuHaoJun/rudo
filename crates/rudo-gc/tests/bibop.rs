@@ -1,8 +1,8 @@
-//! BiBOP (Big Bag of Pages) memory layout tests.
+//! `BiBOP` (Big Bag of Pages) memory layout tests.
 
 use rudo_gc::{Gc, Trace};
 
-/// Small object (fits in 16-byte size class after GcBox overhead).
+/// Small object (fits in 16-byte size class after `GcBox` overhead).
 #[derive(Trace)]
 struct Small {
     value: u8,
@@ -46,11 +46,17 @@ fn test_different_size_allocations() {
 fn test_many_small_allocations() {
     // Allocate many small objects to fill multiple pages
     let objects: Vec<Gc<Small>> = (0..1000)
-        .map(|i| Gc::new(Small { value: (i % 256) as u8 }))
+        .map(|i| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let val = (i % 256) as u8;
+            Gc::new(Small { value: val })
+        })
         .collect();
 
     for (i, obj) in objects.iter().enumerate() {
-        assert_eq!(obj.value, (i % 256) as u8);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let val = (i % 256) as u8;
+        assert_eq!(obj.value, val);
     }
 }
 
@@ -58,16 +64,17 @@ fn test_many_small_allocations() {
 fn test_many_medium_allocations() {
     let objects: Vec<Gc<Medium>> = (0..500)
         .map(|i| {
-            Gc::new(Medium {
-                a: i as u64,
-                b: i as u64 * 2,
-            })
+            #[allow(clippy::cast_sign_loss)]
+            let val = i as u64;
+            Gc::new(Medium { a: val, b: val * 2 })
         })
         .collect();
 
     for (i, obj) in objects.iter().enumerate() {
-        assert_eq!(obj.a, i as u64);
-        assert_eq!(obj.b, i as u64 * 2);
+        #[allow(clippy::cast_sign_loss)]
+        let val = i as u64;
+        assert_eq!(obj.a, val);
+        assert_eq!(obj.b, val * 2);
     }
 }
 
@@ -79,18 +86,25 @@ fn test_mixed_size_allocations() {
     let mut larges = Vec::new();
 
     for i in 0..100 {
-        smalls.push(Gc::new(Small { value: i as u8 }));
-        mediums.push(Gc::new(Medium {
-            a: i as u64,
-            b: 0,
-        }));
-        larges.push(Gc::new(Large { data: [i as u64; 6] }));
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let i_u8 = i as u8;
+        #[allow(clippy::cast_sign_loss)]
+        let i_u64 = i as u64;
+
+        smalls.push(Gc::new(Small { value: i_u8 }));
+        mediums.push(Gc::new(Medium { a: i_u64, b: 0 }));
+        larges.push(Gc::new(Large { data: [i_u64; 6] }));
     }
 
     for i in 0..100 {
-        assert_eq!(smalls[i].value, i as u8);
-        assert_eq!(mediums[i].a, i as u64);
-        assert_eq!(larges[i].data[0], i as u64);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let i_u8 = i as u8;
+        #[allow(clippy::cast_sign_loss)]
+        let i_u64 = i as u64;
+
+        assert_eq!(smalls[i].value, i_u8);
+        assert_eq!(mediums[i].a, i_u64);
+        assert_eq!(larges[i].data[0], i_u64);
     }
 }
 
@@ -110,12 +124,18 @@ fn test_large_object_space() {
 #[test]
 fn test_multiple_large_objects() {
     let objects: Vec<Gc<HugeObject>> = (0..10)
-        .map(|i| Gc::new(HugeObject { data: [i; 512] }))
+        .map(|i| {
+            #[allow(clippy::cast_sign_loss)]
+            let val = i as u64;
+            Gc::new(HugeObject { data: [val; 512] })
+        })
         .collect();
 
     for (i, obj) in objects.iter().enumerate() {
-        assert_eq!(obj.data[0], i as u64);
-        assert_eq!(obj.data[255], i as u64);
+        #[allow(clippy::cast_sign_loss)]
+        let val = i as u64;
+        assert_eq!(obj.data[0], val);
+        assert_eq!(obj.data[255], val);
     }
 }
 
@@ -125,15 +145,16 @@ fn test_allocation_consistency() {
     for _ in 0..10 {
         let objects: Vec<Gc<Medium>> = (0..100)
             .map(|i| {
-                Gc::new(Medium {
-                    a: i as u64,
-                    b: 0,
-                })
+                #[allow(clippy::cast_sign_loss)]
+                let val = i as u64;
+                Gc::new(Medium { a: val, b: 0 })
             })
             .collect();
 
         for (i, obj) in objects.iter().enumerate() {
-            assert_eq!(obj.a, i as u64);
+            #[allow(clippy::cast_sign_loss)]
+            let val = i as u64;
+            assert_eq!(obj.a, val);
         }
     }
 }
@@ -158,6 +179,8 @@ fn test_page_filling() {
 
     // All should be accessible
     for (i, obj) in objects.iter().enumerate() {
-        assert_eq!(**obj, i as u64);
+        #[allow(clippy::cast_sign_loss)]
+        let val = i as u64;
+        assert_eq!(**obj, val);
     }
 }

@@ -1,7 +1,7 @@
 //! Mark-Sweep garbage collection algorithm.
 //!
 //! This module implements the core garbage collection logic using
-//! a mark-sweep algorithm with the BiBOP memory layout.
+//! a mark-sweep algorithm with the `BiBOP` memory layout.
 
 use std::cell::Cell;
 use std::ptr::NonNull;
@@ -28,17 +28,20 @@ pub struct CollectInfo {
 
 impl CollectInfo {
     /// Number of Gc pointers dropped since last collection.
-    pub fn n_gcs_dropped_since_last_collect(&self) -> usize {
+    #[must_use]
+    pub const fn n_gcs_dropped_since_last_collect(&self) -> usize {
         self.n_gcs_dropped
     }
 
     /// Number of Gc pointers currently existing.
-    pub fn n_gcs_existing(&self) -> usize {
+    #[must_use]
+    pub const fn n_gcs_existing(&self) -> usize {
         self.n_gcs_existing
     }
 
     /// Total bytes allocated in heap.
-    pub fn heap_size(&self) -> usize {
+    #[must_use]
+    pub const fn heap_size(&self) -> usize {
         self.heap_size
     }
 }
@@ -54,7 +57,8 @@ pub type CollectCondition = fn(&CollectInfo) -> bool;
 ///
 /// Returns `true` when `n_gcs_dropped > n_gcs_existing`, ensuring
 /// amortized O(1) collection overhead.
-pub fn default_collect_condition(info: &CollectInfo) -> bool {
+#[must_use]
+pub const fn default_collect_condition(info: &CollectInfo) -> bool {
     info.n_gcs_dropped > info.n_gcs_existing
 }
 
@@ -79,14 +83,14 @@ pub fn notify_created_gc() {
 /// Notify that a Gc was dropped.
 pub fn notify_dropped_gc() {
     N_DROPS.with(|n| n.set(n.get() + 1));
-    
+
     // Check if we should collect
     let info = CollectInfo {
         n_gcs_dropped: N_DROPS.with(Cell::get),
         n_gcs_existing: N_EXISTING.with(Cell::get),
         heap_size: HEAP.with(|heap| heap.borrow().total_allocated()),
     };
-    
+
     let condition = COLLECT_CONDITION.with(Cell::get);
     if condition(&info) {
         collect();
@@ -127,7 +131,7 @@ pub fn collect() {
 }
 
 /// Clear all mark bits in the heap.
-fn clear_all_marks(heap: &mut GlobalHeap) {
+fn clear_all_marks(heap: &GlobalHeap) {
     for page_ptr in heap.all_pages() {
         // SAFETY: Page pointers in the heap are always valid
         unsafe {
@@ -140,7 +144,7 @@ fn clear_all_marks(heap: &mut GlobalHeap) {
 /// Mark all objects reachable from roots.
 fn mark_from_roots(roots: &ShadowStack) {
     let mut visitor = MarkVisitor;
-    
+
     for root in roots.iter() {
         // SAFETY: Root pointers are valid GcBox pointers
         unsafe {
@@ -153,7 +157,7 @@ fn mark_from_roots(roots: &ShadowStack) {
 ///
 /// # Safety
 ///
-/// The pointer must be a valid GcBox pointer.
+/// The pointer must be a valid `GcBox` pointer.
 unsafe fn mark_object(ptr: NonNull<GcBox<()>>, _visitor: &mut MarkVisitor) {
     // Get the page header
     let ptr_addr = ptr.as_ptr() as *const u8;
@@ -190,7 +194,7 @@ unsafe fn mark_object(ptr: NonNull<GcBox<()>>, _visitor: &mut MarkVisitor) {
 }
 
 /// Sweep all unmarked objects.
-fn sweep_unmarked(heap: &mut GlobalHeap) {
+const fn sweep_unmarked(heap: &GlobalHeap) {
     // For now, this is a placeholder. In a full implementation, we would:
     // 1. Iterate all pages
     // 2. For each unmarked object, call its destructor
@@ -199,7 +203,7 @@ fn sweep_unmarked(heap: &mut GlobalHeap) {
     // The current implementation doesn't actually free memory because we
     // don't have a way to safely call destructors on type-erased objects.
     // This will be addressed in Phase 3 when we add proper type tracking.
-    
+
     let _ = heap; // Suppress unused variable warning
 }
 

@@ -1,6 +1,6 @@
 //! Basic allocation and collection tests for rudo-gc.
 
-use rudo_gc::{collect, Gc, Trace};
+use rudo_gc::{collect, Gc};
 
 #[test]
 fn test_basic_allocation() {
@@ -48,7 +48,9 @@ fn test_drop_and_collect() {
 fn test_multiple_allocations() {
     let values: Vec<Gc<i32>> = (0..100).map(Gc::new).collect();
     for (i, gc) in values.iter().enumerate() {
-        assert_eq!(**gc, i as i32);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let i_i32 = i as i32;
+        assert_eq!(**gc, i_i32);
     }
 }
 
@@ -99,10 +101,10 @@ fn test_try_clone() {
 #[test]
 fn test_debug_display() {
     let x = Gc::new(42);
-    let debug = format!("{:?}", x);
+    let debug = format!("{x:?}");
     assert!(debug.contains("42"));
-    
-    let display = format!("{}", x);
+
+    let display = format!("{x}");
     assert_eq!(display, "42");
 }
 

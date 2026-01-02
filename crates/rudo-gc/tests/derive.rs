@@ -7,7 +7,7 @@ use std::cell::RefCell;
 #[derive(Trace)]
 struct SimpleNode {
     value: i32,
-    next: Option<Gc<SimpleNode>>,
+    next: Option<Gc<Self>>,
 }
 
 #[test]
@@ -40,9 +40,9 @@ fn test_derive_with_gc_field() {
 struct ComplexNode {
     id: u64,
     name: String,
-    left: RefCell<Option<Gc<ComplexNode>>>,
-    right: RefCell<Option<Gc<ComplexNode>>>,
-    parent: RefCell<Option<Gc<ComplexNode>>>,
+    left: RefCell<Option<Gc<Self>>>,
+    right: RefCell<Option<Gc<Self>>>,
+    parent: RefCell<Option<Gc<Self>>>,
 }
 
 impl ComplexNode {
@@ -92,7 +92,7 @@ fn test_derive_multiple_gc_fields_cycle() {
 
 /// Tuple struct.
 #[derive(Trace)]
-struct TupleNode(i32, Option<Gc<TupleNode>>);
+struct TupleNode(i32, Option<Gc<Self>>);
 
 #[test]
 fn test_derive_tuple_struct() {
@@ -121,10 +121,7 @@ fn test_derive_unit_struct() {
 #[derive(Trace)]
 enum TreeVariant {
     Leaf(i32),
-    Branch {
-        left: Gc<TreeVariant>,
-        right: Gc<TreeVariant>,
-    },
+    Branch { left: Gc<Self>, right: Gc<Self> },
     Empty,
 }
 
@@ -174,7 +171,7 @@ fn test_derive_enum_struct_variant() {
 #[derive(Trace)]
 struct GenericNode<T: Trace + 'static> {
     value: T,
-    next: Option<Gc<GenericNode<T>>>,
+    next: Option<Gc<Self>>,
 }
 
 #[test]
@@ -205,7 +202,7 @@ fn test_derive_generic_struct_chain() {
 struct MultiGeneric<K: Trace + 'static, V: Trace + 'static> {
     key: K,
     value: V,
-    child: Option<Gc<MultiGeneric<K, V>>>,
+    child: Option<Gc<Self>>,
 }
 
 #[test]

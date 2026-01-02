@@ -7,11 +7,11 @@ use std::cell::RefCell;
 #[derive(Trace)]
 struct Node {
     value: i32,
-    next: RefCell<Option<Gc<Node>>>,
+    next: RefCell<Option<Gc<Self>>>,
 }
 
 impl Node {
-    fn new(value: i32) -> Self {
+    const fn new(value: i32) -> Self {
         Self {
             value,
             next: RefCell::new(None),
@@ -106,18 +106,18 @@ fn test_complex_cycle() {
 #[derive(Trace)]
 struct TreeNode {
     value: i32,
-    children: RefCell<Vec<Gc<TreeNode>>>,
+    children: RefCell<Vec<Gc<Self>>>,
 }
 
 impl TreeNode {
-    fn new(value: i32) -> Self {
+    const fn new(value: i32) -> Self {
         Self {
             value,
             children: RefCell::new(Vec::new()),
         }
     }
 
-    fn add_child(&self, child: Gc<TreeNode>) {
+    fn add_child(&self, child: Gc<Self>) {
         self.children.borrow_mut().push(child);
     }
 }

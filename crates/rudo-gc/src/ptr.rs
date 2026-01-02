@@ -10,7 +10,7 @@ use std::ops::Deref;
 use std::ptr::NonNull;
 
 use crate::gc::notify_dropped_gc;
-use crate::heap::{with_heap, HEAP};
+use crate::heap::{with_heap, GlobalHeap};
 use crate::roots::ROOTS;
 use crate::trace::{Trace, Visitor};
 
@@ -53,7 +53,9 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Get a reference to the value.
-    pub fn value(&self) -> &T {
+    #[allow(dead_code)]
+    #[must_use]
+    pub const fn value(&self) -> &T {
         &self.value
     }
 }
@@ -71,12 +73,15 @@ pub struct Nullable<T: ?Sized>(*mut T);
 
 impl<T: ?Sized> Nullable<T> {
     /// Create a new nullable pointer from a non-null pointer.
-    pub fn new(ptr: NonNull<T>) -> Self {
+    #[must_use]
+    pub const fn new(ptr: NonNull<T>) -> Self {
         Self(ptr.as_ptr())
     }
 
     /// Create a null pointer.
-    pub fn null() -> Self
+    #[allow(dead_code)]
+    #[must_use]
+    pub const fn null() -> Self
     where
         T: Sized,
     {
@@ -84,32 +89,40 @@ impl<T: ?Sized> Nullable<T> {
     }
 
     /// Convert this to a null pointer (preserving metadata for unsized types).
+    #[must_use]
     pub fn as_null(self) -> Self {
         Self(self.0.with_addr(0))
     }
 
     /// Check if this pointer is null.
+    #[must_use]
     pub fn is_null(self) -> bool {
         self.0.is_null() || (self.0 as *const () as usize) == 0
     }
 
-    /// Convert to Option<NonNull<T>>.
+    /// Convert to Option<`NonNull`<T>>.
+    #[must_use]
     pub fn as_option(self) -> Option<NonNull<T>> {
         NonNull::new(self.0)
     }
 
     /// Get the raw pointer.
-    pub fn as_ptr(self) -> *mut T {
+    #[must_use]
+    pub const fn as_ptr(self) -> *mut T {
         self.0
     }
 
     /// Unwrap the pointer, panicking if null.
+    #[must_use]
     pub fn unwrap(self) -> NonNull<T> {
-        self.as_option().expect("attempted to unwrap null Gc pointer")
+        self.as_option()
+            .expect("attempted to unwrap null Gc pointer")
     }
 
     /// Create from a raw pointer.
-    pub fn from_ptr(ptr: *mut T) -> Self {
+    #[allow(dead_code)]
+    #[must_use]
+    pub const fn from_ptr(ptr: *mut T) -> Self {
         Self(ptr)
     }
 }
@@ -172,7 +185,7 @@ impl<T: Trace> Gc<T> {
     /// ```
     pub fn new(value: T) -> Self {
         // Allocate space in the heap
-        let ptr = with_heap(|heap| heap.alloc::<GcBox<T>>());
+        let ptr = with_heap(GlobalHeap::alloc::<GcBox<T>>);
 
         // Initialize the GcBox
         let gc_box = ptr.as_ptr().cast::<GcBox<T>>();
@@ -192,9 +205,7 @@ impl<T: Trace> Gc<T> {
         });
 
         // Notify that we created a Gc
-        HEAP.with(|_| {
-            // Just access to ensure thread-local is initialized
-        });
+        crate::gc::notify_created_gc();
 
         Self {
             ptr: Cell::new(Nullable::new(gc_box_ptr)),
@@ -219,13 +230,13 @@ impl<T: Trace> Gc<T> {
     ///
     /// let node = Gc::new_cyclic(|this| Node { self_ref: this });
     /// ```
-    pub fn new_cyclic<F: FnOnce(Gc<T>) -> T>(data_fn: F) -> Self {
+    pub fn new_cyclic<F: FnOnce(Self) -> T>(data_fn: F) -> Self {
         // Allocate space
-        let ptr = with_heap(|heap| heap.alloc::<GcBox<T>>());
+        let ptr = with_heap(GlobalHeap::alloc::<GcBox<T>>);
         let gc_box = ptr.as_ptr().cast::<GcBox<T>>();
 
         // Create a dead Gc to pass to the closure
-        let dead_gc = Gc {
+        let dead_gc = Self {
             ptr: Cell::new(Nullable::new(unsafe { NonNull::new_unchecked(gc_box) }).as_null()),
             _marker: PhantomData,
         };
@@ -250,7 +261,7 @@ impl<T: Trace> Gc<T> {
         });
 
         // Create the live Gc
-        let gc = Gc {
+        let gc = Self {
             ptr: Cell::new(Nullable::new(gc_box_ptr)),
             _marker: PhantomData,
         };
@@ -269,7 +280,7 @@ impl<T: Trace + ?Sized> Gc<T> {
     /// Attempt to dereference this `Gc`.
     ///
     /// Returns `None` if this Gc is "dead" (only possible during Drop of cycles).
-    pub fn try_deref(gc: &Gc<T>) -> Option<&T> {
+    pub fn try_deref(gc: &Self) -> Option<&T> {
         if gc.ptr.get().is_null() {
             None
         } else {
@@ -280,7 +291,7 @@ impl<T: Trace + ?Sized> Gc<T> {
     /// Attempt to clone this `Gc`.
     ///
     /// Returns `None` if this Gc is "dead".
-    pub fn try_clone(gc: &Gc<T>) -> Option<Gc<T>> {
+    pub fn try_clone(gc: &Self) -> Option<Self> {
         if gc.ptr.get().is_null() {
             None
         } else {
@@ -293,13 +304,13 @@ impl<T: Trace + ?Sized> Gc<T> {
     /// # Panics
     ///
     /// Panics if the Gc is dead.
-    pub fn as_ptr(gc: &Gc<T>) -> *const T {
+    pub fn as_ptr(gc: &Self) -> *const T {
         let ptr = gc.ptr.get().unwrap();
         unsafe { std::ptr::addr_of!((*ptr.as_ptr()).value) }
     }
 
     /// Check if two Gcs point to the same allocation.
-    pub fn ptr_eq(this: &Gc<T>, other: &Gc<T>) -> bool {
+    pub fn ptr_eq(this: &Self, other: &Self) -> bool {
         this.ptr.get().as_option() == other.ptr.get().as_option()
     }
 
@@ -308,22 +319,23 @@ impl<T: Trace + ?Sized> Gc<T> {
     /// # Panics
     ///
     /// Panics if the Gc is dead.
-    pub fn ref_count(gc: &Gc<T>) -> NonZeroUsize {
+    pub fn ref_count(gc: &Self) -> NonZeroUsize {
         let ptr = gc.ptr.get().unwrap();
         unsafe { (*ptr.as_ptr()).ref_count() }
     }
 
     /// Check if this Gc is "dead" (refers to a collected value).
-    pub fn is_dead(gc: &Gc<T>) -> bool {
+    pub fn is_dead(gc: &Self) -> bool {
         gc.ptr.get().is_null()
     }
 
     /// Kill this Gc, making it dead.
+    #[allow(dead_code)]
     pub(crate) fn kill(&self) {
         self.ptr.set(self.ptr.get().as_null());
     }
 
-    /// Get the raw GcBox pointer.
+    /// Get the raw `GcBox` pointer.
     pub(crate) fn raw_ptr(&self) -> Nullable<GcBox<T>> {
         self.ptr.get()
     }
@@ -427,7 +439,7 @@ impl<T: Trace + ?Sized> std::fmt::Pointer for Gc<T> {
 
 impl<T: Trace + Default> Default for Gc<T> {
     fn default() -> Self {
-        Gc::new(T::default())
+        Self::new(T::default())
     }
 }
 
@@ -451,7 +463,7 @@ impl<T: Trace + ?Sized + Ord> Ord for Gc<T> {
 
 impl<T: Trace> From<T> for Gc<T> {
     fn from(value: T) -> Self {
-        Gc::new(value)
+        Self::new(value)
     }
 }
 

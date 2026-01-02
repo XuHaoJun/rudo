@@ -100,8 +100,27 @@ pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 fn add_trait_bounds(rudo_gc: &Path, mut generics: Generics) -> Generics {
     for param in &mut generics.params {
         if let GenericParam::Type(ref mut type_param) = *param {
-            type_param.bounds.push(parse_quote!(#rudo_gc::Trace));
-            type_param.bounds.push(parse_quote!('static));
+            let has_trace = type_param.bounds.iter().any(|b| {
+                if let syn::TypeParamBound::Trait(t) = b {
+                    t.path.segments.last().is_some_and(|s| s.ident == "Trace")
+                } else {
+                    false
+                }
+            });
+            let has_static = type_param.bounds.iter().any(|b| {
+                if let syn::TypeParamBound::Lifetime(l) = b {
+                    l.ident == "static"
+                } else {
+                    false
+                }
+            });
+
+            if !has_trace {
+                type_param.bounds.push(parse_quote!(#rudo_gc::Trace));
+            }
+            if !has_static {
+                type_param.bounds.push(parse_quote!('static));
+            }
         }
     }
     generics
@@ -157,11 +176,8 @@ fn generate_enum_trace(rudo_gc: &Path, name: &Ident, data: &syn::DataEnum) -> To
                     .enumerate()
                     .map(|(i, _)| format_ident!("field{}", i))
                     .collect();
-                let field_idents: Vec<_> = f
-                    .named
-                    .iter()
-                    .map(|f| f.ident.as_ref().unwrap())
-                    .collect();
+                let field_idents: Vec<_> =
+                    f.named.iter().map(|f| f.ident.as_ref().unwrap()).collect();
                 let trace_calls = field_names.iter().map(|field| {
                     quote! { #rudo_gc::Trace::trace(#field, visitor); }
                 });
