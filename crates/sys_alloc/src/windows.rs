@@ -1,0 +1,85 @@
+use std::io::{self, Error};
+use std::ptr;
+use std::mem;
+
+use windows_sys::Win32::System::Memory::{
+    VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_RESERVE, MEM_RELEASE, PAGE_READWRITE,
+};
+use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
+
+/// Returns the system allocation granularity.
+/// 
+/// On Windows, `VirtualAlloc` address must be aligned to this value (typically 64KB),
+/// which is often larger than the page size (typically 4KB).
+pub fn allocation_granularity() -> usize {
+    unsafe {
+        let mut info: SYSTEM_INFO = mem::zeroed();
+        GetSystemInfo(&mut info);
+        info.dwAllocationGranularity as usize
+    }
+}
+
+pub fn page_size() -> usize {
+    unsafe {
+        let mut info: SYSTEM_INFO = mem::zeroed();
+        GetSystemInfo(&mut info);
+        info.dwPageSize as usize
+    }
+}
+
+pub struct MmapInner {
+    ptr: *mut std::ffi::c_void,
+    len: usize,
+}
+
+impl MmapInner {
+    /// Creates a new anonymous memory mapping with an optional address hint.
+    pub unsafe fn map_anon(
+        hint_addr: usize,
+        len: usize,
+        _populate: bool,
+        _no_reserve: bool,
+    ) -> io::Result<MmapInner> {
+        let addr = if hint_addr == 0 {
+            ptr::null()
+        } else {
+            hint_addr as *const std::ffi::c_void
+        };
+
+        // Windows requires MEM_RESERVE | MEM_COMMIT to actually get usable memory
+        let ptr = VirtualAlloc(
+            addr,
+            len,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        );
+
+        if ptr.is_null() {
+            return Err(Error::last_os_error());
+        }
+
+        Ok(MmapInner { ptr, len })
+    }
+
+    pub fn ptr(&self) -> *mut u8 {
+        self.ptr as *mut u8
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+}
+
+impl Drop for MmapInner {
+    fn drop(&mut self) {
+        if self.len > 0 {
+            unsafe {
+                // MEM_RELEASE requires dwSize to be 0
+                VirtualFree(self.ptr, 0, MEM_RELEASE);
+            }
+        }
+    }
+}
+
+unsafe impl Send for MmapInner {}
+unsafe impl Sync for MmapInner {}

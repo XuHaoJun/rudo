@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/rudo-gc", "crates/rudo-gc-derive"]
+members = ["crates/rudo-gc", "crates/rudo-gc-derive", "crates/sys_alloc"]
 
 [workspace.package]
 version = "0.1.0"
