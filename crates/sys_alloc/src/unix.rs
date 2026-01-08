@@ -49,9 +49,9 @@ pub struct MmapInner {
 
 impl MmapInner {
     /// Creates a new anonymous memory mapping with an optional address hint.
-    /// 
+    ///
     /// # Safety
-    /// 
+    ///
     /// This function is unsafe because it calls `mmap`.
     pub unsafe fn map_anon(
         hint_addr: usize,
@@ -61,7 +61,7 @@ impl MmapInner {
     ) -> io::Result<MmapInner> {
         let populate = if populate { MAP_POPULATE } else { 0 };
         let no_reserve = if no_reserve { MAP_NORESERVE } else { 0 };
-        
+
         let addr = if hint_addr == 0 {
             ptr::null_mut()
         } else {
@@ -72,24 +72,15 @@ impl MmapInner {
         let flags = libc::MAP_PRIVATE | libc::MAP_ANON | populate | no_reserve;
         let prot = libc::PROT_READ | libc::PROT_WRITE;
 
-        let ptr = unsafe {
-            libc::mmap(
-                addr,
-                len,
-                prot,
-                flags,
-                -1,
-                0,
-            )
-        };
+        let ptr = unsafe { libc::mmap(addr, len, prot, flags, -1, 0) };
 
         if ptr == libc::MAP_FAILED {
             return Err(Error::last_os_error());
         }
 
         // Basic verification: if we gave a hint, did we get it?
-        // Note: we don't enforce strictness here (returning error if mismatch), 
-        // that is up to the higher level policy. 
+        // Note: we don't enforce strictness here (returning error if mismatch),
+        // that is up to the higher level policy.
         // But for Address Space Coloring, the caller needs to check `ptr`.
 
         Ok(MmapInner { ptr, len })

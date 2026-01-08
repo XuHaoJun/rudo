@@ -1,14 +1,14 @@
 use std::io::{self, Error};
-use std::ptr;
 use std::mem;
+use std::ptr;
 
 use windows_sys::Win32::System::Memory::{
-    VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_RESERVE, MEM_RELEASE, PAGE_READWRITE,
+    VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
 };
 use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
 
 /// Returns the system allocation granularity.
-/// 
+///
 /// On Windows, `VirtualAlloc` address must be aligned to this value (typically 64KB),
 /// which is often larger than the page size (typically 4KB).
 pub fn allocation_granularity() -> usize {
@@ -47,12 +47,7 @@ impl MmapInner {
         };
 
         // Windows requires MEM_RESERVE | MEM_COMMIT to actually get usable memory
-        let ptr = VirtualAlloc(
-            addr,
-            len,
-            MEM_COMMIT | MEM_RESERVE,
-            PAGE_READWRITE,
-        );
+        let ptr = VirtualAlloc(addr, len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 
         if ptr.is_null() {
             return Err(Error::last_os_error());
