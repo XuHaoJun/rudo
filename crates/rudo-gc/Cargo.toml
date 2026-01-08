@@ -17,6 +17,7 @@ test-util = []
 
 [dependencies]
 rudo-gc-derive = { path = "../rudo-gc-derive", optional = true }
+sys_alloc = { path = "../sys_alloc" }
 libc = "0.2"
 
 [dev-dependencies]

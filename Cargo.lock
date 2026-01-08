@@ -90,6 +90,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "rudo-gc-derive",
+ "sys_alloc",
 ]
 
 [[package]]

@@ -56,12 +56,20 @@ impl MmapInner {
         Ok(MmapInner { ptr, len })
     }
 
-    pub fn ptr(&self) -> *mut u8 {
-        self.ptr as *mut u8
+    pub const fn ptr(&self) -> *mut u8 {
+        self.ptr.cast::<u8>()
     }
 
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.len
+    }
+
+    /// Creates a `MmapInner` from a raw pointer and length.
+    pub const unsafe fn from_raw(ptr: *mut u8, len: usize) -> Self {
+        Self {
+            ptr: ptr.cast::<std::ffi::c_void>(),
+            len,
+        }
     }
 }
 

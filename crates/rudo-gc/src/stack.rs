@@ -64,7 +64,7 @@ pub fn get_stack_bounds() -> StackBounds {
 #[inline(never)]
 pub unsafe fn spill_registers_and_scan<F>(mut scan_fn: F)
 where
-    F: FnMut(usize),
+    F: FnMut(usize, usize, bool), // val, addr, is_register
 {
     // For x86_64, we spill the callee-saved registers to an array on the stack.
     // Miri does not support inline assembly, so we skip this.
@@ -97,6 +97,11 @@ where
     #[cfg(any(not(target_arch = "x86_64"), miri))]
     std::hint::black_box(&regs);
 
+    // Scan spilled registers explicitly as "Registers"
+    for r in &regs {
+        scan_fn(*r, 0, true);
+    }
+
     let bounds = get_stack_bounds();
 
     // The current stack pointer is approximately the address of a local variable.
@@ -106,14 +111,45 @@ where
     // We assume the stack grows downwards (high to low addresses).
     let mut current = sp & !(std::mem::align_of::<usize>() - 1);
 
-    // eprintln!("Scanning stack: SP={:#x}, Bottom={:#x}", sp, bounds.bottom);
+    // println!("Scanning stack: SP={:#x}, Bottom={:#x}", sp, bounds.bottom);
 
     while current < bounds.bottom {
         // SAFETY: We are scanning the valid stack range of the current thread.
         // We use volatile read to avoid potential compiler optimizations,
         // though a regular read is likely fine here.
         let potential_ptr = unsafe { std::ptr::read_volatile(current as *const usize) };
-        scan_fn(potential_ptr);
+        scan_fn(potential_ptr, current, false);
         current += std::mem::size_of::<usize>();
     }
+}
+
+/// Clear CPU registers to prevent "False Roots" from lingering values.
+///
+/// This is used by the allocator to ensure that the pointer to the newly
+/// allocated page does not remain in a register (where it would be caught
+/// by `spill_registers_and_scan` as a conflict).
+#[inline(never)]
+pub unsafe fn clear_registers() {
+    #[cfg(all(target_arch = "x86_64", not(miri)))]
+    unsafe {
+        // Clear callee-saved registers: R12-R15
+        // RBX is often reserved by LLVM, so valid pointer unlikely to be there if reserved.
+        std::arch::asm!(
+            // "xor rbx, rbx",
+            // "xor rbp, rbp", // Don't clear RBP, it might be frame pointer!
+            "xor r12, r12",
+            "xor r13, r13",
+            "xor r14, r14",
+            "xor r15, r15",
+            // out("rbx") _,
+            // out("rbp") _,
+            out("r12") _,
+            out("r13") _,
+            out("r14") _,
+            out("r15") _,
+        );
+    }
+    // Miri/Other arch: Rely on optimization barrier or dummy work
+    #[cfg(any(not(target_arch = "x86_64"), miri))]
+    std::hint::black_box(());
 }

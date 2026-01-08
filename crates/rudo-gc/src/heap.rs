@@ -8,10 +8,11 @@
 //! Memory is divided into 4KB pages. Each page contains objects of a single
 //! size class. This allows O(1) lookup of object metadata from its address.
 
-use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr::NonNull;
+
+use sys_alloc::{Mmap, MmapOptions};
 
 // ============================================================================
 // Constants
@@ -19,6 +20,15 @@ use std::ptr::NonNull;
 
 /// Size of each memory page (4KB aligned).
 pub const PAGE_SIZE: usize = 4096;
+
+/// Target address for heap allocation (Address Space Coloring).
+/// We aim for `0x6000_0000_0000` on 64-bit systems.
+#[cfg(target_pointer_width = "64")]
+pub const HEAP_HINT_ADDRESS: usize = 0x6000_0000_0000;
+
+/// Target address for heap allocation on 32-bit systems.
+#[cfg(target_pointer_width = "32")]
+pub const HEAP_HINT_ADDRESS: usize = 0x4000_0000;
 
 /// Mask for extracting page address from a pointer.
 pub const PAGE_MASK: usize = !(PAGE_SIZE - 1);
@@ -209,14 +219,17 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
     }
 
     /// Allocate a new page for this segment.
-    fn allocate_page(&mut self) -> NonNull<PageHeader> {
-        let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).expect("Invalid page layout");
-
-        // SAFETY: Layout is valid and non-zero sized
-        let ptr = unsafe { alloc(layout) };
-        if ptr.is_null() {
-            handle_alloc_error(layout);
-        }
+    /// Allocate a new page for this segment.
+    fn allocate_page(&mut self, quarantined: &mut Vec<Mmap>) -> NonNull<PageHeader> {
+        // Create boundary to filter out our own stack frame
+        let marker = 0;
+        let boundary = std::ptr::addr_of!(marker) as usize;
+        let (ptr, _len) = GlobalHeap::allocate_safe_page(
+            quarantined,
+            crate::heap::PAGE_SIZE,
+            crate::heap::PAGE_SIZE,
+            boundary,
+        );
 
         // SAFETY: ptr is page-aligned, which is more strict than PageHeader's alignment.
         // PageHeader contains u64, so it needs 8-byte alignment. PAGE_SIZE is 4096.
@@ -227,7 +240,7 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
         // SAFETY: We just allocated this memory
         unsafe {
             let h_size = PageHeader::header_size(BLOCK_SIZE);
-            header.write(PageHeader {
+            header.as_ptr().write(PageHeader {
                 magic: MAGIC_GC_PAGE,
                 #[allow(clippy::cast_possible_truncation)]
                 block_size: BLOCK_SIZE as u32,
@@ -246,7 +259,7 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
         }
 
         // SAFETY: We checked for null above
-        let page_ptr = unsafe { NonNull::new_unchecked(header) };
+        let page_ptr = header; // header is already NonNull
         self.pages.push(page_ptr);
 
         // Update range will be done by GlobalHeap
@@ -256,7 +269,7 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
         let header_size = PageHeader::header_size(BLOCK_SIZE);
         unsafe {
             for i in 0..obj_count {
-                let obj_ptr = ptr.add(header_size + (i * BLOCK_SIZE));
+                let obj_ptr = ptr.as_ptr().add(header_size + (i * BLOCK_SIZE));
                 // We only need to set drop_fn. We can use GcBox<()> for this.
                 // SAFETY: We just allocated this page and it's aligned.
                 #[allow(clippy::cast_ptr_alignment)]
@@ -270,8 +283,8 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
 
         // Set up bump allocation for this page
         self.current_page = Some(page_ptr);
-        self.bump_ptr = unsafe { ptr.add(header_size) };
-        self.bump_end = unsafe { ptr.add(PAGE_SIZE) };
+        self.bump_ptr = unsafe { ptr.as_ptr().add(header_size) };
+        self.bump_end = unsafe { ptr.as_ptr().add(PAGE_SIZE) };
 
         page_ptr
     }
@@ -347,8 +360,85 @@ impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
         }
 
         // 4. Ultra-slow path: need a new page
-        self.allocate_page();
-        self.allocate()
+        // We need access to quarantined list, but we don't have it here directly.
+        // This is a design issue. Segment::allocate is called by GlobalHeap::alloc.
+        // We should change Segment::allocate to take quarantined list.
+        unreachable!("Segment::allocate called without quarantined list access");
+    }
+
+    /// Allocate space for an object (with access to quarantine list).
+    ///
+    /// Returns a pointer to uninitialized memory of size `BLOCK_SIZE`.
+    pub fn allocate_with_quarantine(&mut self, quarantined: &mut Vec<Mmap>) -> NonNull<u8> {
+        // 1. Try free list of current page
+        if let Some(current) = self.current_page {
+            unsafe {
+                let header = current.as_ptr();
+                if let Some(idx) = (*header).free_list_head {
+                    let header_size = PageHeader::header_size(BLOCK_SIZE);
+                    let ptr = current
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(header_size + (idx as usize * BLOCK_SIZE));
+
+                    // Read next index from the memory itself
+                    // SAFETY: The memory at ptr was previously an object or a free slot
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let next_idx = *(ptr.cast::<Option<u16>>());
+                    (*header).free_list_head = next_idx;
+                    (*header).set_allocated(idx as usize);
+
+                    return NonNull::new_unchecked(ptr);
+                }
+            }
+        }
+
+        // 2. Fast path: bump allocation
+        if self.bump_ptr < self.bump_end.cast_mut() {
+            let ptr = self.bump_ptr;
+            // Record allocation in bitmap
+            if let Some(mut current) = self.current_page {
+                unsafe {
+                    let header = current.as_mut();
+                    let header_size = PageHeader::header_size(BLOCK_SIZE);
+                    let offset = ptr as usize - (current.as_ptr() as usize + header_size);
+                    let idx = offset / BLOCK_SIZE;
+                    header.set_allocated(idx);
+                }
+            }
+            self.bump_ptr = unsafe { self.bump_ptr.add(BLOCK_SIZE) };
+            // SAFETY: bump_ptr is always valid when less than bump_end
+            return unsafe { NonNull::new_unchecked(ptr) };
+        }
+
+        // 3. Slow path: Search other pages for free slots
+        for &page in &self.pages {
+            unsafe {
+                let header = page.as_ptr();
+                if let Some(idx) = (*header).free_list_head {
+                    // Found a page with a free slot! Make it current.
+                    self.current_page = Some(page);
+                    // Disable bump allocation for this page as it's potentially fragmented
+                    self.bump_ptr = self.bump_end.cast_mut();
+
+                    let header_size = PageHeader::header_size(BLOCK_SIZE);
+                    let ptr = page
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(header_size + (idx as usize * BLOCK_SIZE));
+
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let next_idx = *(ptr.cast::<Option<u16>>());
+                    (*header).free_list_head = next_idx;
+
+                    return NonNull::new_unchecked(ptr);
+                }
+            }
+        }
+
+        // 4. Ultra-slow path: need a new page
+        self.allocate_page(quarantined);
+        self.allocate_with_quarantine(quarantined)
     }
 
     /// Get all pages in this segment.
@@ -373,11 +463,12 @@ impl<const BLOCK_SIZE: usize> Default for Segment<BLOCK_SIZE> {
 
 impl<const BLOCK_SIZE: usize> Drop for Segment<BLOCK_SIZE> {
     fn drop(&mut self) {
-        let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
         for page in &self.pages {
-            // SAFETY: Pages were allocated with this layout
+            // SAFETY: Pages were allocated with sys_alloc::Mmap
             unsafe {
-                dealloc(page.as_ptr().cast(), layout);
+                // We reconstruct the Mmap to drop it properly
+                // Since this is standard page size
+                let _ = Mmap::from_raw(page.as_ptr().cast(), PAGE_SIZE);
             }
         }
     }
@@ -475,6 +566,10 @@ pub struct GlobalHeap {
     min_addr: usize,
     /// Maximum address managed by this heap.
     max_addr: usize,
+    /// Quarantine list for pages that were allocated but rejected due to stack conflict.
+    /// We keep them alive here so we don't return them to OS immediately (costly)
+    /// and they stay "occupied" so next mmap won't return same bad address immediately.
+    quarantined: Vec<Mmap>,
 }
 
 impl GlobalHeap {
@@ -496,6 +591,7 @@ impl GlobalHeap {
             old_allocated: 0,
             min_addr: usize::MAX,
             max_addr: 0,
+            quarantined: Vec::new(),
         }
     }
 
@@ -507,6 +603,16 @@ impl GlobalHeap {
         if addr + size > self.max_addr {
             self.max_addr = addr + size;
         }
+    }
+
+    /// Deallocate memory Pages (Mmap).
+    ///
+    /// # Safety
+    ///
+    /// The pointer and length must correspond to a previous allocation from `allocate_safe_page`.
+    pub(crate) unsafe fn deallocate_pages(ptr: NonNull<u8>, len: usize) {
+        let mmap = unsafe { sys_alloc::Mmap::from_raw(ptr.as_ptr(), len) };
+        drop(mmap);
     }
 
     /// Check if an address is within the heap's range.
@@ -543,14 +649,30 @@ impl GlobalHeap {
         );
 
         let ptr = match compute_class_index(size) {
-            0 => self.segment_16.allocate(),
-            1 => self.segment_32.allocate(),
-            2 => self.segment_64.allocate(),
-            3 => self.segment_128.allocate(),
-            4 => self.segment_256.allocate(),
-            5 => self.segment_512.allocate(),
-            6 => self.segment_1024.allocate(),
-            _ => self.segment_2048.allocate(),
+            0 => self
+                .segment_16
+                .allocate_with_quarantine(&mut self.quarantined),
+            1 => self
+                .segment_32
+                .allocate_with_quarantine(&mut self.quarantined),
+            2 => self
+                .segment_64
+                .allocate_with_quarantine(&mut self.quarantined),
+            3 => self
+                .segment_128
+                .allocate_with_quarantine(&mut self.quarantined),
+            4 => self
+                .segment_256
+                .allocate_with_quarantine(&mut self.quarantined),
+            5 => self
+                .segment_512
+                .allocate_with_quarantine(&mut self.quarantined),
+            6 => self
+                .segment_1024
+                .allocate_with_quarantine(&mut self.quarantined),
+            _ => self
+                .segment_2048
+                .allocate_with_quarantine(&mut self.quarantined),
         };
 
         // Update heap range for conservative scanning
@@ -580,22 +702,21 @@ impl GlobalHeap {
         let pages_needed = total_size.div_ceil(PAGE_SIZE);
         let alloc_size = pages_needed * PAGE_SIZE;
 
-        let layout =
-            Layout::from_size_align(alloc_size, PAGE_SIZE).expect("Invalid large object layout");
+        // Use safe allocation logic
+        // Create boundary to filter out our own stack frame
+        let marker = 0;
+        let boundary = std::ptr::addr_of!(marker) as usize;
+        let (ptr, _) =
+            Self::allocate_safe_page(&mut self.quarantined, alloc_size, PAGE_SIZE, boundary);
 
-        // SAFETY: Layout is valid
-        let ptr = unsafe { alloc(layout) };
-        if ptr.is_null() {
-            handle_alloc_error(layout);
-        }
+        // ptr is NonNull<u8> already check for null logic inside allocate_safe_page
 
-        // Initialize header for large object
         // SAFETY: ptr is page-aligned, which is more strict than PageHeader's alignment.
         #[allow(clippy::cast_ptr_alignment)]
         let header = ptr.cast::<PageHeader>();
         // SAFETY: We just allocated this memory
         unsafe {
-            header.write(PageHeader {
+            header.as_ptr().write(PageHeader {
                 magic: MAGIC_GC_PAGE,
                 #[allow(clippy::cast_possible_truncation)]
                 block_size: size as u32, // Store actual size for large objects (now u32)
@@ -611,15 +732,15 @@ impl GlobalHeap {
                 free_list_head: None,
             });
             // Mark the single object as allocated
-            (*header).set_allocated(0);
+            (*header.as_ptr()).set_allocated(0);
         }
 
-        let page_ptr = unsafe { NonNull::new_unchecked(header) };
+        let page_ptr = header; // header is NonNull
         self.large_objects.push(page_ptr);
 
         // Register all pages of this large object in the map for interior pointer support.
         // This allows find_gc_box_from_ptr to find the head GcBox from any interior pointer.
-        let header_addr = header as usize;
+        let header_addr = header.as_ptr() as usize;
         for p in 0..pages_needed {
             let page_addr = header_addr + (p * PAGE_SIZE);
             self.large_object_map
@@ -629,7 +750,7 @@ impl GlobalHeap {
         // Update heap range for conservative scanning
         self.update_range(header_addr, alloc_size);
 
-        let gc_box_ptr = unsafe { ptr.add(h_size) };
+        let gc_box_ptr = unsafe { ptr.as_ptr().add(h_size) };
         unsafe { NonNull::new_unchecked(gc_box_ptr) }
     }
 
@@ -732,6 +853,97 @@ impl GlobalHeap {
             _ => "large-object",
         };
         (class, name)
+    }
+    /// Allocate a new page (or pages) from OS with stack scanning protection.
+    ///
+    /// # `check_stack_conflict`
+    ///
+    /// This function performs "Pre-allocation Blacklisting".
+    /// It ensures that the allocated memory region does not have any corresponding
+    /// values on the current thread's stack, which could interpret the new memory
+    /// as a valid object reference (False Root).
+    ///
+    /// If a conflict is found, the page is "quarantined" and a new one is requested.
+    #[inline(never)]
+    fn allocate_safe_page(
+        quarantined: &mut Vec<Mmap>,
+        size: usize,
+        _align: usize,
+        boundary: usize,
+    ) -> (NonNull<u8>, usize) {
+        // Mask to hide our own variables from conservative stack scanning (registers)
+        const MASK: usize = 0x5555_5555_5555_5555;
+
+        loop {
+            // 1. Request memory from OS with Address Space Coloring hint
+            // Boxing the Mmap moves the raw pointer value to the heap,
+            // so it doesn't appear on the stack (only the pointer to the box does).
+            let mmap = Box::new(unsafe {
+                MmapOptions::new()
+                    .len(size)
+                    .with_hint(HEAP_HINT_ADDRESS)
+                    .map_anon()
+                    .unwrap_or_else(|e| panic!("Failed to map memory: {e}"))
+            });
+
+            // 2. Check for False Roots on Stack
+            // Use helper to keep `ptr` scope small
+            let (masked_start, masked_end) = Self::calculate_masked_range(&mmap, size, MASK);
+
+            // Clear registers to ensure `ptr` doesn't linger in callee-saved registers.
+            unsafe { crate::stack::clear_registers() };
+
+            let conflict_found =
+                Self::check_stack_conflict(masked_start, masked_end, MASK, boundary);
+
+            // 3. Handle conflict
+            if conflict_found {
+                // Quarantine this page.
+                quarantined.push(*mmap);
+                continue;
+            }
+
+            // 4. Success! Convert to raw pointer and return.
+            let (raw_ptr, len) = mmap.into_raw();
+            return (unsafe { NonNull::new_unchecked(raw_ptr) }, len);
+        }
+    }
+
+    /// Helper to calculate masked range.
+    #[inline(never)]
+    fn calculate_masked_range(mmap: &Mmap, size: usize, mask: usize) -> (usize, usize) {
+        let ptr = mmap.ptr() as usize;
+        (ptr ^ mask, (ptr + size) ^ mask)
+    }
+
+    /// Check if any value on the current stack falls within [start, end).
+    /// Ignores stack slots below `boundary` (Assume Allocator Frame), UNLESS it is a Register.
+    fn check_stack_conflict(
+        masked_start: usize,
+        masked_end: usize,
+        mask: usize,
+        boundary: usize,
+    ) -> bool {
+        let mut found = false;
+        // Use the stack module to spill registers and scan stack
+        unsafe {
+            crate::stack::spill_registers_and_scan(|scan_ptr, slot_addr, is_reg| {
+                if !is_reg {
+                    // It is a stack slot. Filter based on boundary.
+                    if slot_addr < boundary {
+                        return;
+                    }
+                }
+
+                // It is a user root (stack or register). Check it.
+                let start = masked_start ^ mask;
+                let end = masked_end ^ mask;
+                if scan_ptr >= start && scan_ptr < end {
+                    found = true;
+                }
+            });
+        }
+        found
     }
 }
 
@@ -915,7 +1127,17 @@ pub unsafe fn find_gc_box_from_ptr(
                 (h_ptr, size, h_size, addr - (head_addr + h_size))
             } else {
                 // Not in large object map, must be small object page with header
-                let header_ptr = ptr_to_page_header(ptr);
+                #[allow(unused_mut)]
+                let mut header_ptr = ptr_to_page_header(ptr);
+
+                // Recover provenance for Miri
+                #[cfg(miri)]
+                {
+                    header_ptr = heap
+                        .all_pages()
+                        .find(|p| p.as_ptr() as usize == (addr & crate::heap::PAGE_MASK))
+                        .map_or(header_ptr, |p| p.as_ptr());
+                }
                 if (*header_ptr).magic == MAGIC_GC_PAGE {
                     let header = &*header_ptr;
                     let b_size = header.block_size as usize;

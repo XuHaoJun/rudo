@@ -62,9 +62,31 @@ impl Mmap {
     ///
     /// Returns an error if the underlying system call fails.
     /// Currently for anonymous memory this always succeeds.
-    pub const fn flush(&self) -> io::Result<()> {
-        // Implementation detail: we could expose msync/FlushViewOfFile here
-        Ok(())
+    /// Requires `sys_alloc` to expose `from_raw` parts or similar.
+    /// Since `Mmap` wraps `os::MmapInner`, we need `os::MmapInner` to support this too or just handle it here.
+    ///
+    /// Consumes the `Mmap` and returns the raw pointer and length.
+    /// The memory will won't be unmapped when this struct is dropped.
+    /// The caller is responsible for cleaning up the memory, e.g. by
+    /// creating a new `Mmap` with `from_raw` and dropping it.
+    #[must_use]
+    pub const fn into_raw(self) -> (*mut u8, usize) {
+        let ptr = self.inner.ptr();
+        let len = self.inner.len();
+        std::mem::forget(self);
+        (ptr, len)
+    }
+
+    /// Creates a `Mmap` from a raw pointer and length.
+    ///
+    /// # Safety
+    ///
+    /// The pointer and length must have come from a previous call to `into_raw`.
+    /// The memory must be valid and unchanged.
+    pub const unsafe fn from_raw(ptr: *mut u8, len: usize) -> Self {
+        Self {
+            inner: unsafe { os::MmapInner::from_raw(ptr, len) },
+        }
     }
 }
 

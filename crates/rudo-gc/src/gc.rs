@@ -346,7 +346,7 @@ fn mark_minor_roots(heap: &GlobalHeap) {
 
     // 1. Scan Stack
     unsafe {
-        crate::stack::spill_registers_and_scan(|potential_ptr| {
+        crate::stack::spill_registers_and_scan(|potential_ptr, _addr, _is_reg| {
             if let Some(gc_box_ptr) =
                 crate::heap::find_gc_box_from_ptr(heap, potential_ptr as *const u8)
             {
@@ -408,7 +408,7 @@ fn mark_major_roots(heap: &GlobalHeap) {
     };
     unsafe {
         // 1. Mark stack roots (Conservative)
-        crate::stack::spill_registers_and_scan(|ptr| {
+        crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                 mark_object(gc_box, &mut visitor);
             }
@@ -583,9 +583,6 @@ unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
             return;
         }
 
-        #[cfg(miri)]
-        eprintln!("MIRI: major marking object at {:p} index {}", ptr, index);
-
         // Mark this object
         (*header).set_mark(index);
 
@@ -657,17 +654,15 @@ fn sweep_large_objects(heap: &mut GlobalHeap, only_young: bool) -> usize {
                 ((*gc_box_ptr).drop_fn)(obj_ptr);
 
                 // 2. Deallocate the pages
-                // Note: Large objects are allocated with Layout::from_size_align
                 let h_size = (*header).header_size as usize;
                 let total_size = h_size + block_size;
                 let pages_needed = total_size.div_ceil(crate::heap::PAGE_SIZE);
                 let alloc_size = pages_needed * crate::heap::PAGE_SIZE;
 
-                let layout =
-                    std::alloc::Layout::from_size_align(alloc_size, crate::heap::PAGE_SIZE)
-                        .expect("Invalid large object layout");
-
-                std::alloc::dealloc(header.cast::<u8>(), layout);
+                GlobalHeap::deallocate_pages(
+                    NonNull::new_unchecked(header.cast::<u8>()),
+                    alloc_size,
+                );
 
                 // 3. Remove pages from the map
                 let header_addr = header as usize;

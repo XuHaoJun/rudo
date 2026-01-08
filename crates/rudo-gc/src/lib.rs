@@ -98,3 +98,6 @@ pub mod test_util {
         crate::Gc::internal_ptr(gc)
     }
 }
+
+#[cfg(test)]
+mod blacklisting_test;

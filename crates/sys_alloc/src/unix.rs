@@ -94,6 +94,14 @@ impl MmapInner {
     pub const fn len(&self) -> usize {
         self.len
     }
+
+    /// Creates a `MmapInner` from a raw pointer and length.
+    pub const unsafe fn from_raw(ptr: *mut u8, len: usize) -> Self {
+        Self {
+            ptr: ptr.cast::<libc::c_void>(),
+            len,
+        }
+    }
 }
 
 impl Drop for MmapInner {

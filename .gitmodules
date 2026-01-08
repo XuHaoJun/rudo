@@ -4,3 +4,6 @@
 [submodule "learn-projects/ChezScheme"]
 	path = learn-projects/ChezScheme
 	url = git@github.com:cisco/ChezScheme.git
+[submodule "learn-projects/bdwgc"]
+	path = learn-projects/bdwgc
+	url = git@github.com:bdwgc/bdwgc.git
