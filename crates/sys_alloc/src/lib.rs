@@ -16,6 +16,7 @@ pub use os::page_size;
 ///
 /// On Windows, this is typically 64KB. On Unix, this is typically the system page size.
 /// When requesting a specific address, it should be aligned to this granularity.
+#[must_use]
 pub fn allocation_granularity() -> usize {
     #[cfg(windows)]
     {
@@ -36,19 +37,32 @@ pub struct Mmap {
 
 impl Mmap {
     /// Returns a pointer to the start of the memory mapping.
-    pub fn ptr(&self) -> *mut u8 {
+    #[must_use]
+    pub const fn ptr(&self) -> *mut u8 {
         self.inner.ptr()
     }
 
     /// Returns the length of the memory mapping in bytes.
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    /// Returns true if the memory mapping has length 0.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Flushes the memory mapped region to disk (if file backed) or ensures
     /// visibility. For anonymous mappings, this is generally a no-op or ensures
     /// cache coherence.
-    pub fn flush(&self) -> io::Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying system call fails.
+    /// Currently for anonymous memory this always succeeds.
+    pub const fn flush(&self) -> io::Result<()> {
         // Implementation detail: we could expose msync/FlushViewOfFile here
         Ok(())
     }
@@ -70,7 +84,8 @@ pub struct MmapOptions {
 impl MmapOptions {
     /// Creates a new `MmapOptions` with default settings (length 0).
     /// You must set a length before mapping.
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             len: 0,
             hint_addr: 0,
@@ -81,7 +96,8 @@ impl MmapOptions {
     }
 
     /// Sets the length of the mapping in bytes.
-    pub fn len(mut self, len: usize) -> Self {
+    #[must_use]
+    pub const fn len(mut self, len: usize) -> Self {
         self.len = len;
         self
     }
@@ -95,7 +111,8 @@ impl MmapOptions {
     /// For the best chance of success:
     /// - The address should be aligned to `allocation_granularity()`.
     /// - The address range `[hint_addr, hint_addr + len)` should be free.
-    pub fn with_hint(mut self, addr: usize) -> Self {
+    #[must_use]
+    pub const fn with_hint(mut self, addr: usize) -> Self {
         self.hint_addr = addr;
         self
     }
@@ -103,7 +120,8 @@ impl MmapOptions {
     /// Sets whether to pre-populate (prefault) the page tables.
     ///
     /// On Linux, this adds `MAP_POPULATE`.
-    pub fn populate(mut self, populate: bool) -> Self {
+    #[must_use]
+    pub const fn populate(mut self, populate: bool) -> Self {
         self.populate = populate;
         self
     }
@@ -111,7 +129,8 @@ impl MmapOptions {
     /// Sets whether to reserve swap space (on supported platforms).
     ///
     /// On Linux, this adds `MAP_NORESERVE`.
-    pub fn no_reserve(mut self, no_reserve: bool) -> Self {
+    #[must_use]
+    pub const fn no_reserve(mut self, no_reserve: bool) -> Self {
         self.no_reserve = no_reserve;
         self
     }
@@ -120,7 +139,8 @@ impl MmapOptions {
     ///
     /// If true, `map_anon` will return an error if the OS cannot map the memory
     /// at the exact requested `hint_addr`.
-    pub fn strict(mut self, strict: bool) -> Self {
+    #[must_use]
+    pub const fn strict(mut self, strict: bool) -> Self {
         self.strict = strict;
         self
     }
@@ -138,6 +158,10 @@ impl MmapOptions {
     /// However, `sys_alloc` is a low-level crate, so we mark creation as unsafe
     /// mostly because of the OS interactions and potential for UB if `hint_addr`
     /// is misused in some extensive contexts (though simply asking for an addr is usually safe).
+    /// # Errors
+    ///
+    /// Returns an error if the length is 0, or if the system call fails (e.g. out of memory),
+    /// or if strict hint compliance is requested but cannot be satisfied.
     pub unsafe fn map_anon(&self) -> io::Result<Mmap> {
         if self.len == 0 {
             return Err(io::Error::new(
@@ -269,19 +293,16 @@ mod tests {
             .strict(true);
 
         // Attempt mapping. It might fail on some systems, but if it succeeds, address MUST match.
-        match unsafe { mmap_opts.map_anon() } {
-            Ok(mmap) => {
-                assert_eq!(
-                    mmap.ptr() as usize,
-                    hint_base,
-                    "Strict mapping returned wrong address"
-                );
-            }
-            Err(_) => {
-                // strict mapping failure is allowed (e.g. if address is taken),
-                // but if we were lucky enough to get memory, checking it matches is the test.
-                // We can't easily force failure without using a known taken address.
-            }
+        if let Ok(mmap) = unsafe { mmap_opts.map_anon() } {
+            assert_eq!(
+                mmap.ptr() as usize,
+                hint_base,
+                "Strict mapping returned wrong address"
+            );
+        } else {
+            // strict mapping failure is allowed (e.g. if address is taken),
+            // but if we were lucky enough to get memory, checking it matches is the test.
+            // We can't easily force failure without using a known taken address.
         }
     }
 

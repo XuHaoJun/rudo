@@ -34,6 +34,7 @@ pub fn page_size() -> usize {
 
     match PAGE_SIZE.load(Ordering::Relaxed) {
         0 => {
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
             PAGE_SIZE.store(page_size, Ordering::Relaxed);
             page_size
@@ -58,7 +59,7 @@ impl MmapInner {
         len: usize,
         populate: bool,
         no_reserve: bool,
-    ) -> io::Result<MmapInner> {
+    ) -> io::Result<Self> {
         let populate = if populate { MAP_POPULATE } else { 0 };
         let no_reserve = if no_reserve { MAP_NORESERVE } else { 0 };
 
@@ -83,14 +84,14 @@ impl MmapInner {
         // that is up to the higher level policy.
         // But for Address Space Coloring, the caller needs to check `ptr`.
 
-        Ok(MmapInner { ptr, len })
+        Ok(Self { ptr, len })
     }
 
-    pub fn ptr(&self) -> *mut u8 {
-        self.ptr as *mut u8
+    pub const fn ptr(&self) -> *mut u8 {
+        self.ptr.cast::<u8>()
     }
 
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.len
     }
 }
