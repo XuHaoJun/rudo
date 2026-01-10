@@ -275,16 +275,6 @@ fn perform_multi_threaded_collect() {
     N_DROPS.with(|n| n.set(0));
 
     let mut objects_reclaimed = 0;
-    let mut collection_type = crate::metrics::CollectionType::None;
-
-    // Collect all thread heaps to scan
-    let mut all_heaps: Vec<&mut LocalHeap> = Vec::new();
-    let tcbs = crate::heap::get_all_thread_control_blocks();
-    for tcb in tcbs.iter() {
-        unsafe {
-            all_heaps.push(&mut *tcb.heap.get());
-        }
-    }
 
     // Determine collection type based on current thread's heap
     let (young_size, total_size) = crate::heap::HEAP.with(|h| {
@@ -292,22 +282,33 @@ fn perform_multi_threaded_collect() {
         (heap.young_allocated(), heap.total_allocated())
     });
 
+    let tcbs = crate::heap::get_all_thread_control_blocks();
+
     if total_size > MAJOR_THRESHOLD {
-        collection_type = crate::metrics::CollectionType::Major;
-        for heap in all_heaps {
-            objects_reclaimed += collect_major_multi(heap);
+        for tcb in tcbs.iter() {
+            unsafe {
+                objects_reclaimed += collect_major_multi(&mut *tcb.heap.get());
+            }
         }
     } else if young_size > MINOR_THRESHOLD {
-        collection_type = crate::metrics::CollectionType::Minor;
-        for heap in all_heaps {
-            objects_reclaimed += collect_minor_multi(heap);
+        for tcb in tcbs.iter() {
+            unsafe {
+                objects_reclaimed += collect_minor_multi(&mut *tcb.heap.get());
+            }
         }
     } else {
-        collection_type = crate::metrics::CollectionType::Minor;
-        for heap in all_heaps {
-            objects_reclaimed += collect_minor_multi(heap);
+        for tcb in tcbs.iter() {
+            unsafe {
+                objects_reclaimed += collect_minor_multi(&mut *tcb.heap.get());
+            }
         }
     }
+
+    let collection_type = if total_size > MAJOR_THRESHOLD {
+        crate::metrics::CollectionType::Major
+    } else {
+        crate::metrics::CollectionType::Minor
+    };
 
     let duration = start.elapsed();
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
@@ -384,16 +385,11 @@ fn perform_multi_threaded_collect_full() {
 
     let mut objects_reclaimed = 0;
 
-    let mut all_heaps: Vec<&mut LocalHeap> = Vec::new();
     let tcbs = crate::heap::get_all_thread_control_blocks();
     for tcb in tcbs.iter() {
         unsafe {
-            all_heaps.push(&mut *tcb.heap.get());
+            objects_reclaimed += collect_major_multi(&mut *tcb.heap.get());
         }
-    }
-
-    for heap in all_heaps {
-        objects_reclaimed += collect_major_multi(heap);
     }
 
     let duration = start.elapsed();
