@@ -197,6 +197,7 @@ pub fn resume_all_threads() {
     registry
         .active_count
         .store(registry.threads.len(), Ordering::SeqCst);
+    drop(registry);
 
     // Clear global flag
     GC_REQUESTED.store(false, Ordering::Relaxed);
@@ -204,6 +205,10 @@ pub fn resume_all_threads() {
 
 /// Request all threads to stop at the next safe point.
 /// Returns true if this thread should become the collector.
+///
+/// # Panics
+///
+/// Panics if the thread registry lock is poisoned.
 #[allow(dead_code)]
 pub fn request_gc_handshake() -> bool {
     let registry = thread_registry().lock().unwrap();
@@ -217,6 +222,7 @@ pub fn request_gc_handshake() -> bool {
     }
 
     let active = registry.active_count.load(Ordering::Acquire);
+    drop(registry);
 
     active == 1
 }
@@ -256,12 +262,17 @@ pub fn wait_for_gc_complete() {
 }
 
 /// Clear the GC request flag after collection is complete.
+///
+/// # Panics
+///
+/// Panics if the thread registry lock is poisoned.
 #[allow(dead_code)]
 pub fn clear_gc_request() {
     let registry = thread_registry().lock().unwrap();
     for tcb in &registry.threads {
         tcb.gc_requested.store(false, Ordering::Relaxed);
     }
+    drop(registry);
     GC_REQUESTED.store(false, Ordering::Relaxed);
 }
 
@@ -278,6 +289,10 @@ pub fn get_all_thread_control_blocks() -> Vec<std::sync::Arc<ThreadControlBlock>
 
 /// Get stack roots from a thread control block.
 /// Returns the captured stack roots and clears the buffer.
+///
+/// # Panics
+///
+/// Panics if the stack roots lock is poisoned.
 #[allow(dead_code)]
 pub fn take_stack_roots(tcb: &ThreadControlBlock) -> Vec<*const u8> {
     std::mem::take(&mut *tcb.stack_roots.lock().unwrap())
