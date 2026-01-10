@@ -38,16 +38,24 @@ pub struct ThreadControlBlock {
     pub park_cond: Condvar,
     /// Mutex protecting the condition variable.
     pub park_mutex: Mutex<()>,
-    /// The thread's LocalHeap.
+    /// The thread's `LocalHeap`.
     pub heap: UnsafeCell<LocalHeap>,
 }
 
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for ThreadControlBlock {}
 unsafe impl Sync for ThreadControlBlock {}
 
+impl Default for ThreadControlBlock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ThreadControlBlock {
-    /// Create a new ThreadControlBlock with an uninitialized heap.
+    /// Create a new `ThreadControlBlock` with an uninitialized heap.
     /// The heap must be initialized separately.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: AtomicUsize::new(THREAD_STATE_EXECUTING),
@@ -77,9 +85,16 @@ pub struct ThreadRegistry {
     pub active_count: AtomicUsize,
 }
 
+impl Default for ThreadRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ThreadRegistry {
     /// Create a new empty thread registry.
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             threads: Vec::new(),
             active_count: AtomicUsize::new(0),
@@ -116,7 +131,6 @@ pub static GC_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Check if GC has been requested and handle the rendezvous if so.
 /// This is the fast-path check inserted into allocation code.
-#[inline(always)]
 pub fn check_safepoint() {
     if GC_REQUESTED.load(Ordering::Relaxed) {
         enter_rendezvous();
@@ -125,10 +139,10 @@ pub fn check_safepoint() {
 
 /// Called when a thread reaches a safe point and GC is requested.
 /// Performs the cooperative rendezvous protocol.
+#[allow(clippy::significant_drop_tightening)]
 fn enter_rendezvous() {
-    let tcb = match current_thread_control_block() {
-        Some(t) => t,
-        None => return,
+    let Some(tcb) = current_thread_control_block() else {
+        return;
     };
 
     let old_state = tcb.state.compare_exchange(
@@ -142,8 +156,11 @@ fn enter_rendezvous() {
         return;
     }
 
-    let registry = thread_registry().lock().unwrap();
-    registry.active_count.fetch_sub(1, Ordering::SeqCst);
+    thread_registry()
+        .lock()
+        .unwrap()
+        .active_count
+        .fetch_sub(1, Ordering::SeqCst);
 
     let mut guard = tcb.park_mutex.lock().unwrap();
     while tcb.gc_requested.load(Ordering::Relaxed) {
@@ -152,6 +169,10 @@ fn enter_rendezvous() {
 }
 
 /// Signal all threads waiting at safe points to resume.
+///
+/// # Panics
+///
+/// Panics if the thread registry lock is poisoned.
 pub fn resume_all_threads() {
     let registry = thread_registry().lock().unwrap();
     for tcb in &registry.threads {
@@ -168,25 +189,32 @@ pub fn resume_all_threads() {
 
 /// Request all threads to stop at the next safe point.
 /// Returns true if this thread should become the collector.
+///
+/// # Panics
+///
+/// Panics if the thread registry lock is poisoned.
 #[allow(dead_code)]
 pub fn request_gc_handshake() -> bool {
     GC_REQUESTED.store(true, Ordering::Relaxed);
 
-    let registry = thread_registry().lock().unwrap();
-    let active = registry.active_count.load(Ordering::Acquire);
+    let active = thread_registry()
+        .lock()
+        .unwrap()
+        .active_count
+        .load(Ordering::Acquire);
 
-    if active == 1 {
-        true
-    } else {
-        false
-    }
+    active == 1
 }
 
 /// Wait for GC to complete if a collection is in progress.
+///
+/// # Panics
+///
+/// Panics if the thread registry lock is poisoned.
+#[allow(clippy::significant_drop_tightening)]
 pub fn wait_for_gc_complete() {
-    let tcb = match current_thread_control_block() {
-        Some(t) => t,
-        None => return,
+    let Some(tcb) = current_thread_control_block() else {
+        return;
     };
 
     let old_state = tcb.state.compare_exchange(
@@ -200,8 +228,11 @@ pub fn wait_for_gc_complete() {
         return;
     }
 
-    let registry = thread_registry().lock().unwrap();
-    registry.active_count.fetch_sub(1, Ordering::SeqCst);
+    thread_registry()
+        .lock()
+        .unwrap()
+        .active_count
+        .fetch_sub(1, Ordering::SeqCst);
 
     let mut guard = tcb.park_mutex.lock().unwrap();
     while tcb.gc_requested.load(Ordering::Relaxed) {
@@ -216,7 +247,12 @@ pub fn clear_gc_request() {
 }
 
 /// Get the list of all thread control blocks for scanning.
+///
+/// # Panics
+///
+/// Panics if the thread registry lock is poisoned.
 #[allow(dead_code)]
+#[must_use]
 pub fn get_all_thread_control_blocks() -> Vec<std::sync::Arc<ThreadControlBlock>> {
     thread_registry().lock().unwrap().threads.clone()
 }
@@ -1266,6 +1302,7 @@ where
 /// Get the current thread's control block.
 /// Returns None if called outside a thread with GC heap.
 #[allow(dead_code)]
+#[must_use]
 pub fn current_thread_control_block() -> Option<std::sync::Arc<ThreadControlBlock>> {
     HEAP.try_with(|local| local.tcb.clone()).ok()
 }
@@ -1273,7 +1310,7 @@ pub fn current_thread_control_block() -> Option<std::sync::Arc<ThreadControlBloc
 /// Update the heap pointer in the thread control block.
 /// Called after heap operations that might move/reallocate heap metadata.
 #[allow(dead_code)]
-pub fn update_tcb_heap_ptr() {
+pub const fn update_tcb_heap_ptr() {
     // No-op now since heap is stored directly in TCB
 }
 

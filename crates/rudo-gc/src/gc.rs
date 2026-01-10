@@ -138,8 +138,7 @@ fn maybe_collect() {
                 unsafe { &*heap.tcb.heap.get() }.old_allocated(),
             )
         })
-        .ok()
-        .and_then(|x| Some(x));
+        .ok();
 
     let Some((total, young, old)) = stats else {
         return; // Already borrowed, skip collection check
@@ -196,7 +195,6 @@ pub fn safepoint() {
 // Mark-Sweep Collection
 // ============================================================================
 
-const MINOR_THRESHOLD: usize = 256 * 1024; // 256KB
 const MAJOR_THRESHOLD: usize = 10 * 1024 * 1024; // 10MB
 
 /// Perform a garbage collection.
@@ -233,15 +231,11 @@ fn perform_single_threaded_collect() {
     let mut collection_type = crate::metrics::CollectionType::None;
 
     crate::heap::with_heap(|heap| {
-        let young_size = heap.young_allocated();
         let total_size = heap.total_allocated();
 
         if total_size > MAJOR_THRESHOLD {
             collection_type = crate::metrics::CollectionType::Major;
             objects_reclaimed = collect_major(heap);
-        } else if young_size > MINOR_THRESHOLD {
-            collection_type = crate::metrics::CollectionType::Minor;
-            objects_reclaimed = collect_minor(heap);
         } else {
             collection_type = crate::metrics::CollectionType::Minor;
             objects_reclaimed = collect_minor(heap);
@@ -277,27 +271,21 @@ fn perform_multi_threaded_collect() {
     let mut objects_reclaimed = 0;
 
     // Determine collection type based on current thread's heap
-    let (young_size, total_size) = crate::heap::HEAP.with(|h| {
+    let total_size = crate::heap::HEAP.with(|h| {
         let heap = unsafe { &*h.tcb.heap.get() };
-        (heap.young_allocated(), heap.total_allocated())
+        heap.total_allocated()
     });
 
     let tcbs = crate::heap::get_all_thread_control_blocks();
 
     if total_size > MAJOR_THRESHOLD {
-        for tcb in tcbs.iter() {
+        for tcb in &tcbs {
             unsafe {
                 objects_reclaimed += collect_major_multi(&mut *tcb.heap.get());
             }
         }
-    } else if young_size > MINOR_THRESHOLD {
-        for tcb in tcbs.iter() {
-            unsafe {
-                objects_reclaimed += collect_minor_multi(&mut *tcb.heap.get());
-            }
-        }
     } else {
-        for tcb in tcbs.iter() {
+        for tcb in &tcbs {
             unsafe {
                 objects_reclaimed += collect_minor_multi(&mut *tcb.heap.get());
             }
@@ -386,7 +374,7 @@ fn perform_multi_threaded_collect_full() {
     let mut objects_reclaimed = 0;
 
     let tcbs = crate::heap::get_all_thread_control_blocks();
-    for tcb in tcbs.iter() {
+    for tcb in &tcbs {
         unsafe {
             objects_reclaimed += collect_major_multi(&mut *tcb.heap.get());
         }
@@ -1131,7 +1119,7 @@ mod tests {
         let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let survivor_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-        let handles: Vec<_> = (0..num_threads)
+        let results: Vec<usize> = (0..num_threads)
             .map(|i| {
                 let barrier = barrier.clone();
                 let completed = completed.clone();
@@ -1162,9 +1150,9 @@ mod tests {
                     local_survivors
                 })
             })
+            .map(|h| h.join().unwrap())
             .collect();
 
-        let results: Vec<usize> = handles.into_iter().map(|h| h.join().unwrap()).collect();
         let total_survivors: usize = results.iter().sum();
 
         assert_eq!(
@@ -1253,7 +1241,5 @@ mod tests {
         }
 
         crate::safepoint();
-
-        assert!(true, "safepoint should complete without panic");
     }
 }
