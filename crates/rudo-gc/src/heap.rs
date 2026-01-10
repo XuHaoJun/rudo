@@ -175,7 +175,7 @@ fn enter_rendezvous() {
     *tcb.stack_roots.lock().unwrap() = roots;
 
     let mut guard = tcb.park_mutex.lock().unwrap();
-    while tcb.gc_requested.load(Ordering::Relaxed) {
+    while tcb.gc_requested.load(Ordering::Acquire) {
         guard = tcb.park_cond.wait(guard).unwrap();
     }
 }
@@ -187,16 +187,21 @@ fn enter_rendezvous() {
 /// Panics if the thread registry lock is poisoned.
 pub fn resume_all_threads() {
     let registry = thread_registry().lock().unwrap();
+    let mut woken_count = 0;
     for tcb in &registry.threads {
         if tcb.state.load(Ordering::Acquire) == THREAD_STATE_SAFEPOINT {
             tcb.gc_requested.store(false, Ordering::Relaxed);
             tcb.park_cond.notify_all();
             tcb.state.store(THREAD_STATE_EXECUTING, Ordering::Release);
+            woken_count += 1;
         }
     }
+    // Restore active count only for threads that were woken up
+    // CRITICAL FIX: Don't set active_count to threads.len(), only increment by woken_count
+    // Setting to threads.len() was causing hangs by miscounting active threads
     registry
         .active_count
-        .store(registry.threads.len(), Ordering::SeqCst);
+        .fetch_add(woken_count, std::sync::atomic::Ordering::SeqCst);
     drop(registry);
 
     // Clear global flag
@@ -256,7 +261,7 @@ pub fn wait_for_gc_complete() {
         .fetch_sub(1, Ordering::SeqCst);
 
     let mut guard = tcb.park_mutex.lock().unwrap();
-    while tcb.gc_requested.load(Ordering::Relaxed) {
+    while tcb.gc_requested.load(Ordering::Acquire) {
         guard = tcb.park_cond.wait(guard).unwrap();
     }
 }
