@@ -227,9 +227,10 @@ impl Tlab {
     #[inline(always)]
     pub fn alloc(&mut self, block_size: usize) -> Option<NonNull<u8>> {
         let ptr = self.bump_ptr;
-        // Check if we have enough space (simple pointer comparison)
-        // We cast bump_end to mut to allow comparison, strict provenance might prefer otherwise but this is standard.
-        if ptr < self.bump_end.cast_mut() {
+        // Check if we have enough space.
+        // We use wrapping_add and compare as usize to avoid UB with ptr.add(block_size)
+        // if it were to go past the page boundary.
+        if !ptr.is_null() && (ptr as usize).wrapping_add(block_size) <= self.bump_end as usize {
             // SAFETY: ptr is valid and within bounds as checked above
             unsafe {
                 self.bump_ptr = ptr.add(block_size);
@@ -467,14 +468,21 @@ impl Default for GlobalSegmentManager {
 /// and getting new pages from the `GlobalSegmentManager`.
 pub struct LocalHeap {
     /// TLABs for each small size class.
-    tlab_16: Tlab,
-    tlab_32: Tlab,
-    tlab_64: Tlab,
-    tlab_128: Tlab,
-    tlab_256: Tlab,
-    tlab_512: Tlab,
-    tlab_1024: Tlab,
-    tlab_2048: Tlab,
+    pub tlab_16: Tlab,
+    /// TLAB for 32-byte size class.
+    pub tlab_32: Tlab,
+    /// TLAB for 64-byte size class.
+    pub tlab_64: Tlab,
+    /// TLAB for 128-byte size class.
+    pub tlab_128: Tlab,
+    /// TLAB for 256-byte size class.
+    pub tlab_256: Tlab,
+    /// TLAB for 512-byte size class.
+    pub tlab_512: Tlab,
+    /// TLAB for 1024-byte size class.
+    pub tlab_1024: Tlab,
+    /// TLAB for 2048-byte size class.
+    pub tlab_2048: Tlab,
 
     /// All pages owned by this heap (small and large).
     /// Used for sweeping.
@@ -680,7 +688,8 @@ impl LocalHeap {
         tlab.current_page = Some(header);
         unsafe {
             tlab.bump_ptr = ptr.as_ptr().add(h_size);
-            tlab.bump_end = ptr.as_ptr().add(PAGE_SIZE);
+            // bump_end is the end of the last object that fits in the page.
+            tlab.bump_end = ptr.as_ptr().add(h_size + obj_count * block_size);
         }
 
         // 5. Retry allocation (guaranteed to succeed now)
