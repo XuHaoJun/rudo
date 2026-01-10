@@ -289,20 +289,6 @@ fn promote_young_pages(heap: &mut LocalHeap) {
                 let mut has_survivors = false;
                 let mut survivors_count = 0;
 
-                // This fixes `undeclared GlobalHeap` and also fixes `NonNull` dereferences in `mark_minor` (line 442 etc), `mark_object` (line 582 etc), `sweep_segment_pages` (line 476 etc), `sweep_large_objects` etc.
-                // But I can't replace everything in one chunk efficiently without context.
-                // I will target specific functions.
-
-                // Fixing GlobalHeap usage at line 628? I need to know what function that is.
-                // Probably `find_gc_box_from_ptr` or similar? No, that's in heap.rs.
-                // Line 628 in unmodified file was probably `promote_all_pages` or something?
-                // Let's replace usages.
-                // The user's provided snippet had `_count = 0;` here.
-                // Assuming it was meant to be `survivors_count = 0;` or similar,
-                // but `survivors_count` is already initialized.
-                // To faithfully apply the change, I'll add `_count = 0;` as a new line.
-                let mut _count = 0;
-
                 for i in 0..4 {
                     let bits = (*header).allocated_bitmap[i];
                     if bits != 0 {
