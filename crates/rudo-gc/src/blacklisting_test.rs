@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::heap::{GlobalHeap, HEAP_HINT_ADDRESS, PAGE_MASK};
+    use crate::heap::{HEAP_HINT_ADDRESS, PAGE_MASK};
     use std::hint::black_box;
 
     #[test]
@@ -9,8 +9,7 @@ mod tests {
             _data: [u8; 4096],
         }
 
-        // 1. Setup a GlobalHeap
-        let mut heap = GlobalHeap::new();
+        //    let ptr = crate::heap::with_heap(crate::heap::LocalHeap::alloc::<i32>);
 
         // 2. Artificially plant a "bomb" on the stack.
         // We use the HINT address, which we know the allocator will try first.
@@ -24,7 +23,7 @@ mod tests {
         // We allocate 4KB + wrapper overhead essentially.
         // Smallest large object is > 2KB.
         // Let's allocate 4096 bytes.
-        let ptr = heap.alloc::<BigStruct>();
+        let ptr = crate::heap::with_heap(crate::heap::LocalHeap::alloc::<BigStruct>);
 
         // 4. Verification
 

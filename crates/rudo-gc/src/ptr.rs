@@ -10,7 +10,7 @@ use std::ops::Deref;
 use std::ptr::NonNull;
 
 use crate::gc::{is_collecting, notify_dropped_gc};
-use crate::heap::{ptr_to_object_index, ptr_to_page_header, with_heap, GlobalHeap};
+use crate::heap::{ptr_to_object_index, ptr_to_page_header, with_heap, LocalHeap};
 use crate::trace::{GcVisitor, Trace, Visitor};
 
 // ============================================================================
@@ -272,7 +272,7 @@ impl<T: Trace> Gc<T> {
         }
 
         // Allocate space in the heap
-        let ptr = with_heap(GlobalHeap::alloc::<GcBox<T>>);
+        let ptr = with_heap(LocalHeap::alloc::<GcBox<T>>);
 
         // Initialize the GcBox
         let gc_box = ptr.as_ptr().cast::<GcBox<T>>();
@@ -321,7 +321,7 @@ impl<T: Trace> Gc<T> {
             cell.get().map_or_else(
                 || {
                     // First ZST allocation - create the singleton
-                    let ptr = with_heap(GlobalHeap::alloc::<GcBox<T>>);
+                    let ptr = with_heap(LocalHeap::alloc::<GcBox<T>>);
                     let gc_box = ptr.as_ptr().cast::<GcBox<T>>();
 
                     // SAFETY: We just allocated this memory
@@ -380,7 +380,7 @@ impl<T: Trace> Gc<T> {
     /// ```
     pub fn new_cyclic<F: FnOnce(Self) -> T>(data_fn: F) -> Self {
         // Allocate space
-        let ptr = with_heap(GlobalHeap::alloc::<GcBox<T>>);
+        let ptr = with_heap(LocalHeap::alloc::<GcBox<T>>);
         let gc_box = ptr.as_ptr().cast::<GcBox<T>>();
 
         // Create a dead Gc to pass to the closure
@@ -579,9 +579,9 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
             unsafe {
                 let header = ptr_to_page_header(ptr.as_ptr().cast());
                 // Valid GC pointers always have a magic number
-                if (*header).magic == crate::heap::MAGIC_GC_PAGE {
+                if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
                     if let Some(index) = ptr_to_object_index(ptr.as_ptr().cast()) {
-                        if !(*header).is_marked(index) {
+                        if !(*header.as_ptr()).is_marked(index) {
                             return;
                         }
                     }

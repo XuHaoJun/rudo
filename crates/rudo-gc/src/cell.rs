@@ -79,15 +79,23 @@ impl<T: ?Sized> GcCell<T> {
         // SAFETY: self points to valid memory.
         let ptr = std::ptr::from_ref(self).cast::<u8>();
         unsafe {
+            // ptr_to_page_header returns NonNull, so it's never null.
+            // But we must ensure it's actually a GC page via magic check inside helper or manual check?
+            // ptr_to_page_header assumes valid pointer.
+            // is_gc_pointer checks magic.
+            // But here we want the header to check generation.
             let header = ptr_to_page_header(ptr);
-            if !header.is_null() {
+            // NonNull doesn't have is_null(). It is never null.
+
+            // Validate magic before trusting generation (in case stack allocated)
+            if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
                 // We are in a GC page.
                 // Check generation.
-                if (*header).generation > 0 {
+                if (*header.as_ptr()).generation > 0 {
                     // We are in an old page. We must record this write.
                     // Find our object index.
                     if let Some(index) = ptr_to_object_index(ptr) {
-                        (*header).set_dirty(index);
+                        (*header.as_ptr()).set_dirty(index);
                     }
                 }
             }
