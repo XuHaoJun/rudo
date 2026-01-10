@@ -904,6 +904,52 @@ impl Default for LocalHeap {
     }
 }
 
+impl Drop for LocalHeap {
+    fn drop(&mut self) {
+        // When a thread terminates, its LocalHeap is dropped.
+        // We must unmap all pages owned by this heap to avoid memory leaks.
+        for page_ptr in &self.pages {
+            unsafe {
+                let header = page_ptr.as_ptr();
+                // Validate this is still a GC page before attempting to read metadata
+                if (*header).magic != MAGIC_GC_PAGE {
+                    continue;
+                }
+
+                let is_large = ((*header).flags & 0x01) != 0;
+                let block_size = (*header).block_size as usize;
+                let header_size = (*header).header_size as usize;
+
+                let (alloc_size, pages_needed) = if is_large {
+                    let total_size = header_size + block_size;
+                    let pages = total_size.div_ceil(PAGE_SIZE);
+                    (pages * PAGE_SIZE, pages)
+                } else {
+                    (PAGE_SIZE, 1)
+                };
+
+                // Unregister from global large_object_map if it was a large object.
+                // This is important because other threads might still be scanning
+                // their stacks and could find an interior pointer to this memory.
+                if is_large {
+                    if let Ok(mut manager) = segment_manager().lock() {
+                        let header_addr = header as usize;
+                        for p in 0..pages_needed {
+                            let page_addr = header_addr + (p * PAGE_SIZE);
+                            manager.large_object_map.remove(&page_addr);
+                        }
+                    }
+                }
+
+                // Actually unmap the memory.
+                // sys_alloc::Mmap::from_raw recreate the Mmap object, which will
+                // unmap the memory when it's dropped at the end of this scope.
+                sys_alloc::Mmap::from_raw(header.cast::<u8>(), alloc_size);
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Thread-local heap access
 // ============================================================================
