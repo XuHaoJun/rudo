@@ -273,10 +273,10 @@ fn perform_multi_threaded_collect() {
         // Phase 3: Sweep ALL heaps
         for tcb in &tcbs {
             unsafe {
-                let reclaimed = sweep_segment_pages(&mut *tcb.heap.get(), false);
+                let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
                 let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
                 objects_reclaimed += reclaimed + reclaimed_large;
-                promote_all_pages(&mut *tcb.heap.get());
+                promote_all_pages(&*tcb.heap.get());
             }
         }
     } else {
