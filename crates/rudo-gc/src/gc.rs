@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 use std::ptr::NonNull;
+use std::sync::atomic::Ordering;
 
 use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
@@ -132,9 +133,9 @@ fn maybe_collect() {
     let stats = crate::heap::HEAP
         .try_with(|heap| {
             (
-                heap.heap.borrow().total_allocated(),
-                heap.heap.borrow().young_allocated(),
-                heap.heap.borrow().old_allocated(),
+                unsafe { &*heap.tcb.heap.get() }.total_allocated(),
+                unsafe { &*heap.tcb.heap.get() }.young_allocated(),
+                unsafe { &*heap.tcb.heap.get() }.old_allocated(),
             )
         })
         .ok()
@@ -201,15 +202,29 @@ const MAJOR_THRESHOLD: usize = 10 * 1024 * 1024; // 10MB
 /// Perform a garbage collection.
 ///
 /// Decides between Minor and Major collection based on heuristics.
+/// Implements cooperative rendezvous for multi-threaded safety.
 pub fn collect() {
     // Reentrancy guard
     if IN_COLLECT.with(Cell::get) {
         return;
     }
+
+    let is_collector = crate::heap::request_gc_handshake();
+
+    if is_collector {
+        perform_multi_threaded_collect();
+    } else {
+        crate::heap::GC_REQUESTED.store(false, Ordering::Relaxed);
+        perform_single_threaded_collect();
+    }
+}
+
+/// Perform single-threaded collection (fallback for tests).
+fn perform_single_threaded_collect() {
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
-    let before_bytes = crate::heap::HEAP.with(|h| h.heap.borrow().total_allocated());
+    let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     // Reset drop counter
     N_DROPS.with(|n| n.set(0));
@@ -228,14 +243,13 @@ pub fn collect() {
             collection_type = crate::metrics::CollectionType::Minor;
             objects_reclaimed = collect_minor(heap);
         } else {
-            // Default to Minor if we got here (some threshold was met in notify_dropped_gc)
             collection_type = crate::metrics::CollectionType::Minor;
             objects_reclaimed = collect_minor(heap);
         }
     });
 
     let duration = start.elapsed();
-    let after_bytes = crate::heap::HEAP.with(|h| h.heap.borrow().total_allocated());
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     crate::metrics::record_metrics(crate::metrics::GcMetrics {
         duration,
@@ -244,8 +258,72 @@ pub fn collect() {
         objects_reclaimed,
         objects_surviving: N_EXISTING.with(Cell::get),
         collection_type,
-        total_collections: 0, // Set by record_metrics
+        total_collections: 0,
     });
+
+    IN_COLLECT.with(|in_collect| in_collect.set(false));
+}
+
+/// Perform collection as the collector thread.
+fn perform_multi_threaded_collect() {
+    IN_COLLECT.with(|in_collect| in_collect.set(true));
+
+    let start = std::time::Instant::now();
+    let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+
+    // Reset drop counter
+    N_DROPS.with(|n| n.set(0));
+
+    let mut objects_reclaimed = 0;
+    let mut collection_type = crate::metrics::CollectionType::None;
+
+    // Collect all thread heaps to scan
+    let mut all_heaps: Vec<&mut LocalHeap> = Vec::new();
+    let tcbs = crate::heap::get_all_thread_control_blocks();
+    for tcb in tcbs.iter() {
+        unsafe {
+            all_heaps.push(&mut *tcb.heap.get());
+        }
+    }
+
+    // Determine collection type based on current thread's heap
+    let (young_size, total_size) = crate::heap::HEAP.with(|h| {
+        let heap = unsafe { &*h.tcb.heap.get() };
+        (heap.young_allocated(), heap.total_allocated())
+    });
+
+    if total_size > MAJOR_THRESHOLD {
+        collection_type = crate::metrics::CollectionType::Major;
+        for heap in all_heaps {
+            objects_reclaimed += collect_major_multi(heap);
+        }
+    } else if young_size > MINOR_THRESHOLD {
+        collection_type = crate::metrics::CollectionType::Minor;
+        for heap in all_heaps {
+            objects_reclaimed += collect_minor_multi(heap);
+        }
+    } else {
+        collection_type = crate::metrics::CollectionType::Minor;
+        for heap in all_heaps {
+            objects_reclaimed += collect_minor_multi(heap);
+        }
+    }
+
+    let duration = start.elapsed();
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+
+    crate::metrics::record_metrics(crate::metrics::GcMetrics {
+        duration,
+        bytes_reclaimed: before_bytes.saturating_sub(after_bytes),
+        bytes_surviving: after_bytes,
+        objects_reclaimed,
+        objects_surviving: N_EXISTING.with(Cell::get),
+        collection_type,
+        total_collections: 0,
+    });
+
+    crate::heap::resume_all_threads();
+    crate::heap::clear_gc_request();
 
     IN_COLLECT.with(|in_collect| in_collect.set(false));
 }
@@ -253,15 +331,28 @@ pub fn collect() {
 /// Perform a full garbage collection (Major GC).
 ///
 /// This will collect all unreachable objects in both Young and Old generations.
+/// Implements cooperative rendezvous for multi-threaded safety.
 pub fn collect_full() {
-    // Reentrancy guard
     if IN_COLLECT.with(Cell::get) {
         return;
     }
+
+    let is_collector = crate::heap::request_gc_handshake();
+
+    if is_collector {
+        perform_multi_threaded_collect_full();
+    } else {
+        crate::heap::GC_REQUESTED.store(false, Ordering::Relaxed);
+        perform_single_threaded_collect_full();
+    }
+}
+
+/// Perform single-threaded full collection (fallback for tests).
+fn perform_single_threaded_collect_full() {
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
-    let before_bytes = crate::heap::HEAP.with(|h| h.heap.borrow().total_allocated());
+    let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     let mut objects_reclaimed = 0;
     crate::heap::with_heap(|heap| {
@@ -269,7 +360,7 @@ pub fn collect_full() {
     });
 
     let duration = start.elapsed();
-    let after_bytes = crate::heap::HEAP.with(|h| h.heap.borrow().total_allocated());
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     crate::metrics::record_metrics(crate::metrics::GcMetrics {
         duration,
@@ -282,6 +373,141 @@ pub fn collect_full() {
     });
 
     IN_COLLECT.with(|in_collect| in_collect.set(false));
+}
+
+/// Perform full collection as the collector thread.
+fn perform_multi_threaded_collect_full() {
+    IN_COLLECT.with(|in_collect| in_collect.set(true));
+
+    let start = std::time::Instant::now();
+    let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+
+    let mut objects_reclaimed = 0;
+
+    let mut all_heaps: Vec<&mut LocalHeap> = Vec::new();
+    let tcbs = crate::heap::get_all_thread_control_blocks();
+    for tcb in tcbs.iter() {
+        unsafe {
+            all_heaps.push(&mut *tcb.heap.get());
+        }
+    }
+
+    for heap in all_heaps {
+        objects_reclaimed += collect_major_multi(heap);
+    }
+
+    let duration = start.elapsed();
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+
+    crate::metrics::record_metrics(crate::metrics::GcMetrics {
+        duration,
+        bytes_reclaimed: before_bytes.saturating_sub(after_bytes),
+        bytes_surviving: after_bytes,
+        objects_reclaimed,
+        objects_surviving: N_EXISTING.with(Cell::get),
+        collection_type: crate::metrics::CollectionType::Major,
+        total_collections: 0,
+    });
+
+    crate::heap::resume_all_threads();
+    crate::heap::clear_gc_request();
+
+    IN_COLLECT.with(|in_collect| in_collect.set(false));
+}
+
+/// Minor collection for a heap in multi-threaded context.
+fn collect_minor_multi(heap: &mut LocalHeap) -> usize {
+    mark_minor_roots_multi(heap);
+    let reclaimed = sweep_segment_pages(heap, true);
+    let reclaimed_large = sweep_large_objects(heap, true);
+    promote_young_pages(heap);
+    reclaimed + reclaimed_large
+}
+
+/// Major collection for a heap in multi-threaded context.
+fn collect_major_multi(heap: &mut LocalHeap) -> usize {
+    clear_all_marks_and_dirty(heap);
+    mark_major_roots_multi(heap);
+    let reclaimed = sweep_segment_pages(heap, false);
+    let reclaimed_large = sweep_large_objects(heap, false);
+    promote_all_pages(heap);
+    reclaimed + reclaimed_large
+}
+
+/// Mark roots from all threads' stacks for Minor GC.
+fn mark_minor_roots_multi(heap: &mut LocalHeap) {
+    let mut visitor = GcVisitor {
+        kind: VisitorKind::Minor,
+    };
+
+    unsafe {
+        crate::stack::spill_registers_and_scan(|potential_ptr, _addr, _is_reg| {
+            if let Some(gc_box_ptr) =
+                crate::heap::find_gc_box_from_ptr(heap, potential_ptr as *const u8)
+            {
+                mark_object_minor(gc_box_ptr, &mut visitor);
+            }
+        });
+
+        #[cfg(any(test, feature = "test-util"))]
+        TEST_ROOTS.with(|roots| {
+            for &ptr in roots.borrow().iter() {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    mark_object_minor(gc_box, &mut visitor);
+                }
+            }
+        });
+    }
+
+    for page_ptr in heap.all_pages() {
+        unsafe {
+            let header = page_ptr.as_ptr();
+            if (*header).generation == 0 {
+                continue;
+            }
+            if (*header).flags & 0x01 != 0 {
+                continue;
+            }
+
+            let obj_count = (*header).obj_count as usize;
+            for i in 0..obj_count {
+                if (*header).is_dirty(i) {
+                    let block_size = (*header).block_size as usize;
+                    let header_size = PageHeader::header_size(block_size);
+                    let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+                    ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
+                }
+            }
+            (*header).clear_all_dirty();
+        }
+    }
+}
+
+/// Mark roots from all threads' stacks for Major GC.
+fn mark_major_roots_multi(heap: &mut LocalHeap) {
+    let mut visitor = GcVisitor {
+        kind: VisitorKind::Major,
+    };
+
+    unsafe {
+        crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                mark_object(gc_box, &mut visitor);
+            }
+        });
+
+        #[cfg(any(test, feature = "test-util"))]
+        TEST_ROOTS.with(|roots| {
+            for &ptr in roots.borrow().iter() {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    mark_object(gc_box, &mut visitor);
+                }
+            }
+        });
+    }
 }
 
 /// Minor Collection: Collect Young Generation only.

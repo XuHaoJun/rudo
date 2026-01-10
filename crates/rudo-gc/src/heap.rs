@@ -8,7 +8,6 @@
 //! Memory is divided into 4KB pages. Each page contains objects of a single
 //! size class. This allows O(1) lookup of object metadata from its address.
 
-use std::cell::RefCell;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
@@ -39,23 +38,34 @@ pub struct ThreadControlBlock {
     pub park_cond: Condvar,
     /// Mutex protecting the condition variable.
     pub park_mutex: Mutex<()>,
-    /// Pointer to the thread's LocalHeap (for sweeping).
-    pub heap_ptr: UnsafeCell<*mut LocalHeap>,
+    /// The thread's LocalHeap.
+    pub heap: UnsafeCell<LocalHeap>,
 }
 
 unsafe impl Send for ThreadControlBlock {}
 unsafe impl Sync for ThreadControlBlock {}
 
 impl ThreadControlBlock {
-    /// Create a new ThreadControlBlock with the given heap pointer.
-    pub fn new(heap_ptr: *mut LocalHeap) -> Self {
+    /// Create a new ThreadControlBlock with an uninitialized heap.
+    /// The heap must be initialized separately.
+    pub fn new() -> Self {
         Self {
             state: AtomicUsize::new(THREAD_STATE_EXECUTING),
             gc_requested: AtomicBool::new(false),
             park_cond: Condvar::new(),
             park_mutex: Mutex::new(()),
-            heap_ptr: UnsafeCell::new(heap_ptr),
+            heap: UnsafeCell::new(LocalHeap::new()),
         }
+    }
+
+    /// Get a mutable reference to the heap.
+    pub fn heap_mut(&mut self) -> &mut LocalHeap {
+        unsafe { &mut *self.heap.get() }
+    }
+
+    /// Get an immutable reference to the heap.
+    pub fn heap(&self) -> &LocalHeap {
+        unsafe { &*self.heap.get() }
     }
 }
 
@@ -102,7 +112,7 @@ pub fn thread_registry() -> &'static Mutex<ThreadRegistry> {
 /// Global flag set by collector to request all threads to stop at safe point.
 /// Uses Relaxed ordering for fast-path reads - synchronization happens via the
 /// rendezvous protocol, not this flag alone.
-static GC_REQUESTED: AtomicBool = AtomicBool::new(false);
+pub static GC_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Check if GC has been requested and handle the rendezvous if so.
 /// This is the fast-path check inserted into allocation code.
@@ -142,8 +152,7 @@ fn enter_rendezvous() {
 }
 
 /// Signal all threads waiting at safe points to resume.
-#[allow(dead_code)]
-fn resume_all_threads() {
+pub fn resume_all_threads() {
     let registry = thread_registry().lock().unwrap();
     for tcb in &registry.threads {
         if tcb.state.load(Ordering::Acquire) == THREAD_STATE_SAFEPOINT {
@@ -170,6 +179,33 @@ pub fn request_gc_handshake() -> bool {
         true
     } else {
         false
+    }
+}
+
+/// Wait for GC to complete if a collection is in progress.
+pub fn wait_for_gc_complete() {
+    let tcb = match current_thread_control_block() {
+        Some(t) => t,
+        None => return,
+    };
+
+    let old_state = tcb.state.compare_exchange(
+        THREAD_STATE_EXECUTING,
+        THREAD_STATE_SAFEPOINT,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+
+    if old_state.is_err() {
+        return;
+    }
+
+    let registry = thread_registry().lock().unwrap();
+    registry.active_count.fetch_sub(1, Ordering::SeqCst);
+
+    let mut guard = tcb.park_mutex.lock().unwrap();
+    while tcb.gc_requested.load(Ordering::Relaxed) {
+        guard = tcb.park_cond.wait(guard).unwrap();
     }
 }
 
@@ -1176,28 +1212,21 @@ impl Drop for LocalHeap {
 // Thread-local heap access
 // ============================================================================
 
-/// Thread-local storage combining a LocalHeap with its ThreadControlBlock.
+/// Thread-local heap wrapper that owns the heap and its control block.
 pub struct ThreadLocalHeap {
     /// The thread's control block for GC coordination.
     pub tcb: std::sync::Arc<ThreadControlBlock>,
-    /// The thread-local heap storage.
-    pub heap: RefCell<LocalHeap>,
 }
 
 impl ThreadLocalHeap {
     fn new() -> Self {
-        let heap = RefCell::new(LocalHeap::new());
-        let heap_ptr = {
-            let heap_ref = heap.borrow();
-            &*heap_ref as *const LocalHeap as *mut LocalHeap
-        };
-        let tcb = std::sync::Arc::new(ThreadControlBlock::new(heap_ptr));
+        let tcb = std::sync::Arc::new(ThreadControlBlock::new());
         {
             let mut registry = thread_registry().lock().unwrap();
             registry.register_thread(tcb.clone());
             registry.active_count.fetch_add(1, Ordering::SeqCst);
         }
-        Self { tcb, heap }
+        Self { tcb }
     }
 }
 
@@ -1221,7 +1250,7 @@ pub fn with_heap<F, R>(f: F) -> R
 where
     F: FnOnce(&mut LocalHeap) -> R,
 {
-    HEAP.with(|local| f(&mut local.heap.borrow_mut()))
+    HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get()) })
 }
 
 /// Get mutable access to the thread-local heap and its control block.
@@ -1231,7 +1260,7 @@ pub fn with_heap_and_tcb<F, R>(f: F) -> R
 where
     F: FnOnce(&mut LocalHeap, &ThreadControlBlock) -> R,
 {
-    HEAP.with(|local| f(&mut local.heap.borrow_mut(), &local.tcb))
+    HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get(), &local.tcb) })
 }
 
 /// Get the current thread's control block.
@@ -1245,22 +1274,19 @@ pub fn current_thread_control_block() -> Option<std::sync::Arc<ThreadControlBloc
 /// Called after heap operations that might move/reallocate heap metadata.
 #[allow(dead_code)]
 pub fn update_tcb_heap_ptr() {
-    HEAP.with(|local| {
-        let heap_ptr = &*local.heap.borrow() as *const LocalHeap as *mut LocalHeap;
-        unsafe { *local.tcb.heap_ptr.get() = heap_ptr };
-    });
+    // No-op now since heap is stored directly in TCB
 }
 
 /// Get the minimum address managed by the thread-local heap.
 #[must_use]
 pub fn heap_start() -> usize {
-    HEAP.with(|h| h.heap.borrow().min_addr)
+    HEAP.with(|h| unsafe { (*h.tcb.heap.get()).min_addr })
 }
 
 /// Get the maximum address managed by the thread-local heap.
 #[must_use]
 pub fn heap_end() -> usize {
-    HEAP.with(|h| h.heap.borrow().max_addr)
+    HEAP.with(|h| unsafe { (*h.tcb.heap.get()).max_addr })
 }
 
 /// Convert a pointer to its page header.
