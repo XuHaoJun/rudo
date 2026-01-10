@@ -151,6 +151,19 @@ fn enter_rendezvous() {
         return;
     };
 
+    // CRITICAL FIX: Check per-thread gc_requested flag BEFORE doing any state transitions
+    // If this thread was created after request_gc_handshake(), its gc_requested flag
+    // will be false even though global GC_REQUESTED is true. We must NOT participate
+    // in rendezvous in this case, otherwise we'll:
+    // 1. Transition to SAFEPOINT state (incorrectly)
+    // 2. Decrement active_count (incorrectly)
+    // 3. Return immediately (since gc_requested is false)
+    // 4. Continue running while in SAFEPOINT state
+    // This causes data race when collector accesses our heap concurrently.
+    if !tcb.gc_requested.load(Ordering::Acquire) {
+        return;
+    }
+
     let old_state = tcb.state.compare_exchange(
         THREAD_STATE_EXECUTING,
         THREAD_STATE_SAFEPOINT,
@@ -1328,6 +1341,14 @@ impl ThreadLocalHeap {
         let tcb = std::sync::Arc::new(ThreadControlBlock::new());
         {
             let mut registry = thread_registry().lock().unwrap();
+            // CRITICAL FIX: Set gc_requested flag based on current global GC_REQUESTED state
+            // If a thread spawns during GC, it needs to participate in the handshake.
+            // Without this, the thread would run during GC while collector accesses its heap,
+            // causing a data race. We also check !is_collecting() to avoid setting flag
+            // after GC completes (to prevent spurious rendezvous in next allocation).
+            if !crate::gc::is_collecting() && GC_REQUESTED.load(Ordering::Acquire) {
+                tcb.gc_requested.store(true, Ordering::Release);
+            }
             registry.register_thread(tcb.clone());
             registry.active_count.fetch_add(1, Ordering::SeqCst);
         }
