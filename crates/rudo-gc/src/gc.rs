@@ -655,7 +655,10 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                     heap.large_object_map.remove(&page_addr);
                 }
 
-                if let Ok(mut manager) = crate::heap::segment_manager().lock() {
+                {
+                    let mut manager = crate::heap::segment_manager()
+                        .lock()
+                        .expect("segment manager lock poisoned");
                     for p in 0..pages_needed {
                         let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
                         manager.large_object_map.remove(&page_addr);

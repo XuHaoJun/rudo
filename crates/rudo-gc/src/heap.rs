@@ -982,12 +982,13 @@ impl Drop for LocalHeap {
                 // This is important because other threads might still be scanning
                 // their stacks and could find an interior pointer to this memory.
                 if is_large {
-                    if let Ok(mut manager) = segment_manager().lock() {
-                        let header_addr = header as usize;
-                        for p in 0..pages_needed {
-                            let page_addr = header_addr + (p * PAGE_SIZE);
-                            manager.large_object_map.remove(&page_addr);
-                        }
+                    let mut manager = segment_manager()
+                        .lock()
+                        .expect("segment manager lock poisoned");
+                    let header_addr = header as usize;
+                    for p in 0..pages_needed {
+                        let page_addr = header_addr + (p * PAGE_SIZE);
+                        manager.large_object_map.remove(&page_addr);
                     }
                 }
 
