@@ -185,23 +185,26 @@ pub fn resume_all_threads() {
     registry
         .active_count
         .store(registry.threads.len(), Ordering::SeqCst);
+
+    // Clear global flag
+    GC_REQUESTED.store(false, Ordering::Relaxed);
 }
 
 /// Request all threads to stop at the next safe point.
 /// Returns true if this thread should become the collector.
-///
-/// # Panics
-///
-/// Panics if the thread registry lock is poisoned.
 #[allow(dead_code)]
 pub fn request_gc_handshake() -> bool {
+    let registry = thread_registry().lock().unwrap();
+
+    // Set GC_REQUESTED flag first (before locking registry)
     GC_REQUESTED.store(true, Ordering::Relaxed);
 
-    let active = thread_registry()
-        .lock()
-        .unwrap()
-        .active_count
-        .load(Ordering::Acquire);
+    // Set per-thread gc_requested flag for all threads
+    for tcb in &registry.threads {
+        tcb.gc_requested.store(true, Ordering::Relaxed);
+    }
+
+    let active = registry.active_count.load(Ordering::Acquire);
 
     active == 1
 }
@@ -243,6 +246,10 @@ pub fn wait_for_gc_complete() {
 /// Clear the GC request flag after collection is complete.
 #[allow(dead_code)]
 pub fn clear_gc_request() {
+    let registry = thread_registry().lock().unwrap();
+    for tcb in &registry.threads {
+        tcb.gc_requested.store(false, Ordering::Relaxed);
+    }
     GC_REQUESTED.store(false, Ordering::Relaxed);
 }
 
