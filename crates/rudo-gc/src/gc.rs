@@ -129,13 +129,16 @@ fn maybe_collect() {
     }
 
     // Check if we should collect
-    // Use try_borrow to avoid panics if we are already mutably borrowing the heap
-    // (e.g. during a sweep phase that triggers a drop)
-    let stats = crate::heap::HEAP.with(|heap| {
-        heap.try_borrow()
-            .map(|h| (h.total_allocated(), h.young_allocated(), h.old_allocated()))
-            .ok()
-    });
+    let stats = crate::heap::HEAP
+        .try_with(|heap| {
+            (
+                heap.heap.borrow().total_allocated(),
+                heap.heap.borrow().young_allocated(),
+                heap.heap.borrow().old_allocated(),
+            )
+        })
+        .ok()
+        .and_then(|x| Some(x));
 
     let Some((total, young, old)) = stats else {
         return; // Already borrowed, skip collection check
@@ -184,8 +187,7 @@ pub fn collect() {
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
-    let before_bytes =
-        crate::heap::HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+    let before_bytes = crate::heap::HEAP.with(|h| h.heap.borrow().total_allocated());
 
     // Reset drop counter
     N_DROPS.with(|n| n.set(0));
@@ -211,8 +213,7 @@ pub fn collect() {
     });
 
     let duration = start.elapsed();
-    let after_bytes =
-        crate::heap::HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+    let after_bytes = crate::heap::HEAP.with(|h| h.heap.borrow().total_allocated());
 
     crate::metrics::record_metrics(crate::metrics::GcMetrics {
         duration,
@@ -238,8 +239,7 @@ pub fn collect_full() {
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
-    let before_bytes =
-        crate::heap::HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+    let before_bytes = crate::heap::HEAP.with(|h| h.heap.borrow().total_allocated());
 
     let mut objects_reclaimed = 0;
     crate::heap::with_heap(|heap| {
@@ -247,8 +247,7 @@ pub fn collect_full() {
     });
 
     let duration = start.elapsed();
-    let after_bytes =
-        crate::heap::HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+    let after_bytes = crate::heap::HEAP.with(|h| h.heap.borrow().total_allocated());
 
     crate::metrics::record_metrics(crate::metrics::GcMetrics {
         duration,

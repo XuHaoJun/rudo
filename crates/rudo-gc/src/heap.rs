@@ -9,12 +9,91 @@
 //! size class. This allows O(1) lookup of object metadata from its address.
 
 use std::cell::RefCell;
+use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex, OnceLock};
 
 use sys_alloc::{Mmap, MmapOptions};
+
+// ============================================================================
+// Thread Registry & Control Block - Multi-threaded GC Support
+// ============================================================================
+
+/// Thread state: executing mutator code.
+pub const THREAD_STATE_EXECUTING: usize = 0;
+/// Thread state: at a safe point, waiting for GC.
+pub const THREAD_STATE_SAFEPOINT: usize = 1;
+/// Thread state: inactive (blocked in syscall).
+pub const THREAD_STATE_INACTIVE: usize = 2;
+
+/// Shared control block for each thread's GC coordination.
+pub struct ThreadControlBlock {
+    /// Atomic state of the thread (EXECUTING, SAFEPOINT, or INACTIVE).
+    pub state: AtomicUsize,
+    /// Flag set by the collector to request a handshake.
+    pub gc_requested: AtomicBool,
+    /// Condition variable to park the thread during GC.
+    pub park_cond: Condvar,
+    /// Mutex protecting the condition variable.
+    pub park_mutex: Mutex<()>,
+    /// Pointer to the thread's LocalHeap (for sweeping).
+    pub heap_ptr: UnsafeCell<*mut LocalHeap>,
+}
+
+unsafe impl Send for ThreadControlBlock {}
+unsafe impl Sync for ThreadControlBlock {}
+
+impl ThreadControlBlock {
+    /// Create a new ThreadControlBlock with the given heap pointer.
+    pub fn new(heap_ptr: *mut LocalHeap) -> Self {
+        Self {
+            state: AtomicUsize::new(THREAD_STATE_EXECUTING),
+            gc_requested: AtomicBool::new(false),
+            park_cond: Condvar::new(),
+            park_mutex: Mutex::new(()),
+            heap_ptr: UnsafeCell::new(heap_ptr),
+        }
+    }
+}
+
+/// Global registry of all threads with GC heaps.
+pub struct ThreadRegistry {
+    /// All active thread control blocks.
+    pub threads: Vec<std::sync::Arc<ThreadControlBlock>>,
+    /// Number of threads currently in EXECUTING state.
+    pub active_count: AtomicUsize,
+}
+
+impl ThreadRegistry {
+    /// Create a new empty thread registry.
+    pub fn new() -> Self {
+        Self {
+            threads: Vec::new(),
+            active_count: AtomicUsize::new(0),
+        }
+    }
+
+    /// Register a new thread with the registry.
+    pub fn register_thread(&mut self, tcb: std::sync::Arc<ThreadControlBlock>) {
+        self.threads.push(tcb);
+    }
+
+    /// Unregister a thread from the registry.
+    pub fn unregister_thread(&mut self, tcb: &std::sync::Arc<ThreadControlBlock>) {
+        self.threads
+            .retain(|existing| !std::sync::Arc::ptr_eq(existing, tcb));
+    }
+}
+
+static THREAD_REGISTRY: OnceLock<Mutex<ThreadRegistry>> = OnceLock::new();
+
+/// Access the global thread registry.
+pub fn thread_registry() -> &'static Mutex<ThreadRegistry> {
+    THREAD_REGISTRY.get_or_init(|| Mutex::new(ThreadRegistry::new()))
+}
 
 // ============================================================================
 // Constants
@@ -1005,9 +1084,44 @@ impl Drop for LocalHeap {
 // Thread-local heap access
 // ============================================================================
 
+/// Thread-local storage combining a LocalHeap with its ThreadControlBlock.
+pub struct ThreadLocalHeap {
+    /// The thread's control block for GC coordination.
+    pub tcb: std::sync::Arc<ThreadControlBlock>,
+    /// The thread-local heap storage.
+    pub heap: RefCell<LocalHeap>,
+}
+
+impl ThreadLocalHeap {
+    fn new() -> Self {
+        let heap = RefCell::new(LocalHeap::new());
+        let heap_ptr = {
+            let heap_ref = heap.borrow();
+            &*heap_ref as *const LocalHeap as *mut LocalHeap
+        };
+        let tcb = std::sync::Arc::new(ThreadControlBlock::new(heap_ptr));
+        {
+            let mut registry = thread_registry().lock().unwrap();
+            registry.register_thread(tcb.clone());
+            registry.active_count.fetch_add(1, Ordering::SeqCst);
+        }
+        Self { tcb, heap }
+    }
+}
+
+impl Drop for ThreadLocalHeap {
+    fn drop(&mut self) {
+        let mut registry = thread_registry().lock().unwrap();
+        if self.tcb.state.load(Ordering::SeqCst) == THREAD_STATE_EXECUTING {
+            registry.active_count.fetch_sub(1, Ordering::SeqCst);
+        }
+        registry.unregister_thread(&self.tcb);
+    }
+}
+
 thread_local! {
-    /// Thread-local heap instance.
-    pub static HEAP: RefCell<LocalHeap> = RefCell::new(LocalHeap::new());
+    /// Thread-local heap instance with its control block.
+    pub static HEAP: ThreadLocalHeap = ThreadLocalHeap::new();
 }
 
 /// Execute a function with access to the thread-local heap.
@@ -1015,19 +1129,46 @@ pub fn with_heap<F, R>(f: F) -> R
 where
     F: FnOnce(&mut LocalHeap) -> R,
 {
-    HEAP.with(|heap| f(&mut heap.borrow_mut()))
+    HEAP.with(|local| f(&mut local.heap.borrow_mut()))
+}
+
+/// Get mutable access to the thread-local heap and its control block.
+/// Used for GC coordination.
+#[allow(dead_code)]
+pub fn with_heap_and_tcb<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut LocalHeap, &ThreadControlBlock) -> R,
+{
+    HEAP.with(|local| f(&mut local.heap.borrow_mut(), &local.tcb))
+}
+
+/// Get the current thread's control block.
+/// Returns None if called outside a thread with GC heap.
+#[allow(dead_code)]
+pub fn current_thread_control_block() -> Option<std::sync::Arc<ThreadControlBlock>> {
+    HEAP.try_with(|local| local.tcb.clone()).ok()
+}
+
+/// Update the heap pointer in the thread control block.
+/// Called after heap operations that might move/reallocate heap metadata.
+#[allow(dead_code)]
+pub fn update_tcb_heap_ptr() {
+    HEAP.with(|local| {
+        let heap_ptr = &*local.heap.borrow() as *const LocalHeap as *mut LocalHeap;
+        unsafe { *local.tcb.heap_ptr.get() = heap_ptr };
+    });
 }
 
 /// Get the minimum address managed by the thread-local heap.
 #[must_use]
 pub fn heap_start() -> usize {
-    HEAP.with(|h| h.borrow().min_addr)
+    HEAP.with(|h| h.heap.borrow().min_addr)
 }
 
 /// Get the maximum address managed by the thread-local heap.
 #[must_use]
 pub fn heap_end() -> usize {
-    HEAP.with(|h| h.borrow().max_addr)
+    HEAP.with(|h| h.heap.borrow().max_addr)
 }
 
 /// Convert a pointer to its page header.
