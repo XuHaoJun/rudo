@@ -352,14 +352,24 @@ pub fn collect_full() {
 }
 
 /// Wake up any threads waiting at a safe point.
+/// This is used when a non-collector thread needs to wake up waiting threads
+/// and perform single-threaded collection. It properly restores threads to
+/// EXECUTING state and restores active_count.
 fn wake_waiting_threads() {
     let registry = crate::heap::thread_registry().lock().unwrap();
+    let mut woken_count = 0;
     for tcb in &registry.threads {
         if tcb.state.load(Ordering::Acquire) == crate::heap::THREAD_STATE_SAFEPOINT {
             tcb.gc_requested.store(false, Ordering::Relaxed);
             tcb.park_cond.notify_all();
+            tcb.state
+                .store(crate::heap::THREAD_STATE_EXECUTING, Ordering::Release);
+            woken_count += 1;
         }
     }
+    registry
+        .active_count
+        .fetch_add(woken_count, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Perform single-threaded full collection (fallback for tests).
