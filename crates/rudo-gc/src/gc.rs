@@ -629,6 +629,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
                         // Mark as dead by setting drop_fn to no_op
                         (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                        (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
                         (*gc_box_ptr).set_dead();
                     }
                     continue;

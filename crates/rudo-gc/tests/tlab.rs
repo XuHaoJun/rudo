@@ -4,24 +4,33 @@ use std::thread;
 
 #[test]
 fn test_tlab_thread_isolation() {
-    let t1 = thread::spawn(|| {
+    use std::sync::{Arc, Barrier};
+    let barrier = Arc::new(Barrier::new(2));
+
+    let b1 = Arc::clone(&barrier);
+    let t1 = thread::spawn(move || {
         // Allocate a small object to trigger TLAB initialization/page allocation
         let _g1 = Gc::new(42i32);
-        with_heap(|h| {
+        let addr = with_heap(|h| {
             assert!(h.pages.len() >= 1);
             // Return the first page address
             h.pages[0].as_ptr() as usize
-        })
+        });
+        b1.wait();
+        addr
     });
 
-    let t2 = thread::spawn(|| {
+    let b2 = Arc::clone(&barrier);
+    let t2 = thread::spawn(move || {
         // Allocate a small object
         let _g2 = Gc::new(43i32);
-        with_heap(|h| {
+        let addr = with_heap(|h| {
             assert!(h.pages.len() >= 1);
             // Return the first page address
             h.pages[0].as_ptr() as usize
-        })
+        });
+        b2.wait();
+        addr
     });
 
     let addr1 = t1.join().unwrap();
@@ -106,7 +115,7 @@ fn test_tlab_bump_pointer_contiguity() {
 fn test_mixed_size_class_tlabs() {
     // Different size classes should use different TLABs (and different pages)
     thread::spawn(|| {
-        use rudo_gc::{Trace, Visitor};
+        use rudo_gc::Trace;
 
         #[derive(Trace)]
         struct Large {
@@ -142,22 +151,20 @@ fn test_free_slot_reuse() {
     // instead of always allocating new pages.
     let count = 100;
 
-    let initial_pages = thread::spawn(move || {
-        let mut pointers = Vec::new();
-        for i in 0..count {
-            pointers.push(Gc::new(i as i32));
-        }
-        with_heap(|h| h.pages.len())
-    })
-    .join()
-    .unwrap();
-
-    assert!(
-        initial_pages >= 2,
-        "Should have at least 2 pages for 100 objects of 64 bytes"
-    );
-
     thread::spawn(move || {
+        let initial_pages = {
+            let mut pointers = Vec::new();
+            for i in 0..count {
+                pointers.push(Gc::new(i as i32));
+            }
+            with_heap(|h| h.pages.len())
+        };
+
+        assert!(
+            initial_pages >= 2,
+            "Should have at least 2 pages for 100 objects of 64 bytes"
+        );
+
         // Clear stack to remove stale Gc pointers
         #[inline(never)]
         fn clear_stack() {
@@ -166,7 +173,8 @@ fn test_free_slot_reuse() {
         }
         clear_stack();
 
-        // Force collection
+        // Force collection.
+        // The first set of 'pointers' is already dropped as it was local to the block above.
         rudo_gc::collect_full();
 
         // Allocate more objects
