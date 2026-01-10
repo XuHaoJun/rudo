@@ -40,6 +40,8 @@ pub struct ThreadControlBlock {
     pub park_mutex: Mutex<()>,
     /// The thread's `LocalHeap`.
     pub heap: UnsafeCell<LocalHeap>,
+    /// Stack roots captured at safepoint for the collector to scan.
+    pub stack_roots: Mutex<Vec<*const u8>>,
 }
 
 #[allow(clippy::non_send_fields_in_send_ty)]
@@ -63,6 +65,7 @@ impl ThreadControlBlock {
             park_cond: Condvar::new(),
             park_mutex: Mutex::new(()),
             heap: UnsafeCell::new(LocalHeap::new()),
+            stack_roots: Mutex::new(Vec::new()),
         }
     }
 
@@ -161,6 +164,15 @@ fn enter_rendezvous() {
         .unwrap()
         .active_count
         .fetch_sub(1, Ordering::SeqCst);
+
+    // Capture stack roots before parking - these will be scanned by the collector
+    let mut roots = Vec::new();
+    unsafe {
+        crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
+            roots.push(ptr as *const u8);
+        });
+    }
+    *tcb.stack_roots.lock().unwrap() = roots;
 
     let mut guard = tcb.park_mutex.lock().unwrap();
     while tcb.gc_requested.load(Ordering::Relaxed) {
@@ -262,6 +274,13 @@ pub fn clear_gc_request() {
 #[must_use]
 pub fn get_all_thread_control_blocks() -> Vec<std::sync::Arc<ThreadControlBlock>> {
     thread_registry().lock().unwrap().threads.clone()
+}
+
+/// Get stack roots from a thread control block.
+/// Returns the captured stack roots and clears the buffer.
+#[allow(dead_code)]
+pub fn take_stack_roots(tcb: &ThreadControlBlock) -> Vec<*const u8> {
+    std::mem::take(&mut *tcb.stack_roots.lock().unwrap())
 }
 
 // ============================================================================

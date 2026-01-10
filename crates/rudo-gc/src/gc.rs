@@ -441,6 +441,20 @@ fn mark_minor_roots_multi(heap: &mut LocalHeap) {
         kind: VisitorKind::Minor,
     };
 
+    // Scan all threads' captured stack roots
+    let tcbs = crate::heap::get_all_thread_control_blocks();
+    for tcb in &tcbs {
+        let roots = crate::heap::take_stack_roots(tcb);
+        for ptr in roots {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    mark_object_minor(gc_box, &mut visitor);
+                }
+            }
+        }
+    }
+
+    // Also scan current thread's registers (collector thread's live registers)
     unsafe {
         crate::stack::spill_registers_and_scan(|potential_ptr, _addr, _is_reg| {
             if let Some(gc_box_ptr) =
@@ -449,16 +463,18 @@ fn mark_minor_roots_multi(heap: &mut LocalHeap) {
                 mark_object_minor(gc_box_ptr, &mut visitor);
             }
         });
+    }
 
-        #[cfg(any(test, feature = "test-util"))]
-        TEST_ROOTS.with(|roots| {
-            for &ptr in roots.borrow().iter() {
+    #[cfg(any(test, feature = "test-util"))]
+    TEST_ROOTS.with(|roots| {
+        for &ptr in roots.borrow().iter() {
+            unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
                     mark_object_minor(gc_box, &mut visitor);
                 }
             }
-        });
-    }
+        }
+    });
 
     for page_ptr in heap.all_pages() {
         unsafe {
@@ -493,22 +509,38 @@ fn mark_major_roots_multi(heap: &mut LocalHeap) {
         kind: VisitorKind::Major,
     };
 
+    // Scan all threads' captured stack roots
+    let tcbs = crate::heap::get_all_thread_control_blocks();
+    for tcb in &tcbs {
+        let roots = crate::heap::take_stack_roots(tcb);
+        for ptr in roots {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    mark_object(gc_box, &mut visitor);
+                }
+            }
+        }
+    }
+
+    // Also scan current thread's registers (collector thread's live registers)
     unsafe {
         crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                 mark_object(gc_box, &mut visitor);
             }
         });
+    }
 
-        #[cfg(any(test, feature = "test-util"))]
-        TEST_ROOTS.with(|roots| {
-            for &ptr in roots.borrow().iter() {
+    #[cfg(any(test, feature = "test-util"))]
+    TEST_ROOTS.with(|roots| {
+        for &ptr in roots.borrow().iter() {
+            unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
                     mark_object(gc_box, &mut visitor);
                 }
             }
-        });
-    }
+        }
+    });
 }
 
 /// Minor Collection: Collect Young Generation only.
