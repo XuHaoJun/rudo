@@ -279,18 +279,27 @@ fn perform_multi_threaded_collect() {
         heap.total_allocated()
     });
 
+    // Collect all stack roots BEFORE processing heaps
+    // This ensures we capture roots from all threads before any are consumed
     let tcbs = crate::heap::get_all_thread_control_blocks();
+    let all_stack_roots: Vec<(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)> = tcbs
+        .iter()
+        .flat_map(|tcb| {
+            let roots = crate::heap::take_stack_roots(tcb);
+            roots.into_iter().map(move |ptr| (ptr, tcb.clone()))
+        })
+        .collect();
 
     if total_size > MAJOR_THRESHOLD {
         for tcb in &tcbs {
             unsafe {
-                objects_reclaimed += collect_major_multi(&mut *tcb.heap.get());
+                objects_reclaimed += collect_major_multi(&mut *tcb.heap.get(), &all_stack_roots);
             }
         }
     } else {
         for tcb in &tcbs {
             unsafe {
-                objects_reclaimed += collect_minor_multi(&mut *tcb.heap.get());
+                objects_reclaimed += collect_minor_multi(&mut *tcb.heap.get(), &all_stack_roots);
             }
         }
     }
@@ -390,10 +399,20 @@ fn perform_multi_threaded_collect_full() {
 
     let mut objects_reclaimed = 0;
 
+    // Collect all stack roots BEFORE processing heaps
+    // This ensures we capture roots from all threads before any are consumed
     let tcbs = crate::heap::get_all_thread_control_blocks();
+    let all_stack_roots: Vec<(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)> = tcbs
+        .iter()
+        .flat_map(|tcb| {
+            let roots = crate::heap::take_stack_roots(tcb);
+            roots.into_iter().map(move |ptr| (ptr, tcb.clone()))
+        })
+        .collect();
+
     for tcb in &tcbs {
         unsafe {
-            objects_reclaimed += collect_major_multi(&mut *tcb.heap.get());
+            objects_reclaimed += collect_major_multi(&mut *tcb.heap.get(), &all_stack_roots);
         }
     }
 
@@ -417,8 +436,11 @@ fn perform_multi_threaded_collect_full() {
 }
 
 /// Minor collection for a heap in multi-threaded context.
-fn collect_minor_multi(heap: &mut LocalHeap) -> usize {
-    mark_minor_roots_multi(heap);
+fn collect_minor_multi(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+) -> usize {
+    mark_minor_roots_multi(heap, stack_roots);
     let reclaimed = sweep_segment_pages(heap, true);
     let reclaimed_large = sweep_large_objects(heap, true);
     promote_young_pages(heap);
@@ -426,9 +448,12 @@ fn collect_minor_multi(heap: &mut LocalHeap) -> usize {
 }
 
 /// Major collection for a heap in multi-threaded context.
-fn collect_major_multi(heap: &mut LocalHeap) -> usize {
+fn collect_major_multi(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+) -> usize {
     clear_all_marks_and_dirty(heap);
-    mark_major_roots_multi(heap);
+    mark_major_roots_multi(heap, stack_roots);
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
     promote_all_pages(heap);
@@ -436,20 +461,19 @@ fn collect_major_multi(heap: &mut LocalHeap) -> usize {
 }
 
 /// Mark roots from all threads' stacks for Minor GC.
-fn mark_minor_roots_multi(heap: &mut LocalHeap) {
+fn mark_minor_roots_multi(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+) {
     let mut visitor = GcVisitor {
         kind: VisitorKind::Minor,
     };
 
-    // Scan all threads' captured stack roots
-    let tcbs = crate::heap::get_all_thread_control_blocks();
-    for tcb in &tcbs {
-        let roots = crate::heap::take_stack_roots(tcb);
-        for ptr in roots {
-            unsafe {
-                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
-                    mark_object_minor(gc_box, &mut visitor);
-                }
+    // Scan all threads' captured stack roots (passed in, not consumed)
+    for &(ptr, _) in stack_roots {
+        unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                mark_object_minor(gc_box, &mut visitor);
             }
         }
     }
@@ -504,20 +528,19 @@ fn mark_minor_roots_multi(heap: &mut LocalHeap) {
 }
 
 /// Mark roots from all threads' stacks for Major GC.
-fn mark_major_roots_multi(heap: &mut LocalHeap) {
+fn mark_major_roots_multi(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+) {
     let mut visitor = GcVisitor {
         kind: VisitorKind::Major,
     };
 
-    // Scan all threads' captured stack roots
-    let tcbs = crate::heap::get_all_thread_control_blocks();
-    for tcb in &tcbs {
-        let roots = crate::heap::take_stack_roots(tcb);
-        for ptr in roots {
-            unsafe {
-                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
-                    mark_object(gc_box, &mut visitor);
-                }
+    // Scan all threads' captured stack roots (passed in, not consumed)
+    for &(ptr, _) in stack_roots {
+        unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                mark_object(gc_box, &mut visitor);
             }
         }
     }
