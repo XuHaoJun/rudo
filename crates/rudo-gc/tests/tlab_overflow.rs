@@ -76,9 +76,9 @@ fn test_tlab_init_uses_correct_bump_end() {
 
             let mut found = false;
             for tlab in tlabs {
-                if tlab.current_page.is_some() {
+                if let Some(page) = tlab.current_page {
                     found = true;
-                    let page_start = tlab.current_page.unwrap().as_ptr() as usize;
+                    let page_start = page.as_ptr() as usize;
                     let bump_end = tlab.bump_end as usize;
 
                     // Since all current size classes are powers of two, they should all

@@ -465,7 +465,7 @@ unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
 }
 
 /// Sweep pages in regular segments.
-fn sweep_segment_pages(heap: &mut LocalHeap, only_young: bool) -> usize {
+fn sweep_segment_pages(heap: &LocalHeap, only_young: bool) -> usize {
     let mut total_reclaimed = 0;
     for page_ptr in heap.all_pages() {
         unsafe {
@@ -599,7 +599,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
 
     // Collect large object pages once to avoid re-scanning heap.pages in every iteration.
     // This also avoids UB by not re-inspecting deallocated pages during the loop.
-    let target_pages = heap.large_object_pages().to_vec(); // .to_vec() to own the list
+    let target_pages = heap.large_object_pages(); // .large_object_pages() already returns an owned Vec
 
     for page_ptr in target_pages {
         // SAFETY: Large object pointers were valid at start of sweep.

@@ -12,7 +12,7 @@ fn test_tlab_thread_isolation() {
         // Allocate a small object to trigger TLAB initialization/page allocation
         let _g1 = Gc::new(42i32);
         let addr = with_heap(|h| {
-            assert!(h.pages.len() >= 1);
+            assert!(!h.pages.is_empty());
             // Return the first page address
             h.pages[0].as_ptr() as usize
         });
@@ -25,7 +25,7 @@ fn test_tlab_thread_isolation() {
         // Allocate a small object
         let _g2 = Gc::new(43i32);
         let addr = with_heap(|h| {
-            assert!(h.pages.len() >= 1);
+            assert!(!h.pages.is_empty());
             // Return the first page address
             h.pages[0].as_ptr() as usize
         });
@@ -58,14 +58,14 @@ fn test_tlab_exhaustion_allocates_new_page() {
 
         let mut pointers = Vec::new();
         for i in 0..count {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             pointers.push(Gc::new(i as i32));
         }
 
         let final_pages = with_heap(|h| h.pages.len());
         assert!(
             final_pages >= 2,
-            "TLAB exhaustion should have forced at least one new page allocation (total >= 2), got {}",
-            final_pages
+            "TLAB exhaustion should have forced at least one new page allocation (total >= 2), got {final_pages}"
         );
 
         // Verify they are not all in the same page
@@ -119,11 +119,11 @@ fn test_mixed_size_class_tlabs() {
 
         #[derive(Trace)]
         struct Large {
-            _data: [u8; 100],
+            data: [u8; 100],
         }
 
         let g_small = Gc::new(()); // 32 bytes -> 32 size class
-        let g_large = Gc::new(Large { _data: [0; 100] }); // 32 + 100 = 132 bytes -> 256 size class
+        let g_large = Gc::new(Large { data: [0; 100] }); // 32 + 100 = 132 bytes -> 256 size class
 
         let p_small = Gc::as_ptr(&g_small) as usize;
         let p_large = Gc::as_ptr(&g_large) as usize;
@@ -147,6 +147,12 @@ fn test_mixed_size_class_tlabs() {
 
 #[test]
 fn test_free_slot_reuse() {
+    #[inline(never)]
+    fn clear_stack() {
+        let mut x = [0u64; 1024];
+        std::hint::black_box(&mut x);
+    }
+
     // We want to verify that slots reclaimed by GC are reused for new allocations
     // instead of always allocating new pages.
     let count = 100;
@@ -155,9 +161,11 @@ fn test_free_slot_reuse() {
         let initial_pages = {
             let mut pointers = Vec::new();
             for i in 0..count {
-                pointers.push(Gc::new(i as i32));
+                pointers.push(Gc::new(i));
             }
-            with_heap(|h| h.pages.len())
+            let len = with_heap(|h| h.pages.len());
+            drop(pointers);
+            len
         };
 
         assert!(
@@ -166,11 +174,6 @@ fn test_free_slot_reuse() {
         );
 
         // Clear stack to remove stale Gc pointers
-        #[inline(never)]
-        fn clear_stack() {
-            let mut x = [0u64; 1024];
-            std::hint::black_box(&mut x);
-        }
         clear_stack();
 
         // Force collection.
@@ -180,17 +183,16 @@ fn test_free_slot_reuse() {
         // Allocate more objects
         let mut pointers = Vec::new();
         for i in 0..count {
-            pointers.push(Gc::new(i as i32));
+            pointers.push(Gc::new(i));
         }
 
         let final_pages = with_heap(|h| h.pages.len());
 
         assert!(
             final_pages <= initial_pages + 1,
-            "Page count increased from {} to {} indicating no reuse of free slots",
-            initial_pages,
-            final_pages
+            "Page count increased from {initial_pages} to {final_pages} indicating no reuse of free slots"
         );
+        drop(pointers);
     })
     .join()
     .unwrap();

@@ -224,7 +224,7 @@ impl Tlab {
     /// Try to allocate from the TLAB (Fast Path).
     ///
     /// Returns `Some(ptr)` if successful, `None` if the TLAB is exhausted.
-    #[inline(always)]
+    #[inline]
     pub fn alloc(&mut self, block_size: usize) -> Option<NonNull<u8>> {
         let ptr = self.bump_ptr;
         // Check if we have enough space.
@@ -370,6 +370,10 @@ impl GlobalSegmentManager {
     /// Allocate a new page safely.
     ///
     /// This moves the logic from `GlobalHeap::allocate_safe_page` to here.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the OS fails to map the requested memory.
     pub fn allocate_page(&mut self, size: usize, boundary: usize) -> (NonNull<u8>, usize) {
         // Mask to hide our own variables from conservative stack scanning (registers)
         const MASK: usize = 0x5555_5555_5555_5555;
@@ -622,7 +626,7 @@ impl LocalHeap {
     }
 
     /// Try to allocate from the free list of an existing page.
-    fn alloc_from_free_list(&mut self, class_index: usize) -> Option<NonNull<u8>> {
+    fn alloc_from_free_list(&self, class_index: usize) -> Option<NonNull<u8>> {
         let block_size = SIZE_CLASSES[class_index];
         for page_ptr in &self.pages {
             unsafe {
@@ -641,7 +645,8 @@ impl LocalHeap {
 
                     // Popping from free list: read the next pointer stored in the slot.
                     // SAFETY: sweep_page (copy_sweep_logic) ensures this is a valid Option<u16>.
-                    let next_head = *obj_ptr.cast::<Option<u16>>();
+                    // We use read_unaligned to avoid potential alignment issues with the cast.
+                    let next_head = obj_ptr.cast::<Option<u16>>().read_unaligned();
                     (*header).free_list_head = next_head;
 
                     // Mark as allocated so it's tracked during sweep
@@ -867,7 +872,7 @@ impl LocalHeap {
     /// If we need specifically large objects, we can check flags.
     /// Or we can keep `large_objects` list if needed for the map management.
     /// Plan said "Remove vector of pages from Segment/Tlab".
-    /// Plan also said "Modify LocalHeap... pages: Vec<NonNull<PageHeader>>".
+    /// Plan also said "Modify `LocalHeap`... pages: Vec<`NonNull`<PageHeader>>".
     /// Let's stick to `self.pages` having everything.
     #[must_use]
     pub fn large_object_pages(&self) -> Vec<NonNull<PageHeader>> {
@@ -1013,11 +1018,13 @@ where
 }
 
 /// Get the minimum address managed by the thread-local heap.
+#[must_use]
 pub fn heap_start() -> usize {
     HEAP.with(|h| h.borrow().min_addr)
 }
 
 /// Get the maximum address managed by the thread-local heap.
+#[must_use]
 pub fn heap_end() -> usize {
     HEAP.with(|h| h.borrow().max_addr)
 }
@@ -1026,6 +1033,7 @@ pub fn heap_end() -> usize {
 ///
 /// # Safety
 /// The pointer must be within a valid GC page.
+#[must_use]
 pub unsafe fn ptr_to_page_header(ptr: *const u8) -> NonNull<PageHeader> {
     let page_addr = (ptr as usize) & PAGE_MASK;
     // SAFETY: Caller guarantees ptr is within a valid GC page.
@@ -1080,7 +1088,6 @@ pub unsafe fn ptr_to_object_index(ptr: *const u8) -> Option<usize> {
 /// # Safety
 ///
 /// The pointer must be valid for reading.
-#[allow(dead_code)]
 #[allow(dead_code)]
 #[must_use]
 pub unsafe fn is_gc_pointer(ptr: *const u8) -> bool {

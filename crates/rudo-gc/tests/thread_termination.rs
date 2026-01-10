@@ -23,11 +23,11 @@ fn test_many_threads_allocation_no_crash() {
 fn test_large_object_thread_death() {
     #[derive(rudo_gc::Trace)]
     struct Big {
-        _data: [u8; 5000],
+        data: [u8; 5000],
     }
 
     let handle = thread::spawn(|| {
-        let _g = Gc::new(Big { _data: [0; 5000] });
+        let _g = Gc::new(Big { data: [0; 5000] });
         // Thread exits, LocalHeap dropped, large object should be unmapped.
     });
     handle.join().unwrap();

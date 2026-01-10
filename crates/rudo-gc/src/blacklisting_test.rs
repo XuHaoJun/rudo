@@ -23,7 +23,7 @@ mod tests {
         // We allocate 4KB + wrapper overhead essentially.
         // Smallest large object is > 2KB.
         // Let's allocate 4096 bytes.
-        let ptr = crate::heap::with_heap(|h| h.alloc::<BigStruct>());
+        let ptr = crate::heap::with_heap(crate::heap::LocalHeap::alloc::<BigStruct>);
 
         // 4. Verification
 
