@@ -12,6 +12,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr::NonNull;
 
+use std::sync::{Mutex, OnceLock};
+
 use sys_alloc::{Mmap, MmapOptions};
 
 // ============================================================================
@@ -191,286 +193,73 @@ impl PageHeader {
 // Segment - Size-class based memory pool
 // ============================================================================
 
-/// A segment manages pages of a specific size class.
+// ============================================================================
+// Tlab - Thread-Local Allocation Buffer
+// ============================================================================
+
+/// A Thread-Local Allocation Buffer (TLAB) for a specific size class.
 ///
-/// Each segment contains multiple pages, all with the same block size.
-/// Allocation uses bump-pointer allocation with free-list fallback.
-pub struct Segment<const BLOCK_SIZE: usize> {
-    /// All pages in this segment.
-    pages: Vec<NonNull<PageHeader>>,
-    /// Page currently being allocated from.
-    current_page: Option<NonNull<PageHeader>>,
-    /// Bump pointer for fast allocation.
-    bump_ptr: *mut u8,
-    /// End of allocatable region in current page.
-    bump_end: *const u8,
+/// This structure tracks the current page being allocated from.
+/// It does NOT own the pages; the `LocalHeap` owns the vector of pages.
+pub struct Tlab {
+    /// Pointer to the next free byte in the current page.
+    pub bump_ptr: *mut u8,
+    /// Pointer to the end of the allocation region in the current page.
+    pub bump_end: *const u8,
+    /// The page currently being used for allocation.
+    pub current_page: Option<NonNull<PageHeader>>,
 }
 
-impl<const BLOCK_SIZE: usize> Segment<BLOCK_SIZE> {
-    /// Create a new empty segment.
+impl Tlab {
+    /// Create a new empty TLAB.
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            pages: Vec::new(),
-            current_page: None,
             bump_ptr: std::ptr::null_mut(),
             bump_end: std::ptr::null(),
+            current_page: None,
         }
     }
 
-    /// Allocate a new page for this segment.
-    /// Allocate a new page for this segment.
-    fn allocate_page(&mut self, quarantined: &mut Vec<Mmap>) -> NonNull<PageHeader> {
-        // Create boundary to filter out our own stack frame
-        let marker = 0;
-        let boundary = std::ptr::addr_of!(marker) as usize;
-        let (ptr, _len) = GlobalHeap::allocate_safe_page(
-            quarantined,
-            crate::heap::PAGE_SIZE,
-            crate::heap::PAGE_SIZE,
-            boundary,
-        );
-
-        // SAFETY: ptr is page-aligned, which is more strict than PageHeader's alignment.
-        // PageHeader contains u64, so it needs 8-byte alignment. PAGE_SIZE is 4096.
-        #[allow(clippy::cast_ptr_alignment)]
-        let header = ptr.cast::<PageHeader>();
-        let obj_count = PageHeader::max_objects(BLOCK_SIZE);
-
-        // SAFETY: We just allocated this memory
-        unsafe {
-            let h_size = PageHeader::header_size(BLOCK_SIZE);
-            header.as_ptr().write(PageHeader {
-                magic: MAGIC_GC_PAGE,
-                #[allow(clippy::cast_possible_truncation)]
-                block_size: BLOCK_SIZE as u32,
-                #[allow(clippy::cast_possible_truncation)]
-                obj_count: obj_count as u16,
-                #[allow(clippy::cast_possible_truncation)]
-                header_size: h_size as u16,
-                generation: 0,
-                flags: 0,
-                _padding: [0; 2],
-                mark_bitmap: [0; 4],
-                dirty_bitmap: [0; 4],
-                allocated_bitmap: [0; 4],
-                free_list_head: None,
-            });
-        }
-
-        // SAFETY: We checked for null above
-        let page_ptr = header; // header is already NonNull
-        self.pages.push(page_ptr);
-
-        // Update range will be done by GlobalHeap
-
-        // Initialize all slots with no-op drop to avoid crashes during sweep
-        // if they are swept before being allocated.
-        let header_size = PageHeader::header_size(BLOCK_SIZE);
-        unsafe {
-            for i in 0..obj_count {
-                let obj_ptr = ptr.as_ptr().add(header_size + (i * BLOCK_SIZE));
-                // We only need to set drop_fn. We can use GcBox<()> for this.
-                // SAFETY: We just allocated this page and it's aligned.
-                #[allow(clippy::cast_ptr_alignment)]
-                let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-                std::ptr::addr_of_mut!((*gc_box_ptr).drop_fn)
-                    .write(crate::ptr::GcBox::<()>::no_op_drop);
-                std::ptr::addr_of_mut!((*gc_box_ptr).trace_fn)
-                    .write(crate::ptr::GcBox::<()>::no_op_trace);
-            }
-        }
-
-        // Set up bump allocation for this page
-        self.current_page = Some(page_ptr);
-        self.bump_ptr = unsafe { ptr.as_ptr().add(header_size) };
-        self.bump_end = unsafe { ptr.as_ptr().add(PAGE_SIZE) };
-
-        page_ptr
-    }
-
-    /// Allocate space for an object.
+    /// Try to allocate from the TLAB (Fast Path).
     ///
-    /// Returns a pointer to uninitialized memory of size `BLOCK_SIZE`.
-    pub fn allocate(&mut self) -> NonNull<u8> {
-        // 1. Try free list of current page
-        if let Some(current) = self.current_page {
+    /// Returns `Some(ptr)` if successful, `None` if the TLAB is exhausted.
+    #[inline(always)]
+    pub fn alloc(&mut self, block_size: usize) -> Option<NonNull<u8>> {
+        let ptr = self.bump_ptr;
+        // Check if we have enough space (simple pointer comparison)
+        // We cast bump_end to mut to allow comparison, strict provenance might prefer otherwise but this is standard.
+        if ptr < self.bump_end.cast_mut() {
+            // SAFETY: ptr is valid and within bounds as checked above
             unsafe {
-                let header = current.as_ptr();
-                if let Some(idx) = (*header).free_list_head {
-                    let header_size = PageHeader::header_size(BLOCK_SIZE);
-                    let ptr = current
-                        .as_ptr()
-                        .cast::<u8>()
-                        .add(header_size + (idx as usize * BLOCK_SIZE));
+                self.bump_ptr = ptr.add(block_size);
 
-                    // Read next index from the memory itself
-                    // SAFETY: The memory at ptr was previously an object or a free slot
-                    #[allow(clippy::cast_ptr_alignment)]
-                    let next_idx = *(ptr.cast::<Option<u16>>());
-                    (*header).free_list_head = next_idx;
-                    (*header).set_allocated(idx as usize);
-
-                    return NonNull::new_unchecked(ptr);
-                }
-            }
-        }
-
-        // 2. Fast path: bump allocation
-        if self.bump_ptr < self.bump_end.cast_mut() {
-            let ptr = self.bump_ptr;
-            // Record allocation in bitmap
-            if let Some(mut current) = self.current_page {
-                unsafe {
-                    let header = current.as_mut();
-                    let header_size = PageHeader::header_size(BLOCK_SIZE);
-                    let offset = ptr as usize - (current.as_ptr() as usize + header_size);
-                    let idx = offset / BLOCK_SIZE;
+                // We need to mark the object as allocated in the bitmap.
+                // This adds a bit of overhead to the fast path.
+                // In true bump-pointer systems, we might defer this or assume all processed objects are allocated.
+                // But for accurate sweeping, we need it.
+                // Optimally, we would do this batch-wise or rely on the fact that TLAB pages are young
+                // and young gen collection just copies/evacuates, so marking 'allocated' might strictly be needed
+                // only if we do mark-sweep on young gen (which we do currently).
+                if let Some(mut page) = self.current_page {
+                    let header = page.as_mut();
+                    let header_size = PageHeader::header_size(block_size);
+                    let page_start = page.as_ptr() as usize;
+                    let offset = ptr as usize - (page_start + header_size);
+                    let idx = offset / block_size;
                     header.set_allocated(idx);
                 }
-            }
-            self.bump_ptr = unsafe { self.bump_ptr.add(BLOCK_SIZE) };
-            // SAFETY: bump_ptr is always valid when less than bump_end
-            return unsafe { NonNull::new_unchecked(ptr) };
-        }
 
-        // 3. Slow path: Search other pages for free slots
-        for &page in &self.pages {
-            unsafe {
-                let header = page.as_ptr();
-                if let Some(idx) = (*header).free_list_head {
-                    // Found a page with a free slot! Make it current.
-                    self.current_page = Some(page);
-                    // Disable bump allocation for this page as it's potentially fragmented
-                    self.bump_ptr = self.bump_end.cast_mut();
-
-                    let header_size = PageHeader::header_size(BLOCK_SIZE);
-                    let ptr = page
-                        .as_ptr()
-                        .cast::<u8>()
-                        .add(header_size + (idx as usize * BLOCK_SIZE));
-
-                    #[allow(clippy::cast_ptr_alignment)]
-                    let next_idx = *(ptr.cast::<Option<u16>>());
-                    (*header).free_list_head = next_idx;
-
-                    return NonNull::new_unchecked(ptr);
-                }
+                return Some(NonNull::new_unchecked(ptr));
             }
         }
-
-        // 4. Ultra-slow path: need a new page
-        // We need access to quarantined list, but we don't have it here directly.
-        // This is a design issue. Segment::allocate is called by GlobalHeap::alloc.
-        // We should change Segment::allocate to take quarantined list.
-        unreachable!("Segment::allocate called without quarantined list access");
-    }
-
-    /// Allocate space for an object (with access to quarantine list).
-    ///
-    /// Returns a pointer to uninitialized memory of size `BLOCK_SIZE`.
-    pub fn allocate_with_quarantine(&mut self, quarantined: &mut Vec<Mmap>) -> NonNull<u8> {
-        // 1. Try free list of current page
-        if let Some(current) = self.current_page {
-            unsafe {
-                let header = current.as_ptr();
-                if let Some(idx) = (*header).free_list_head {
-                    let header_size = PageHeader::header_size(BLOCK_SIZE);
-                    let ptr = current
-                        .as_ptr()
-                        .cast::<u8>()
-                        .add(header_size + (idx as usize * BLOCK_SIZE));
-
-                    // Read next index from the memory itself
-                    // SAFETY: The memory at ptr was previously an object or a free slot
-                    #[allow(clippy::cast_ptr_alignment)]
-                    let next_idx = *(ptr.cast::<Option<u16>>());
-                    (*header).free_list_head = next_idx;
-                    (*header).set_allocated(idx as usize);
-
-                    return NonNull::new_unchecked(ptr);
-                }
-            }
-        }
-
-        // 2. Fast path: bump allocation
-        if self.bump_ptr < self.bump_end.cast_mut() {
-            let ptr = self.bump_ptr;
-            // Record allocation in bitmap
-            if let Some(mut current) = self.current_page {
-                unsafe {
-                    let header = current.as_mut();
-                    let header_size = PageHeader::header_size(BLOCK_SIZE);
-                    let offset = ptr as usize - (current.as_ptr() as usize + header_size);
-                    let idx = offset / BLOCK_SIZE;
-                    header.set_allocated(idx);
-                }
-            }
-            self.bump_ptr = unsafe { self.bump_ptr.add(BLOCK_SIZE) };
-            // SAFETY: bump_ptr is always valid when less than bump_end
-            return unsafe { NonNull::new_unchecked(ptr) };
-        }
-
-        // 3. Slow path: Search other pages for free slots
-        for &page in &self.pages {
-            unsafe {
-                let header = page.as_ptr();
-                if let Some(idx) = (*header).free_list_head {
-                    // Found a page with a free slot! Make it current.
-                    self.current_page = Some(page);
-                    // Disable bump allocation for this page as it's potentially fragmented
-                    self.bump_ptr = self.bump_end.cast_mut();
-
-                    let header_size = PageHeader::header_size(BLOCK_SIZE);
-                    let ptr = page
-                        .as_ptr()
-                        .cast::<u8>()
-                        .add(header_size + (idx as usize * BLOCK_SIZE));
-
-                    #[allow(clippy::cast_ptr_alignment)]
-                    let next_idx = *(ptr.cast::<Option<u16>>());
-                    (*header).free_list_head = next_idx;
-
-                    return NonNull::new_unchecked(ptr);
-                }
-            }
-        }
-
-        // 4. Ultra-slow path: need a new page
-        self.allocate_page(quarantined);
-        self.allocate_with_quarantine(quarantined)
-    }
-
-    /// Get all pages in this segment.
-    #[must_use]
-    pub fn pages(&self) -> &[NonNull<PageHeader>] {
-        &self.pages
-    }
-
-    /// Get all pages mutably.
-    #[allow(dead_code)]
-    #[must_use]
-    pub const fn pages_mut(&mut self) -> &mut Vec<NonNull<PageHeader>> {
-        &mut self.pages
+        None
     }
 }
 
-impl<const BLOCK_SIZE: usize> Default for Segment<BLOCK_SIZE> {
+impl Default for Tlab {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl<const BLOCK_SIZE: usize> Drop for Segment<BLOCK_SIZE> {
-    fn drop(&mut self) {
-        for page in &self.pages {
-            // SAFETY: Pages were allocated with sys_alloc::Mmap
-            unsafe {
-                // We reconstruct the Mmap to drop it properly
-                // Since this is standard page size
-                let _ = Mmap::from_raw(page.as_ptr().cast(), PAGE_SIZE);
-            }
-        }
     }
 }
 
@@ -539,338 +328,48 @@ const fn compute_class_index(size: usize) -> usize {
 }
 
 // ============================================================================
-// GlobalHeap - Central memory manager
+// GlobalSegmentManager - Shared memory manager
 // ============================================================================
 
-/// Central memory manager coordinating all segments.
-pub struct GlobalHeap {
-    /// One segment per size class.
-    segment_16: Segment<16>,
-    segment_32: Segment<32>,
-    segment_64: Segment<64>,
-    segment_128: Segment<128>,
-    segment_256: Segment<256>,
-    segment_512: Segment<512>,
-    segment_1024: Segment<1024>,
-    segment_2048: Segment<2048>,
-    /// Pages for objects larger than 2KB.
-    large_objects: Vec<NonNull<PageHeader>>,
-    /// Map from page address to its corresponding large object head, size, and `header_size`.
-    /// This enables interior pointer support for multi-page large objects.
-    pub large_object_map: HashMap<usize, (usize, usize, usize)>,
-    /// Total bytes allocated in young generation.
-    young_allocated: usize,
-    /// Total bytes allocated in old generation.
-    old_allocated: usize,
-    /// Minimum address managed by this heap.
-    min_addr: usize,
-    /// Maximum address managed by this heap.
-    max_addr: usize,
-    /// Quarantine list for pages that were allocated but rejected due to stack conflict.
-    /// We keep them alive here so we don't return them to OS immediately (costly)
-    /// and they stay "occupied" so next mmap won't return same bad address immediately.
+/// Shared memory manager coordinating all pages.
+pub struct GlobalSegmentManager {
+    /// Pages that are free and can be handed out to threads.
+    /// For now, we don't maintain a free list of pages, we just allocate fresh ones.
+    /// This is where we would put pages returned by thread termination or GC.
+    #[allow(dead_code)]
+    free_pages: Vec<NonNull<PageHeader>>,
+
+    /// Quarantined pages (bad stack conflict).
     quarantined: Vec<Mmap>,
+
+    /// Large object tracking map.
+    /// Map from page address to its corresponding large object head, size, and `header_size`.
+    pub large_object_map: HashMap<usize, (usize, usize, usize)>,
 }
 
-impl GlobalHeap {
-    /// Create a new empty heap.
+/// Global singleton for the segment manager.
+static SEGMENT_MANAGER: OnceLock<Mutex<GlobalSegmentManager>> = OnceLock::new();
+
+/// Access the global segment manager.
+pub fn segment_manager() -> &'static Mutex<GlobalSegmentManager> {
+    SEGMENT_MANAGER.get_or_init(|| Mutex::new(GlobalSegmentManager::new()))
+}
+
+impl GlobalSegmentManager {
+    /// Create a new segment manager.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            segment_16: Segment::new(),
-            segment_32: Segment::new(),
-            segment_64: Segment::new(),
-            segment_128: Segment::new(),
-            segment_256: Segment::new(),
-            segment_512: Segment::new(),
-            segment_1024: Segment::new(),
-            segment_2048: Segment::new(),
-            large_objects: Vec::new(),
-            large_object_map: HashMap::new(),
-            young_allocated: 0,
-            old_allocated: 0,
-            min_addr: usize::MAX,
-            max_addr: 0,
+            free_pages: Vec::new(),
             quarantined: Vec::new(),
+            large_object_map: HashMap::new(),
         }
     }
 
-    /// Update the address range of the heap.
-    const fn update_range(&mut self, addr: usize, size: usize) {
-        if addr < self.min_addr {
-            self.min_addr = addr;
-        }
-        if addr + size > self.max_addr {
-            self.max_addr = addr + size;
-        }
-    }
-
-    /// Deallocate memory Pages (Mmap).
+    /// Allocate a new page safely.
     ///
-    /// # Safety
-    ///
-    /// The pointer and length must correspond to a previous allocation from `allocate_safe_page`.
-    pub(crate) unsafe fn deallocate_pages(ptr: NonNull<u8>, len: usize) {
-        let mmap = unsafe { sys_alloc::Mmap::from_raw(ptr.as_ptr(), len) };
-        drop(mmap);
-    }
-
-    /// Check if an address is within the heap's range.
-    #[must_use]
-    pub const fn is_in_range(&self, addr: usize) -> bool {
-        addr >= self.min_addr && addr < self.max_addr
-    }
-
-    /// Allocate space for a value of type T.
-    ///
-    /// Returns a pointer to uninitialized memory.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the type's alignment exceeds the size class alignment.
-    /// This should be extremely rare in practice since size classes are
-    /// powers of two starting at 16.
-    pub fn alloc<T>(&mut self) -> NonNull<u8> {
-        let size = std::mem::size_of::<T>();
-        let align = std::mem::align_of::<T>();
-        // All new allocations start in young generation
-        self.young_allocated += size;
-
-        if size > MAX_SMALL_OBJECT_SIZE {
-            return self.alloc_large(size, align);
-        }
-
-        // Validate alignment - size class must satisfy alignment requirement
-        let size_class = compute_size_class(size);
-        assert!(
-            size_class >= align,
-            "Type alignment ({align}) exceeds size class ({size_class}). \
-             Consider using a larger wrapper type."
-        );
-
-        let ptr = match compute_class_index(size) {
-            0 => self
-                .segment_16
-                .allocate_with_quarantine(&mut self.quarantined),
-            1 => self
-                .segment_32
-                .allocate_with_quarantine(&mut self.quarantined),
-            2 => self
-                .segment_64
-                .allocate_with_quarantine(&mut self.quarantined),
-            3 => self
-                .segment_128
-                .allocate_with_quarantine(&mut self.quarantined),
-            4 => self
-                .segment_256
-                .allocate_with_quarantine(&mut self.quarantined),
-            5 => self
-                .segment_512
-                .allocate_with_quarantine(&mut self.quarantined),
-            6 => self
-                .segment_1024
-                .allocate_with_quarantine(&mut self.quarantined),
-            _ => self
-                .segment_2048
-                .allocate_with_quarantine(&mut self.quarantined),
-        };
-
-        // Update heap range for conservative scanning
-        self.update_range(ptr.as_ptr() as usize & PAGE_MASK, PAGE_SIZE);
-
-        ptr
-    }
-
-    /// Allocate a large object (> 2KB).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the alignment requirement exceeds `PAGE_SIZE`.
-    fn alloc_large(&mut self, size: usize, align: usize) -> NonNull<u8> {
-        // Validate alignment - page alignment (4096) should satisfy most types
-        assert!(
-            PAGE_SIZE >= align,
-            "Type alignment ({align}) exceeds page size ({PAGE_SIZE}). \
-             Such extreme alignment requirements are not supported."
-        );
-
-        // For large objects, allocate dedicated pages
-        // The header must be followed by padding to satisfy the object's alignment.
-        let base_h_size = PageHeader::header_size(size);
-        let h_size = (base_h_size + align - 1) & !(align - 1);
-        let total_size = h_size + size;
-        let pages_needed = total_size.div_ceil(PAGE_SIZE);
-        let alloc_size = pages_needed * PAGE_SIZE;
-
-        // Use safe allocation logic
-        // Create boundary to filter out our own stack frame
-        let marker = 0;
-        let boundary = std::ptr::addr_of!(marker) as usize;
-        let (ptr, _) =
-            Self::allocate_safe_page(&mut self.quarantined, alloc_size, PAGE_SIZE, boundary);
-
-        // ptr is NonNull<u8> already check for null logic inside allocate_safe_page
-
-        // SAFETY: ptr is page-aligned, which is more strict than PageHeader's alignment.
-        #[allow(clippy::cast_ptr_alignment)]
-        let header = ptr.cast::<PageHeader>();
-        // SAFETY: We just allocated this memory
-        unsafe {
-            header.as_ptr().write(PageHeader {
-                magic: MAGIC_GC_PAGE,
-                #[allow(clippy::cast_possible_truncation)]
-                block_size: size as u32, // Store actual size for large objects (now u32)
-                obj_count: 1,
-                #[allow(clippy::cast_possible_truncation)]
-                header_size: h_size as u16,
-                generation: 0,
-                flags: 0x01, // Mark as large object
-                _padding: [0; 2],
-                mark_bitmap: [0; 4],
-                dirty_bitmap: [0; 4],
-                allocated_bitmap: [0; 4],
-                free_list_head: None,
-            });
-            // Mark the single object as allocated
-            (*header.as_ptr()).set_allocated(0);
-        }
-
-        let page_ptr = header; // header is NonNull
-        self.large_objects.push(page_ptr);
-
-        // Register all pages of this large object in the map for interior pointer support.
-        // This allows find_gc_box_from_ptr to find the head GcBox from any interior pointer.
-        let header_addr = header.as_ptr() as usize;
-        for p in 0..pages_needed {
-            let page_addr = header_addr + (p * PAGE_SIZE);
-            self.large_object_map
-                .insert(page_addr, (header_addr, size, h_size));
-        }
-
-        // Update heap range for conservative scanning
-        self.update_range(header_addr, alloc_size);
-
-        let gc_box_ptr = unsafe { ptr.as_ptr().add(h_size) };
-        unsafe { NonNull::new_unchecked(gc_box_ptr) }
-    }
-
-    /// Get total bytes allocated.
-    #[must_use]
-    pub const fn total_allocated(&self) -> usize {
-        self.young_allocated + self.old_allocated
-    }
-
-    /// Get bytes allocated in young generation.
-    #[must_use]
-    pub const fn young_allocated(&self) -> usize {
-        self.young_allocated
-    }
-
-    /// Get bytes allocated in old generation.
-    #[must_use]
-    pub const fn old_allocated(&self) -> usize {
-        self.old_allocated
-    }
-
-    /// Update allocation counters given a change in young/old bytes.
-    /// This is used by the collector during promotion and sweeping.
-    pub const fn update_allocated_bytes(&mut self, young: usize, old: usize) {
-        self.young_allocated = young;
-        self.old_allocated = old;
-    }
-
-    /// Iterate over all pages in all segments.
-    pub fn all_pages(&self) -> impl Iterator<Item = NonNull<PageHeader>> + '_ {
-        self.segment_16
-            .pages()
-            .iter()
-            .copied()
-            .chain(self.segment_32.pages().iter().copied())
-            .chain(self.segment_64.pages().iter().copied())
-            .chain(self.segment_128.pages().iter().copied())
-            .chain(self.segment_256.pages().iter().copied())
-            .chain(self.segment_512.pages().iter().copied())
-            .chain(self.segment_1024.pages().iter().copied())
-            .chain(self.segment_2048.pages().iter().copied())
-            .chain(self.large_objects.iter().copied())
-    }
-
-    /// Get large object pages.
-    #[must_use]
-    pub fn large_object_pages(&self) -> &[NonNull<PageHeader>] {
-        &self.large_objects
-    }
-
-    /// Get mutable access to large object pages (for sweep phase).
-    #[allow(dead_code)]
-    pub const fn large_object_pages_mut(&mut self) -> &mut Vec<NonNull<PageHeader>> {
-        &mut self.large_objects
-    }
-
-    /// Get the size class index for a type.
-    ///
-    /// This is useful for debugging and verifying `BiBOP` routing.
-    ///
-    /// # Returns
-    ///
-    /// - `Some(index)` - Size class index (0-7) for small objects
-    /// - `None` - Type is a large object (> 2KB)
-    #[must_use]
-    #[allow(dead_code)]
-    pub const fn size_class_for<T>() -> Option<usize> {
-        let size = std::mem::size_of::<T>();
-        if size > MAX_SMALL_OBJECT_SIZE {
-            None
-        } else {
-            Some(compute_class_index(size))
-        }
-    }
-
-    /// Get the segment index and size class name for debugging.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use rudo_gc::heap::GlobalHeap;
-    ///
-    /// let (class, name) = GlobalHeap::debug_size_class::<u64>();
-    /// assert_eq!(name, "16-byte");
-    /// ```
-    #[must_use]
-    #[allow(dead_code)]
-    pub const fn debug_size_class<T>() -> (usize, &'static str) {
-        let size = std::mem::size_of::<T>();
-        let class = compute_size_class(size);
-        let name = match class {
-            16 => "16-byte",
-            32 => "32-byte",
-            64 => "64-byte",
-            128 => "128-byte",
-            256 => "256-byte",
-            512 => "512-byte",
-            1024 => "1024-byte",
-            2048 => "2048-byte",
-            _ => "large-object",
-        };
-        (class, name)
-    }
-    /// Allocate a new page (or pages) from OS with stack scanning protection.
-    ///
-    /// # `check_stack_conflict`
-    ///
-    /// This function performs "Pre-allocation Blacklisting".
-    /// It ensures that the allocated memory region does not have any corresponding
-    /// values on the current thread's stack, which could interpret the new memory
-    /// as a valid object reference (False Root).
-    ///
-    /// If a conflict is found, the page is "quarantined" and a new one is requested.
-    #[inline(never)]
-    fn allocate_safe_page(
-        quarantined: &mut Vec<Mmap>,
-        size: usize,
-        _align: usize,
-        boundary: usize,
-    ) -> (NonNull<u8>, usize) {
+    /// This moves the logic from `GlobalHeap::allocate_safe_page` to here.
+    pub fn allocate_page(&mut self, size: usize, boundary: usize) -> (NonNull<u8>, usize) {
         // Mask to hide our own variables from conservative stack scanning (registers)
         const MASK: usize = 0x5555_5555_5555_5555;
 
@@ -899,7 +398,7 @@ impl GlobalHeap {
             // 3. Handle conflict
             if conflict_found {
                 // Quarantine this page.
-                quarantined.push(*mmap);
+                self.quarantined.push(*mmap);
                 continue;
             }
 
@@ -947,7 +446,450 @@ impl GlobalHeap {
     }
 }
 
-impl Default for GlobalHeap {
+// SAFETY: GlobalSegmentManager owns the pointers and Mmaps.
+// Access is synchronized via the Mutex wrapper.
+unsafe impl Send for GlobalSegmentManager {}
+unsafe impl Sync for GlobalSegmentManager {}
+
+impl Default for GlobalSegmentManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// LocalHeap - Thread-Local memory manager
+// ============================================================================
+
+/// Thread-local memory manager.
+///
+/// Handles allocation requests from the thread, using TLABs for speed
+/// and getting new pages from the `GlobalSegmentManager`.
+pub struct LocalHeap {
+    /// TLABs for each small size class.
+    tlab_16: Tlab,
+    tlab_32: Tlab,
+    tlab_64: Tlab,
+    tlab_128: Tlab,
+    tlab_256: Tlab,
+    tlab_512: Tlab,
+    tlab_1024: Tlab,
+    tlab_2048: Tlab,
+
+    /// All pages owned by this heap (small and large).
+    /// Used for sweeping.
+    pub pages: Vec<NonNull<PageHeader>>,
+
+    /// Pages for objects larger than 2KB (kept separate for some logic?).
+    /// Actually, let's keep `pages` as the unified list for simple sweeping.
+    /// But we might want `large_object_pages` ref for specific logic.
+    /// Original code had `large_objects` separate.
+    /// Let's merge them into `pages` for simplicity, OR keep separate if needed.
+    /// Current `sweep` logic iterates all segments then large objects.
+    /// Merging them is better for simple iteration.
+    /// But large objects have different headers... wait, no, same header structure, distinct flag.
+    /// So unified list is fine.
+
+    // We retain `large_objects` separately if we want to quickly identify them without checking flags?
+    // Nah, flag check is fast.
+
+    /// Map from page address to its corresponding large object head.
+    /// Still useful for interior pointers.
+    pub large_object_map: HashMap<usize, (usize, usize, usize)>,
+
+    // Stats
+    young_allocated: usize,
+    old_allocated: usize,
+    min_addr: usize,
+    max_addr: usize,
+    // Quarantined pages (thread-local cache before pushing to global?)
+    // Actually GlobalSegmentManager handles this now.
+    // We might keep this if we want to avoid lock contention on "discarding" bad pages?
+    // But `allocate_page` is now on Manager.
+    // So LocalHeap doesn't strictly need this unless we pass it to Manager to avoid re-locking?
+    // Manager has its own.
+    // We can remove it from here.
+}
+
+impl LocalHeap {
+    /// Create a new empty heap.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            tlab_16: Tlab::new(),
+            tlab_32: Tlab::new(),
+            tlab_64: Tlab::new(),
+            tlab_128: Tlab::new(),
+            tlab_256: Tlab::new(),
+            tlab_512: Tlab::new(),
+            tlab_1024: Tlab::new(),
+            tlab_2048: Tlab::new(),
+            pages: Vec::new(),
+            large_object_map: HashMap::new(),
+            young_allocated: 0,
+            old_allocated: 0,
+            min_addr: usize::MAX,
+            max_addr: 0,
+        }
+    }
+
+    /// Update the address range of the heap.
+    const fn update_range(&mut self, addr: usize, size: usize) {
+        if addr < self.min_addr {
+            self.min_addr = addr;
+        }
+        if addr + size > self.max_addr {
+            self.max_addr = addr + size;
+        }
+    }
+
+    // deallocate_pages removed as it is unused (using Mmap directly in gc.rs)
+    /// Check if an address is within the heap's range.
+    #[must_use]
+    pub const fn is_in_range(&self, addr: usize) -> bool {
+        addr >= self.min_addr && addr < self.max_addr
+    }
+
+    /// Allocate space for a value of type T.
+    ///
+    /// Returns a pointer to uninitialized memory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the type's alignment exceeds the size class alignment.
+    /// This should be extremely rare in practice since size classes are
+    /// powers of two starting at 16.
+    pub fn alloc<T>(&mut self) -> NonNull<u8> {
+        let size = std::mem::size_of::<T>();
+        let align = std::mem::align_of::<T>();
+        // All new allocations start in young generation
+        self.young_allocated += size;
+
+        if size > MAX_SMALL_OBJECT_SIZE {
+            return self.alloc_large(size, align);
+        }
+
+        // Validate alignment - size class must satisfy alignment requirement
+        let size_class = compute_size_class(size);
+        assert!(
+            size_class >= align,
+            "Type alignment ({align}) exceeds size class ({size_class}). \
+             Consider using a larger wrapper type."
+        );
+
+        // Try TLAB allocation
+        let ptr_opt = match compute_class_index(size) {
+            0 => self.tlab_16.alloc(16),
+            1 => self.tlab_32.alloc(32),
+            2 => self.tlab_64.alloc(64),
+            3 => self.tlab_128.alloc(128),
+            4 => self.tlab_256.alloc(256),
+            5 => self.tlab_512.alloc(512),
+            6 => self.tlab_1024.alloc(1024),
+            _ => self.tlab_2048.alloc(2048),
+        };
+
+        if let Some(ptr) = ptr_opt {
+            // Update heap range for conservative scanning
+            self.update_range(ptr.as_ptr() as usize & PAGE_MASK, PAGE_SIZE);
+            return ptr;
+        }
+
+        // Slow path: Refill TLAB and retry
+        let ptr = self.alloc_slow(size, compute_class_index(size));
+
+        self.update_range(ptr.as_ptr() as usize & PAGE_MASK, PAGE_SIZE);
+        ptr
+    }
+
+    #[inline(never)]
+    fn alloc_slow(&mut self, size: usize, class_index: usize) -> NonNull<u8> {
+        let block_size = match class_index {
+            0 => 16,
+            1 => 32,
+            2 => 64,
+            3 => 128,
+            4 => 256,
+            5 => 512,
+            6 => 1024,
+            _ => 2048,
+        };
+
+        // 1. Request new page from global manager
+        // Create boundary to filter out our own stack frame
+        let marker = 0;
+        let boundary = std::ptr::addr_of!(marker) as usize;
+
+        let (ptr, _) = segment_manager()
+            .lock()
+            .unwrap()
+            .allocate_page(crate::heap::PAGE_SIZE, boundary);
+
+        // 2. Initialize Page Header
+        // SAFETY: ptr is page-aligned
+        #[allow(clippy::cast_ptr_alignment)]
+        let header = ptr.cast::<PageHeader>();
+        let obj_count = PageHeader::max_objects(block_size);
+        let h_size = PageHeader::header_size(block_size);
+
+        unsafe {
+            header.as_ptr().write(PageHeader {
+                magic: MAGIC_GC_PAGE,
+                #[allow(clippy::cast_possible_truncation)]
+                block_size: block_size as u32,
+                #[allow(clippy::cast_possible_truncation)]
+                obj_count: obj_count as u16,
+                #[allow(clippy::cast_possible_truncation)]
+                header_size: h_size as u16,
+                generation: 0,
+                flags: 0,
+                _padding: [0; 2],
+                mark_bitmap: [0; 4],
+                dirty_bitmap: [0; 4],
+                allocated_bitmap: [0; 4],
+                free_list_head: None,
+            });
+
+            // Initialize all slots with no-op drop
+            for i in 0..obj_count {
+                let obj_ptr = ptr.as_ptr().add(h_size + (i * block_size));
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                std::ptr::addr_of_mut!((*gc_box_ptr).drop_fn)
+                    .write(crate::ptr::GcBox::<()>::no_op_drop);
+                std::ptr::addr_of_mut!((*gc_box_ptr).trace_fn)
+                    .write(crate::ptr::GcBox::<()>::no_op_trace);
+            }
+        }
+
+        // 3. Update LocalHeap pages list
+        self.pages.push(header);
+
+        // 4. Update Tlab
+        let tlab = match class_index {
+            0 => &mut self.tlab_16,
+            1 => &mut self.tlab_32,
+            2 => &mut self.tlab_64,
+            3 => &mut self.tlab_128,
+            4 => &mut self.tlab_256,
+            5 => &mut self.tlab_512,
+            6 => &mut self.tlab_1024,
+            _ => &mut self.tlab_2048,
+        };
+
+        tlab.current_page = Some(header);
+        unsafe {
+            tlab.bump_ptr = ptr.as_ptr().add(h_size);
+            tlab.bump_end = ptr.as_ptr().add(PAGE_SIZE);
+        }
+
+        // 5. Retry allocation (guaranteed to succeed now)
+        tlab.alloc(block_size).unwrap()
+    }
+
+    /// Allocate a large object (> 2KB).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the alignment requirement exceeds `PAGE_SIZE`.
+    fn alloc_large(&mut self, size: usize, align: usize) -> NonNull<u8> {
+        // Validate alignment - page alignment (4096) should satisfy most types
+        assert!(
+            PAGE_SIZE >= align,
+            "Type alignment ({align}) exceeds page size ({PAGE_SIZE}). \
+             Such extreme alignment requirements are not supported."
+        );
+
+        // For large objects, allocate dedicated pages
+        // The header must be followed by padding to satisfy the object's alignment.
+        let base_h_size = PageHeader::header_size(size);
+        let h_size = (base_h_size + align - 1) & !(align - 1);
+        let total_size = h_size + size;
+        let pages_needed = total_size.div_ceil(PAGE_SIZE);
+        let alloc_size = pages_needed * PAGE_SIZE;
+
+        // Use safe allocation logic
+        // Create boundary to filter out our own stack frame
+        let marker = 0;
+        let boundary = std::ptr::addr_of!(marker) as usize;
+        let (ptr, _) = segment_manager()
+            .lock()
+            .unwrap()
+            .allocate_page(alloc_size, boundary);
+
+        // ptr is NonNull<u8> already check for null logic inside allocate_safe_page
+
+        // SAFETY: ptr is page-aligned, which is more strict than PageHeader's alignment.
+        #[allow(clippy::cast_ptr_alignment)]
+        let header = ptr.cast::<PageHeader>();
+        // SAFETY: We just allocated this memory
+        unsafe {
+            header.as_ptr().write(PageHeader {
+                magic: MAGIC_GC_PAGE,
+                #[allow(clippy::cast_possible_truncation)]
+                block_size: size as u32, // Store actual size for large objects (now u32)
+                obj_count: 1,
+                #[allow(clippy::cast_possible_truncation)]
+                header_size: h_size as u16,
+                generation: 0,
+                flags: 0x01, // Mark as large object
+                _padding: [0; 2],
+                mark_bitmap: [0; 4],
+                dirty_bitmap: [0; 4],
+                allocated_bitmap: [0; 4],
+                free_list_head: None,
+            });
+            // Mark the single object as allocated
+            (*header.as_ptr()).set_allocated(0);
+        }
+
+        let page_ptr = header; // header is NonNull
+        self.pages.push(page_ptr); // Push to unified pages list
+
+        // Register all pages of this large object in the map for interior pointer support.
+        // This allows find_gc_box_from_ptr to find the head GcBox from any interior pointer.
+        // We register this in BOTH local and global map for now?
+        // Actually, interior pointers need to be found from ANY thread potentially...
+        // But conservative stack scanning is usually thread-local stacks finding objects.
+        // If one thread scans stack and finds ptr to object alloc'd by another thread,
+        // it needs the global map if that object spans multiple pages.
+        // For Phase 1, large_object_map is duplicated or split responsibility.
+        // Let's Register in LOCAL map for now as GlobalHeap still exists.
+        // GlobalSegmentManager also has a map, maybe we should register there too?
+        // For strict TLAB, large objects are often alloc'd directly from Global.
+        // Let's verify: GlobalSegmentManager has `large_object_map`.
+        // We should probably optimize this later, but for parity:
+        let header_addr = header.as_ptr() as usize;
+        for p in 0..pages_needed {
+            let page_addr = header_addr + (p * PAGE_SIZE);
+            self.large_object_map
+                .insert(page_addr, (header_addr, size, h_size));
+            // Register in global manager too?
+            segment_manager()
+                .lock()
+                .unwrap()
+                .large_object_map
+                .insert(page_addr, (header_addr, size, h_size));
+        }
+
+        // Update heap range for conservative scanning
+        self.update_range(header_addr, alloc_size);
+
+        let gc_box_ptr = unsafe { ptr.as_ptr().add(h_size) };
+        unsafe { NonNull::new_unchecked(gc_box_ptr) }
+    }
+
+    /// Get total bytes allocated.
+    #[must_use]
+    pub const fn total_allocated(&self) -> usize {
+        self.young_allocated + self.old_allocated
+    }
+
+    /// Get bytes allocated in young generation.
+    #[must_use]
+    pub const fn young_allocated(&self) -> usize {
+        self.young_allocated
+    }
+
+    /// Get bytes allocated in old generation.
+    #[must_use]
+    pub const fn old_allocated(&self) -> usize {
+        self.old_allocated
+    }
+
+    /// Update allocation counters given a change in young/old bytes.
+    /// This is used by the collector during promotion and sweeping.
+    pub const fn update_allocated_bytes(&mut self, young: usize, old: usize) {
+        self.young_allocated = young;
+        self.old_allocated = old;
+    }
+
+    /// Iterate over all pages.
+    pub fn all_pages(&self) -> impl Iterator<Item = NonNull<PageHeader>> + '_ {
+        self.pages.iter().copied()
+    }
+
+    /// Get large object pages (now just filtered from all pages, or tracked if we want).
+    /// If we need specifically large objects, we can check flags.
+    /// Or we can keep `large_objects` list if needed for the map management.
+    /// Plan said "Remove vector of pages from Segment/Tlab".
+    /// Plan also said "Modify LocalHeap... pages: Vec<NonNull<PageHeader>>".
+    /// Let's stick to `self.pages` having everything.
+    #[must_use]
+    pub fn large_object_pages(&self) -> Vec<NonNull<PageHeader>> {
+        self.pages
+            .iter()
+            .filter(|p| unsafe { (p.as_ptr().read().flags & 0x01) != 0 })
+            .copied()
+            .collect()
+    }
+
+    /// Get mutable access to large object pages (for sweep phase).
+    /// This signature is tricky if we don't have a separate vec.
+    /// But sweep functions in `gc.rs` usually iterate.
+    /// Let's leave this but maybe change return type or deprecate it.
+    /// Actually, `gc.rs` uses `heap.large_object_pages()`.
+    /// We should probably update `gc.rs` to just use `all_pages` and check flags internally?
+    /// Or just return a new Vec as above.
+    #[allow(dead_code)]
+    pub fn large_object_pages_mut(&mut self) -> Vec<NonNull<PageHeader>> {
+        self.pages
+            .iter()
+            .filter(|p| unsafe { (p.as_ptr().read().flags & 0x01) != 0 })
+            .copied()
+            .collect()
+    }
+
+    /// Get the size class index for a type.
+    ///
+    /// This is useful for debugging and verifying `BiBOP` routing.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(index)` - Size class index (0-7) for small objects
+    /// - `None` - Type is a large object (> 2KB)
+    #[must_use]
+    #[allow(dead_code)]
+    pub const fn size_class_for<T>() -> Option<usize> {
+        let size = std::mem::size_of::<T>();
+        if size > MAX_SMALL_OBJECT_SIZE {
+            None
+        } else {
+            Some(compute_class_index(size))
+        }
+    }
+
+    /// Get the segment index and size class name for debugging.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use rudo_gc::heap::LocalHeap;
+    ///
+    /// let (class, name) = LocalHeap::debug_size_class::<u64>();
+    /// assert_eq!(name, "16-byte");
+    /// ```
+    #[must_use]
+    #[allow(dead_code)]
+    pub const fn debug_size_class<T>() -> (usize, &'static str) {
+        let size = std::mem::size_of::<T>();
+        let class = compute_size_class(size);
+        let name = match class {
+            16 => "16-byte",
+            32 => "32-byte",
+            64 => "64-byte",
+            128 => "128-byte",
+            256 => "256-byte",
+            512 => "512-byte",
+            1024 => "1024-byte",
+            2048 => "2048-byte",
+            _ => "large-object",
+        };
+        (class, name)
+    }
+}
+
+impl Default for LocalHeap {
     fn default() -> Self {
         Self::new()
     }
@@ -959,110 +901,55 @@ impl Default for GlobalHeap {
 
 thread_local! {
     /// Thread-local heap instance.
-    pub static HEAP: RefCell<GlobalHeap> = RefCell::new(GlobalHeap::new());
+    pub static HEAP: RefCell<LocalHeap> = RefCell::new(LocalHeap::new());
 }
 
 /// Execute a function with access to the thread-local heap.
 pub fn with_heap<F, R>(f: F) -> R
 where
-    F: FnOnce(&mut GlobalHeap) -> R,
+    F: FnOnce(&mut LocalHeap) -> R,
 {
     HEAP.with(|heap| f(&mut heap.borrow_mut()))
 }
 
-// ============================================================================
-// Pointer utilities for BiBOP
-// ============================================================================
-
-/// Get the page header for a pointer.
-///
-/// # Safety
-///
-/// The pointer must point to memory within a valid GC page.
-#[allow(dead_code)]
-#[must_use]
-pub unsafe fn ptr_to_page_header(ptr: *const u8) -> *mut PageHeader {
-    let addr = ptr as usize;
-    let page_addr = addr & PAGE_MASK;
-
-    // Provenance Rescue for Miri:
-    // Pointers derived from stack references (like &self) often have provenance restricted
-    // to just that field. To access the page header (which is outside that field),
-    // we must use a pointer that originally had provenance for the entire page.
-    // We get one from the global heap.
-    #[cfg(miri)]
-    {
-        // Try to find the page in the thread-local heap.
-        // If we can't find it (e.g. during early init), we fall back.
-        let found = HEAP.with(|heap| {
-            if let Ok(h) = heap.try_borrow() {
-                // 1. Check small object segments
-                for p in h.all_pages() {
-                    if p.as_ptr() as usize == page_addr {
-                        return Some(p.as_ptr());
-                    }
-                }
-                // 2. Check large object map (handles multi-page objects)
-                if let Some(&(head_addr, _, _)) = h.large_object_map.get(&page_addr) {
-                    let head_ptr = head_addr as *mut PageHeader;
-                    let offset = page_addr - head_addr;
-                    // Derive from head_ptr to preserve provenance for the whole large object
-                    #[allow(clippy::cast_ptr_alignment)]
-                    return Some(unsafe { head_ptr.cast::<u8>().add(offset).cast::<PageHeader>() });
-                }
-                None
-            } else {
-                None
-            }
-        });
-        if let Some(p) = found {
-            return p;
-        }
-    }
-
-    // Use the pointer itself to derive the header to preserve provenance (if broad enough)
-    #[allow(clippy::cast_ptr_alignment)]
-    ptr.wrapping_add(page_addr.wrapping_sub(addr))
-        .cast_mut()
-        .cast::<PageHeader>()
+/// Get the minimum address managed by the thread-local heap.
+pub fn heap_start() -> usize {
+    HEAP.with(|h| h.borrow().min_addr)
 }
 
-/// Validate that a pointer is within a GC-managed page.
-///
-/// # Safety
-///
-/// The pointer must be valid for reading.
-#[allow(dead_code)]
-#[must_use]
-pub unsafe fn is_gc_pointer(ptr: *const u8) -> bool {
-    // SAFETY: Caller guarantees ptr is valid
-    unsafe {
-        let header = ptr_to_page_header(ptr);
-        if header.is_null() {
-            return false;
-        }
-        (*header).magic == MAGIC_GC_PAGE
-    }
+/// Get the maximum address managed by the thread-local heap.
+pub fn heap_end() -> usize {
+    HEAP.with(|h| h.borrow().max_addr)
 }
 
-/// Get the object index for a pointer within a page.
+/// Convert a pointer to its page header.
 ///
 /// # Safety
+/// The pointer must be within a valid GC page.
+pub unsafe fn ptr_to_page_header(ptr: *const u8) -> NonNull<PageHeader> {
+    let page_addr = (ptr as usize) & PAGE_MASK;
+    NonNull::new_unchecked(page_addr as *mut PageHeader)
+}
+
+// 2-arg ptr_to_object_index removed
+
+/// Calculate the object index for a pointer within a page.
 ///
-/// The pointer must point to memory within a valid GC page.
+/// # Safety
+/// The pointer must be valid and point within a GC page.
 #[allow(dead_code)]
 #[must_use]
 pub unsafe fn ptr_to_object_index(ptr: *const u8) -> Option<usize> {
-    // SAFETY: Caller guarantees ptr is valid and within a GC page
+    // SAFETY: Caller guarantees ptr is valid
     unsafe {
         let header = ptr_to_page_header(ptr);
-        if (*header).magic != MAGIC_GC_PAGE {
+        if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
             return None;
         }
 
-        let block_size = (*header).block_size as usize;
+        let block_size = (*header.as_ptr()).block_size as usize;
         let header_size = PageHeader::header_size(block_size);
-        let page_addr = header as usize;
+        let page_addr = header.as_ptr() as usize;
         let ptr_addr = ptr as usize;
 
         if ptr_addr < page_addr + header_size {
@@ -1072,11 +959,35 @@ pub unsafe fn ptr_to_object_index(ptr: *const u8) -> Option<usize> {
         let offset = ptr_addr - (page_addr + header_size);
         let index = offset / block_size;
 
-        if index >= (*header).obj_count as usize {
+        if index >= (*header.as_ptr()).obj_count as usize {
             return None;
         }
 
         Some(index)
+    }
+}
+
+// ============================================================================
+// Pointer utilities for BiBOP
+// ============================================================================
+
+// Removed duplicate definitions of ptr_to_page_header, is_gc_pointer, ptr_to_object_index
+// (The new NonNull versions are defined above)
+
+/// Validate that a pointer is within a GC-managed page.
+///
+/// # Safety
+///
+/// The pointer must be valid for reading.
+#[allow(dead_code)]
+#[allow(dead_code)]
+#[must_use]
+pub unsafe fn is_gc_pointer(ptr: *const u8) -> bool {
+    // SAFETY: Caller guarantees ptr is valid
+    unsafe {
+        let header = ptr_to_page_header(ptr);
+        // header is NonNull. We assume address is accessible as per safety doc.
+        (*header.as_ptr()).magic == MAGIC_GC_PAGE
     }
 }
 
@@ -1091,8 +1002,10 @@ pub unsafe fn ptr_to_object_index(ptr: *const u8) -> Option<usize> {
 /// The pointer must be safe to read if it is a valid pointer.
 #[allow(dead_code)]
 #[must_use]
+#[allow(dead_code)]
+#[must_use]
 pub unsafe fn find_gc_box_from_ptr(
-    heap: &GlobalHeap,
+    heap: &LocalHeap,
     ptr: *const u8,
 ) -> Option<NonNull<crate::ptr::GcBox<()>>> {
     let addr = ptr as usize;
@@ -1116,8 +1029,8 @@ pub unsafe fn find_gc_box_from_ptr(
                 // Recover provenance for Miri
                 #[cfg(miri)]
                 let h_ptr = heap
-                    .large_objects
-                    .iter()
+                    .large_object_pages()
+                    .iter() // Assuming large_object_pages returns Vec<NonNull>
                     .find(|p| p.as_ptr() as usize == head_addr)
                     .map_or(h_ptr, |p| p.as_ptr());
 
@@ -1128,7 +1041,7 @@ pub unsafe fn find_gc_box_from_ptr(
             } else {
                 // Not in large object map, must be small object page with header
                 #[allow(unused_mut)]
-                let mut header_ptr = ptr_to_page_header(ptr);
+                let mut header_ptr = ptr_to_page_header(ptr).as_ptr();
 
                 // Recover provenance for Miri
                 #[cfg(miri)]
