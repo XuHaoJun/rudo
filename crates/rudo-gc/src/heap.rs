@@ -1036,6 +1036,9 @@ impl LocalHeap {
     ///
     /// Panics if the alignment requirement exceeds `PAGE_SIZE`.
     fn alloc_large(&mut self, size: usize, align: usize) -> NonNull<u8> {
+        // Check for pending GC request - large object allocation can block GC
+        check_safepoint();
+
         // Validate alignment - page alignment (4096) should satisfy most types
         assert!(
             PAGE_SIZE >= align,
