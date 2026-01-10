@@ -96,6 +96,96 @@ pub fn thread_registry() -> &'static Mutex<ThreadRegistry> {
 }
 
 // ============================================================================
+// Safe Points - Multi-threaded GC Coordination
+// ============================================================================
+
+/// Global flag set by collector to request all threads to stop at safe point.
+/// Uses Relaxed ordering for fast-path reads - synchronization happens via the
+/// rendezvous protocol, not this flag alone.
+static GC_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Check if GC has been requested and handle the rendezvous if so.
+/// This is the fast-path check inserted into allocation code.
+#[inline(always)]
+pub fn check_safepoint() {
+    if GC_REQUESTED.load(Ordering::Relaxed) {
+        enter_rendezvous();
+    }
+}
+
+/// Called when a thread reaches a safe point and GC is requested.
+/// Performs the cooperative rendezvous protocol.
+fn enter_rendezvous() {
+    let tcb = match current_thread_control_block() {
+        Some(t) => t,
+        None => return,
+    };
+
+    let old_state = tcb.state.compare_exchange(
+        THREAD_STATE_EXECUTING,
+        THREAD_STATE_SAFEPOINT,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+
+    if old_state.is_err() {
+        return;
+    }
+
+    let registry = thread_registry().lock().unwrap();
+    registry.active_count.fetch_sub(1, Ordering::SeqCst);
+
+    let mut guard = tcb.park_mutex.lock().unwrap();
+    while tcb.gc_requested.load(Ordering::Relaxed) {
+        guard = tcb.park_cond.wait(guard).unwrap();
+    }
+}
+
+/// Signal all threads waiting at safe points to resume.
+#[allow(dead_code)]
+fn resume_all_threads() {
+    let registry = thread_registry().lock().unwrap();
+    for tcb in &registry.threads {
+        if tcb.state.load(Ordering::Acquire) == THREAD_STATE_SAFEPOINT {
+            tcb.gc_requested.store(false, Ordering::Relaxed);
+            tcb.park_cond.notify_all();
+            tcb.state.store(THREAD_STATE_EXECUTING, Ordering::Release);
+        }
+    }
+    registry
+        .active_count
+        .store(registry.threads.len(), Ordering::SeqCst);
+}
+
+/// Request all threads to stop at the next safe point.
+/// Returns true if this thread should become the collector.
+#[allow(dead_code)]
+pub fn request_gc_handshake() -> bool {
+    GC_REQUESTED.store(true, Ordering::Relaxed);
+
+    let registry = thread_registry().lock().unwrap();
+    let active = registry.active_count.load(Ordering::Acquire);
+
+    if active == 1 {
+        true
+    } else {
+        false
+    }
+}
+
+/// Clear the GC request flag after collection is complete.
+#[allow(dead_code)]
+pub fn clear_gc_request() {
+    GC_REQUESTED.store(false, Ordering::Relaxed);
+}
+
+/// Get the list of all thread control blocks for scanning.
+#[allow(dead_code)]
+pub fn get_all_thread_control_blocks() -> Vec<std::sync::Arc<ThreadControlBlock>> {
+    thread_registry().lock().unwrap().threads.clone()
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 
@@ -305,6 +395,7 @@ impl Tlab {
     /// Returns `Some(ptr)` if successful, `None` if the TLAB is exhausted.
     #[inline]
     pub fn alloc(&mut self, block_size: usize) -> Option<NonNull<u8>> {
+        check_safepoint();
         let ptr = self.bump_ptr;
         // Check if we have enough space.
         // We use wrapping_add and compare as usize to avoid UB with ptr.add(block_size)
@@ -740,6 +831,7 @@ impl LocalHeap {
 
     #[inline(never)]
     fn alloc_slow(&mut self, _size: usize, class_index: usize) -> NonNull<u8> {
+        check_safepoint();
         let block_size = match class_index {
             0 => 16,
             1 => 32,

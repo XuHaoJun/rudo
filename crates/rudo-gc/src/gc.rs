@@ -169,6 +169,28 @@ pub fn set_collect_condition(f: CollectCondition) {
     COLLECT_CONDITION.with(|c| c.set(f));
 }
 
+/// Manually check for a pending GC request and block until it's processed.
+///
+/// This function should be called in long-running loops that don't perform
+/// allocations, to ensure threads can respond to GC requests in a timely manner.
+///
+/// # Example
+///
+/// ```
+/// use rudo_gc::safepoint;
+///
+/// for _ in 0..1000 {
+///     // Do some non-allocating work...
+///     let _: Vec<i32> = (0..100).collect();
+///
+///     // Check for GC requests
+///     safepoint();
+/// }
+/// ```
+pub fn safepoint() {
+    crate::heap::check_safepoint();
+}
+
 // ============================================================================
 // Mark-Sweep Collection
 // ============================================================================
