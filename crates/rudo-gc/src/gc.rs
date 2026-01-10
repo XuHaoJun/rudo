@@ -311,7 +311,7 @@ pub fn collect_full() {
 /// Wake up any threads waiting at a safe point.
 /// This is used when a non-collector thread needs to wake up waiting threads
 /// and perform single-threaded collection. It properly restores threads to
-/// EXECUTING state and restores active_count.
+/// EXECUTING state and restores `active_count`.
 fn wake_waiting_threads() {
     let registry = crate::heap::thread_registry().lock().unwrap();
     let mut woken_count = 0;
