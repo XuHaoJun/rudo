@@ -9,7 +9,7 @@
 //! size class. This allows O(1) lookup of object metadata from its address.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 
 use std::sync::{Mutex, OnceLock};
@@ -488,6 +488,9 @@ pub struct LocalHeap {
     /// Used for sweeping.
     pub pages: Vec<NonNull<PageHeader>>,
 
+    /// Set of small page addresses for O(1) safety checks during conservative scanning.
+    pub small_pages: HashSet<usize>,
+
     /// Pages for objects larger than 2KB (kept separate for some logic?).
     /// Actually, let's keep `pages` as the unified list for simple sweeping.
     /// But we might want `large_object_pages` ref for specific logic.
@@ -533,6 +536,7 @@ impl LocalHeap {
             tlab_1024: Tlab::new(),
             tlab_2048: Tlab::new(),
             pages: Vec::new(),
+            small_pages: HashSet::new(),
             large_object_map: HashMap::new(),
             young_allocated: 0,
             old_allocated: 0,
@@ -586,7 +590,8 @@ impl LocalHeap {
         );
 
         // Try TLAB allocation
-        let ptr_opt = match compute_class_index(size) {
+        let class_index = compute_class_index(size);
+        let ptr_opt = match class_index {
             0 => self.tlab_16.alloc(16),
             1 => self.tlab_32.alloc(32),
             2 => self.tlab_64.alloc(64),
@@ -603,11 +608,50 @@ impl LocalHeap {
             return ptr;
         }
 
+        // Try to allocate from existing pages' free lists
+        if let Some(ptr) = self.alloc_from_free_list(class_index) {
+            self.update_range(ptr.as_ptr() as usize & PAGE_MASK, PAGE_SIZE);
+            return ptr;
+        }
+
         // Slow path: Refill TLAB and retry
-        let ptr = self.alloc_slow(size, compute_class_index(size));
+        let ptr = self.alloc_slow(size, class_index);
 
         self.update_range(ptr.as_ptr() as usize & PAGE_MASK, PAGE_SIZE);
         ptr
+    }
+
+    /// Try to allocate from the free list of an existing page.
+    fn alloc_from_free_list(&mut self, class_index: usize) -> Option<NonNull<u8>> {
+        let block_size = SIZE_CLASSES[class_index];
+        for page_ptr in &self.pages {
+            unsafe {
+                let header = page_ptr.as_ptr();
+                // We only care about regular pages (not large objects)
+                if ((*header).flags & 0x01) == 0
+                    && (*header).block_size as usize == block_size
+                    && (*header).free_list_head.is_some()
+                {
+                    let idx = (*header).free_list_head.unwrap();
+                    let h_size = (*header).header_size as usize;
+                    let obj_ptr = page_ptr
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(h_size + (idx as usize * block_size));
+
+                    // Popping from free list: read the next pointer stored in the slot.
+                    // SAFETY: sweep_page (copy_sweep_logic) ensures this is a valid Option<u16>.
+                    let next_head = *obj_ptr.cast::<Option<u16>>();
+                    (*header).free_list_head = next_head;
+
+                    // Mark as allocated so it's tracked during sweep
+                    (*header).set_allocated(idx as usize);
+
+                    return Some(NonNull::new_unchecked(obj_ptr));
+                }
+            }
+        }
+        None
     }
 
     #[inline(never)]
@@ -672,6 +716,7 @@ impl LocalHeap {
 
         // 3. Update LocalHeap pages list
         self.pages.push(header);
+        self.small_pages.insert(ptr.as_ptr() as usize);
 
         // 4. Update Tlab
         let tlab = match class_index {
@@ -1105,6 +1150,14 @@ pub unsafe fn find_gc_box_from_ptr(
                         .find(|p| p.as_ptr() as usize == (addr & crate::heap::PAGE_MASK))
                         .map_or(header_ptr, |p| p.as_ptr());
                 }
+
+                // SAFETY CHECK: Is this page actually managed by us?
+                // Before reading magic, verify it's in our pages list.
+                // This avoids SIGSEGV on gaps in address space between pages.
+                if !heap.small_pages.contains(&(addr & crate::heap::PAGE_MASK)) {
+                    return None;
+                }
+
                 if (*header_ptr).magic == MAGIC_GC_PAGE {
                     let header = &*header_ptr;
                     let b_size = header.block_size as usize;

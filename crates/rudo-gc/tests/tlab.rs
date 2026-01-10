@@ -135,3 +135,55 @@ fn test_mixed_size_class_tlabs() {
     .join()
     .unwrap();
 }
+
+#[test]
+fn test_free_slot_reuse() {
+    // We want to verify that slots reclaimed by GC are reused for new allocations
+    // instead of always allocating new pages.
+    let count = 100;
+
+    let initial_pages = thread::spawn(move || {
+        let mut pointers = Vec::new();
+        for i in 0..count {
+            pointers.push(Gc::new(i as i32));
+        }
+        with_heap(|h| h.pages.len())
+    })
+    .join()
+    .unwrap();
+
+    assert!(
+        initial_pages >= 2,
+        "Should have at least 2 pages for 100 objects of 64 bytes"
+    );
+
+    thread::spawn(move || {
+        // Clear stack to remove stale Gc pointers
+        #[inline(never)]
+        fn clear_stack() {
+            let mut x = [0u64; 1024];
+            std::hint::black_box(&mut x);
+        }
+        clear_stack();
+
+        // Force collection
+        rudo_gc::collect_full();
+
+        // Allocate more objects
+        let mut pointers = Vec::new();
+        for i in 0..count {
+            pointers.push(Gc::new(i as i32));
+        }
+
+        let final_pages = with_heap(|h| h.pages.len());
+
+        assert!(
+            final_pages <= initial_pages + 1,
+            "Page count increased from {} to {} indicating no reuse of free slots",
+            initial_pages,
+            final_pages
+        );
+    })
+    .join()
+    .unwrap();
+}

@@ -514,6 +514,7 @@ unsafe fn copy_sweep_logic(header: *mut PageHeader) -> usize {
                     if !(*gc_box_ptr).is_value_dead() {
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
                         (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                        (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
                         (*gc_box_ptr).set_dead();
                     }
                 } else {
