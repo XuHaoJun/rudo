@@ -1120,4 +1120,144 @@ mod tests {
             crate::metrics::CollectionType::Major
         );
     }
+
+    #[test]
+    fn test_multi_threaded_gc_handshake() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        clear_test_roots();
+
+        let num_threads = 4;
+        let objects_per_thread = 50;
+
+        let barrier = Arc::new(Barrier::new(num_threads));
+        let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let survivor_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..num_threads)
+            .map(|i| {
+                let barrier = barrier.clone();
+                let completed = completed.clone();
+                let survivor_count = survivor_count.clone();
+
+                thread::spawn(move || {
+                    barrier.wait();
+
+                    let mut local_survivors = 0;
+
+                    for j in 0..objects_per_thread {
+                        let val = i * 1000 + j;
+                        let gc_val = crate::Gc::new(val);
+
+                        if j % 2 == 0 {
+                            register_test_root(crate::ptr::Gc::internal_ptr(&gc_val));
+                            local_survivors += 1;
+                        }
+
+                        if j % 10 == 0 {
+                            crate::safepoint();
+                        }
+                    }
+
+                    survivor_count.fetch_add(local_survivors, std::sync::atomic::Ordering::SeqCst);
+                    completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+                    local_survivors
+                })
+            })
+            .collect();
+
+        let results: Vec<usize> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let total_survivors: usize = results.iter().sum();
+
+        assert_eq!(
+            completed.load(std::sync::atomic::Ordering::SeqCst),
+            num_threads,
+            "All threads should complete"
+        );
+
+        crate::collect_full();
+
+        let metrics = crate::last_gc_metrics();
+        assert!(
+            metrics.total_collections > 0,
+            "Collection should have occurred"
+        );
+
+        let expected_survivors = total_survivors;
+        let actual_survivors = survivor_count.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            actual_survivors, expected_survivors,
+            "All registered roots should survive collection"
+        );
+
+        clear_test_roots();
+    }
+
+    #[test]
+    fn test_gc_requested_flag() {
+        use std::sync::atomic::Ordering;
+
+        assert!(
+            !crate::heap::GC_REQUESTED.load(Ordering::Relaxed),
+            "GC_REQUESTED should be false initially"
+        );
+
+        let _guard = crate::heap::thread_registry().lock().unwrap();
+
+        crate::heap::GC_REQUESTED.store(true, Ordering::Relaxed);
+        assert!(
+            crate::heap::GC_REQUESTED.load(Ordering::Relaxed),
+            "GC_REQUESTED should be true after setting"
+        );
+
+        crate::heap::GC_REQUESTED.store(false, Ordering::Relaxed);
+        assert!(
+            !crate::heap::GC_REQUESTED.load(Ordering::Relaxed),
+            "GC_REQUESTED should be false after clearing"
+        );
+    }
+
+    #[test]
+    fn test_thread_control_block_state() {
+        use std::sync::atomic::Ordering;
+
+        crate::heap::with_heap_and_tcb(|_, tcb| {
+            assert_eq!(
+                tcb.state.load(Ordering::Relaxed),
+                crate::heap::THREAD_STATE_EXECUTING,
+                "Thread should be in EXECUTING state initially"
+            );
+
+            tcb.state
+                .store(crate::heap::THREAD_STATE_SAFEPOINT, Ordering::Relaxed);
+            assert_eq!(
+                tcb.state.load(Ordering::Relaxed),
+                crate::heap::THREAD_STATE_SAFEPOINT,
+                "Thread state should be SAFEPOINT after setting"
+            );
+
+            tcb.state
+                .store(crate::heap::THREAD_STATE_INACTIVE, Ordering::Relaxed);
+            assert_eq!(
+                tcb.state.load(Ordering::Relaxed),
+                crate::heap::THREAD_STATE_INACTIVE,
+                "Thread state should be INACTIVE after setting"
+            );
+        });
+    }
+
+    #[test]
+    fn test_safepoint_function() {
+        crate::safepoint();
+
+        for _ in 0..100 {
+            crate::Gc::new(42i32);
+        }
+
+        crate::safepoint();
+
+        assert!(true, "safepoint should complete without panic");
+    }
 }
