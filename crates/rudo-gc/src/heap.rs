@@ -135,7 +135,10 @@ pub static GC_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// Check if GC has been requested and handle the rendezvous if so.
 /// This is the fast-path check inserted into allocation code.
 pub fn check_safepoint() {
-    if GC_REQUESTED.load(Ordering::Relaxed) {
+    // CRITICAL FIX: Prevent deadlock when Drop handlers allocate during GC
+    // If we're already collecting, we must NOT enter rendezvous or we'll
+    // deadlock waiting for gc_requested to become false (only collector can clear it)
+    if GC_REQUESTED.load(Ordering::Relaxed) && !crate::gc::is_collecting() {
         enter_rendezvous();
     }
 }
