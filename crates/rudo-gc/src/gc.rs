@@ -608,24 +608,19 @@ unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
 ///
 /// Large objects that are unmarked should be deallocated entirely.
 fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
-    #[cfg(miri)]
-    eprintln!(
-        "MIRI: sweep_large_objects: starting on {} pages",
-        heap.large_object_pages().len()
-    );
-
     let mut reclaimed = 0;
-    // We need to iterate and potentially remove items from large_objects
-    let mut i = 0;
-    while i < heap.large_object_pages().len() {
-        let page_ptr = heap.large_object_pages()[i];
-        // SAFETY: Large object pointers are valid
+
+    // Collect large object pages once to avoid re-scanning heap.pages in every iteration.
+    // This also avoids UB by not re-inspecting deallocated pages during the loop.
+    let target_pages = heap.large_object_pages().to_vec(); // .to_vec() to own the list
+
+    for page_ptr in target_pages {
+        // SAFETY: Large object pointers were valid at start of sweep.
         unsafe {
             let header = page_ptr.as_ptr();
 
             // If we are only sweeping young gen, skip old objects
             if only_young && (*header).generation > 0 {
-                i += 1;
                 continue;
             }
 
@@ -641,23 +636,14 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 let weak_count = (*gc_box_ptr).weak_count();
 
                 if weak_count > 0 {
-                    #[cfg(miri)]
-                    eprintln!(
-                        "MIRI: sweep: object at index {} has WEAK count {}",
-                        0, weak_count
-                    );
                     // There are weak references - drop the value but keep the allocation
                     if !(*gc_box_ptr).is_value_dead() {
-                        #[cfg(miri)]
-                        eprintln!("MIRI: sweep: dropping value for object at index {}", 0);
                         // Only drop if not already dropped
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
                         // Mark as dead by setting drop_fn to no_op
                         (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                         (*gc_box_ptr).set_dead();
                     }
-                    // Don't deallocate - allocation is still needed for weak refs
-                    i += 1;
                     continue;
                 }
 
@@ -666,35 +652,30 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 // 1. Call the destructor
                 ((*gc_box_ptr).drop_fn)(obj_ptr);
 
-                // 2. Deallocate the pages
-                let h_size = (*header).header_size as usize;
-                let total_size = h_size + block_size;
+                // 2. Prepare deallocation info
+                let total_size = header_size + block_size;
                 let pages_needed = total_size.div_ceil(crate::heap::PAGE_SIZE);
                 let alloc_size = pages_needed * crate::heap::PAGE_SIZE;
-
-                // Deallocate pages using Mmap::from_raw (dropping it unmaps)
-                // SAFETY: We allocated this with Mmap, so we can deallocate it.
-                sys_alloc::Mmap::from_raw(header.cast::<u8>(), alloc_size);
-
-                // 3. Remove pages from the map
                 let header_addr = header as usize;
+
+                // 3. Remove from the heap's primary list BEFORE deallocating
+                heap.pages.retain(|&p| p != page_ptr);
+
+                // 4. Remove pages from the map
                 for p in 0..pages_needed {
                     let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
                     heap.large_object_map.remove(&page_addr);
                 }
 
-                // 4. Remove from the heap's list
-                heap.large_object_pages_mut().swap_remove(i);
+                // 5. Deallocate the memory
+                // SAFETY: This was allocated via sys_alloc::Mmap.
+                sys_alloc::Mmap::from_raw(header.cast::<u8>(), alloc_size);
 
-                // 5. Update statistics
+                // 6. Update statistics
                 reclaimed += 1;
                 N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
-
-                // Don't increment i because we swap_removed
-                continue;
             }
         }
-        i += 1;
     }
     reclaimed
 }

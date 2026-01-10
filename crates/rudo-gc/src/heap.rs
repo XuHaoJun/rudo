@@ -603,7 +603,7 @@ impl LocalHeap {
     }
 
     #[inline(never)]
-    fn alloc_slow(&mut self, size: usize, class_index: usize) -> NonNull<u8> {
+    fn alloc_slow(&mut self, _size: usize, class_index: usize) -> NonNull<u8> {
         let block_size = match class_index {
             0 => 16,
             1 => 32,
@@ -928,7 +928,8 @@ pub fn heap_end() -> usize {
 /// The pointer must be within a valid GC page.
 pub unsafe fn ptr_to_page_header(ptr: *const u8) -> NonNull<PageHeader> {
     let page_addr = (ptr as usize) & PAGE_MASK;
-    NonNull::new_unchecked(page_addr as *mut PageHeader)
+    // SAFETY: Caller guarantees ptr is within a valid GC page.
+    unsafe { NonNull::new_unchecked(page_addr as *mut PageHeader) }
 }
 
 // 2-arg ptr_to_object_index removed
@@ -1000,8 +1001,6 @@ pub unsafe fn is_gc_pointer(ptr: *const u8) -> bool {
 /// # Safety
 ///
 /// The pointer must be safe to read if it is a valid pointer.
-#[allow(dead_code)]
-#[must_use]
 #[allow(dead_code)]
 #[must_use]
 pub unsafe fn find_gc_box_from_ptr(
