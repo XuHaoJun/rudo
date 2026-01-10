@@ -248,12 +248,40 @@ fn perform_multi_threaded_collect() {
         .collect();
 
     if total_size > MAJOR_THRESHOLD {
+        // CRITICAL FIX: For major GC, we must clear ALL marks first, then mark ALL
+        // reachable objects, then sweep ALL heaps. The old approach processed each
+        // heap independently, which caused marks on other heaps (set during
+        // tracing of cross-heap references) to be cleared when processing those heaps.
+        // This led to objects only transitively reachable through other heaps being
+        // incorrectly swept, causing use-after-free bugs.
+
+        // Phase 1: Clear all marks on ALL heaps
         for tcb in &tcbs {
             unsafe {
-                objects_reclaimed += collect_major_multi(&mut *tcb.heap.get(), &all_stack_roots);
+                clear_all_marks_and_dirty(&*tcb.heap.get());
+            }
+        }
+
+        // Phase 2: Mark all reachable objects (tracing across all heaps)
+        // We mark from each heap's perspective to ensure we find all cross-heap references
+        for tcb in &tcbs {
+            unsafe {
+                mark_major_roots_multi(&mut *tcb.heap.get(), &all_stack_roots);
+            }
+        }
+
+        // Phase 3: Sweep ALL heaps
+        for tcb in &tcbs {
+            unsafe {
+                let reclaimed = sweep_segment_pages(&mut *tcb.heap.get(), false);
+                let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
+                objects_reclaimed += reclaimed + reclaimed_large;
+                promote_all_pages(&mut *tcb.heap.get());
             }
         }
     } else {
+        // Minor GC doesn't have cross-heap issues since it only scans young objects
+        // and uses remembered sets for inter-generational references
         for tcb in &tcbs {
             unsafe {
                 objects_reclaimed += collect_minor_multi(&mut *tcb.heap.get(), &all_stack_roots);
