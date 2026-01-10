@@ -648,9 +648,12 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 heap.pages.retain(|&p| p != page_ptr);
 
                 // 4. Remove pages from the map
-                for p in 0..pages_needed {
-                    let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
-                    heap.large_object_map.remove(&page_addr);
+                if let Ok(mut manager) = crate::heap::segment_manager().lock() {
+                    for p in 0..pages_needed {
+                        let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
+                        heap.large_object_map.remove(&page_addr);
+                        manager.large_object_map.remove(&page_addr);
+                    }
                 }
 
                 // 5. Deallocate the memory
