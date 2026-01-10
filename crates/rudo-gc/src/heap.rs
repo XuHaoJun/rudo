@@ -159,13 +159,10 @@ fn enter_rendezvous() {
         return;
     }
 
-    thread_registry()
-        .lock()
-        .unwrap()
-        .active_count
-        .fetch_sub(1, Ordering::SeqCst);
-
-    // Capture stack roots before parking - these will be scanned by the collector
+    // CRITICAL: Capture and store stack roots BEFORE decrementing active_count
+    // This ensures that when collector sees active_count == 1, all threads have
+    // already stored their complete stack roots. Otherwise, collector may read
+    // empty/incomplete roots and miss live objects, causing memory corruption.
     let mut roots = Vec::new();
     unsafe {
         crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
@@ -173,6 +170,13 @@ fn enter_rendezvous() {
         });
     }
     *tcb.stack_roots.lock().unwrap() = roots;
+
+    // Now decrement active_count to signal completion to collector
+    thread_registry()
+        .lock()
+        .unwrap()
+        .active_count
+        .fetch_sub(1, Ordering::SeqCst);
 
     let mut guard = tcb.park_mutex.lock().unwrap();
     while tcb.gc_requested.load(Ordering::Acquire) {
