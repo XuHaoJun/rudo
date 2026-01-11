@@ -5,11 +5,15 @@
 
 use std::cell::Cell;
 use std::ptr::NonNull;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
 use crate::trace::{GcVisitor, Trace, Visitor, VisitorKind};
+
+// Mutex to protect heap access during multi-threaded collection for Miri compatibility
+static COLLECT_MUTEX: Mutex<()> = Mutex::new(());
 
 // ============================================================================
 // Collection statistics
@@ -212,9 +216,29 @@ pub fn collect() {
     if is_collector {
         perform_multi_threaded_collect();
     } else {
-        // We're not the collector - atomically clear GC flag and wake threads
-        // to prevent race condition where threads enter rendezvous after wake-up
-        perform_single_threaded_collect_with_wake();
+        // We're not the collector - wait for the collector to complete
+        // This ensures all heaps are properly scanned
+        crate::heap::wait_for_gc_complete();
+    }
+}
+
+/// Perform a full garbage collection (Major GC).
+///
+/// This will collect all unreachable objects in both Young and Old generations.
+/// Implements cooperative rendezvous for multi-threaded safety.
+pub fn collect_full() {
+    if IN_COLLECT.with(Cell::get) {
+        return;
+    }
+
+    let is_collector = crate::heap::request_gc_handshake();
+
+    if is_collector {
+        perform_multi_threaded_collect_full();
+    } else {
+        // We're not the collector - wait for the collector to complete
+        // This ensures all heaps are properly scanned
+        crate::heap::wait_for_gc_complete();
     }
 }
 
@@ -273,19 +297,37 @@ fn perform_multi_threaded_collect() {
 
         // Phase 2: Mark all reachable objects (tracing across all heaps)
         // We mark from each heap's perspective to ensure we find all cross-heap references
-        for tcb in &tcbs {
-            unsafe {
-                mark_major_roots_multi(&mut *tcb.heap.get(), &all_stack_roots);
+        #[cfg(feature = "parallel-gc")]
+        {
+            if tcbs.len() > 1 {
+                perform_parallel_marking_integrated(&tcbs, &all_stack_roots);
+            } else {
+                for tcb in &tcbs {
+                    unsafe {
+                        let heap_ptr = tcb.heap.get() as *mut LocalHeap;
+                        mark_major_roots_multi(&mut *heap_ptr, &all_stack_roots);
+                    }
+                }
+            }
+        }
+        #[cfg(not(feature = "parallel-gc"))]
+        {
+            for tcb in &tcbs {
+                unsafe {
+                    let heap_ptr = tcb.heap.get() as *mut LocalHeap;
+                    mark_major_roots_multi(&mut *heap_ptr, &all_stack_roots);
+                }
             }
         }
 
         // Phase 3: Sweep ALL heaps
         for tcb in &tcbs {
             unsafe {
-                let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
-                let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
+                let heap_ptr = tcb.heap.get() as *mut LocalHeap;
+                let reclaimed = sweep_segment_pages(&*heap_ptr, false);
+                let reclaimed_large = sweep_large_objects(&mut *heap_ptr, false);
                 objects_reclaimed += reclaimed + reclaimed_large;
-                promote_all_pages(&*tcb.heap.get());
+                promote_all_pages(&*heap_ptr);
             }
         }
     } else {
@@ -293,7 +335,8 @@ fn perform_multi_threaded_collect() {
         // and uses remembered sets for inter-generational references
         for tcb in &tcbs {
             unsafe {
-                objects_reclaimed += collect_minor_multi(&mut *tcb.heap.get(), &all_stack_roots);
+                let heap_ptr = tcb.heap.get() as *mut LocalHeap;
+                objects_reclaimed += collect_minor_multi(heap_ptr, &all_stack_roots);
             }
         }
     }
@@ -331,32 +374,11 @@ fn perform_multi_threaded_collect() {
     IN_COLLECT.with(|in_collect| in_collect.set(false));
 }
 
-/// Perform a full garbage collection (Major GC).
-///
-/// This will collect all unreachable objects in both Young and Old generations.
-/// Implements cooperative rendezvous for multi-threaded safety.
-pub fn collect_full() {
-    if IN_COLLECT.with(Cell::get) {
-        return;
-    }
-
-    let is_collector = crate::heap::request_gc_handshake();
-
-    if is_collector {
-        perform_multi_threaded_collect_full();
-    } else {
-        // We're not the collector - wake up any threads waiting in rendezvous
-        // and perform single-threaded collection
-        crate::heap::GC_REQUESTED.store(false, Ordering::Relaxed);
-        wake_waiting_threads();
-        perform_single_threaded_collect_full();
-    }
-}
-
 /// Wake up any threads waiting at a safe point.
 /// This is used when a non-collector thread needs to wake up waiting threads
 /// and perform single-threaded collection. It properly restores threads to
 /// EXECUTING state and restores `active_count`.
+#[allow(dead_code)]
 fn wake_waiting_threads() {
     let registry = crate::heap::thread_registry().lock().unwrap();
     let mut woken_count = 0;
@@ -376,6 +398,7 @@ fn wake_waiting_threads() {
 
 /// Perform single-threaded collection with atomic GC flag clearing and thread wake-up
 /// to prevent race conditions where threads enter rendezvous after wake-up completes.
+#[allow(dead_code)]
 fn perform_single_threaded_collect_with_wake() {
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
@@ -445,6 +468,7 @@ fn perform_single_threaded_collect_with_wake() {
 }
 
 /// Perform single-threaded full collection (fallback for tests).
+#[allow(dead_code)]
 fn perform_single_threaded_collect_full() {
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
@@ -494,7 +518,8 @@ fn perform_multi_threaded_collect_full() {
 
     for tcb in &tcbs {
         unsafe {
-            objects_reclaimed += collect_major_multi(&mut *tcb.heap.get(), &all_stack_roots);
+            let heap_ptr = tcb.heap.get() as *mut LocalHeap;
+            objects_reclaimed += collect_major_multi(heap_ptr, &all_stack_roots);
         }
     }
 
@@ -519,27 +544,252 @@ fn perform_multi_threaded_collect_full() {
 
 /// Minor collection for a heap in multi-threaded context.
 fn collect_minor_multi(
-    heap: &mut LocalHeap,
+    heap: *mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
 ) -> usize {
-    mark_minor_roots_multi(heap, stack_roots);
-    let reclaimed = sweep_segment_pages(heap, true);
-    let reclaimed_large = sweep_large_objects(heap, true);
-    promote_young_pages(heap);
+    let _guard = COLLECT_MUTEX.lock().unwrap();
+
+    unsafe {
+        let heap_mut = &mut *heap;
+        mark_minor_roots_multi(heap_mut, stack_roots);
+    }
+    let reclaimed = unsafe {
+        let heap_ref = &*heap;
+        sweep_segment_pages(heap_ref, true)
+    };
+    let reclaimed_large = unsafe {
+        let heap_mut = &mut *heap;
+        sweep_large_objects(heap_mut, true)
+    };
+    unsafe {
+        let heap_mut = &mut *heap;
+        promote_young_pages(heap_mut);
+    };
     reclaimed + reclaimed_large
 }
 
 /// Major collection for a heap in multi-threaded context.
 fn collect_major_multi(
-    heap: &mut LocalHeap,
+    heap: *mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
 ) -> usize {
-    clear_all_marks_and_dirty(heap);
-    mark_major_roots_multi(heap, stack_roots);
-    let reclaimed = sweep_segment_pages(heap, false);
-    let reclaimed_large = sweep_large_objects(heap, false);
-    promote_all_pages(heap);
+    let _guard = COLLECT_MUTEX.lock().unwrap();
+
+    unsafe {
+        let heap_mut = &mut *heap;
+        clear_all_marks_and_dirty(heap_mut);
+        mark_major_roots_multi(heap_mut, stack_roots);
+    }
+    let reclaimed = unsafe {
+        let heap_ref = &*heap;
+        sweep_segment_pages(heap_ref, false)
+    };
+    let reclaimed_large = unsafe {
+        let heap_mut = &mut *heap;
+        sweep_large_objects(heap_mut, false)
+    };
+    unsafe {
+        let heap_ref = &*heap;
+        promote_all_pages(heap_ref);
+    };
     reclaimed + reclaimed_large
+}
+
+/// Perform parallel marking using Remote Mentions.
+///
+/// This function coordinates marking across all threads using `BiBOP` ownership
+/// and message passing for cross-thread references.
+///
+/// # Algorithm
+///
+/// 1. Each thread initializes its local mark stack with its stack roots
+/// 2. Worker loop:
+///    - Pop object from local stack
+///    - For each child pointer:
+///      - If owned by current thread: mark directly and push to local stack
+///      - If owned by another thread: forward to owner's remote inbox
+///    - When local stack empty: drain remote inbox to local stack
+/// 3. Termination: when all local stacks and remote inboxes are empty
+///
+/// # Panics
+///
+/// Panics if the thread registry lock cannot be acquired.
+pub fn perform_parallel_marking(
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+) {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
+
+    let registry_ref = crate::heap::thread_registry();
+    let registry_lock = registry_ref.lock().unwrap();
+    let registry_clone = registry_lock.clone();
+    drop(registry_lock);
+
+    let registry: Arc<std::sync::Mutex<crate::heap::ThreadRegistry>> =
+        Arc::new(std::sync::Mutex::new(registry_clone));
+
+    let global_in_flight: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+
+    let ptrs: Vec<usize> = stack_roots.iter().map(|&(p, _)| p as usize).collect();
+
+    let mut handles = Vec::new();
+
+    for (idx, tcb) in registry.lock().unwrap().threads.iter().enumerate() {
+        let tcb = tcb.clone();
+        let ptrs = ptrs.clone();
+        let registry = Arc::clone(&registry);
+        let global_in_flight = Arc::clone(&global_in_flight);
+
+        let handle = std::thread::spawn(move || {
+            parallel_mark_worker(idx, tcb, ptrs, registry, global_in_flight);
+        });
+
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+/// Worker function for parallel marking.
+///
+/// # Panics
+///
+/// Panics if the registry lock cannot be acquired.
+#[allow(clippy::needless_pass_by_value)]
+pub fn parallel_mark_worker(
+    worker_id: usize,
+    tcb: std::sync::Arc<crate::heap::ThreadControlBlock>,
+    stack_roots: Vec<usize>,
+    registry: std::sync::Arc<std::sync::Mutex<crate::heap::ThreadRegistry>>,
+    global_in_flight: std::sync::Arc<AtomicUsize>,
+) {
+    let thread_count = {
+        let reg = registry.lock().unwrap();
+        reg.threads.len()
+    };
+
+    let heap_ptr = tcb.heap.get() as *mut LocalHeap;
+
+    let mut visitor = GcVisitor::new_parallel(VisitorKind::Major, worker_id, registry.clone());
+
+    tcb.clear_mark_stacks();
+
+    for &ptr in &stack_roots {
+        let gc_ptr = ptr as *const u8;
+        if unsafe { crate::heap::is_gc_pointer(gc_ptr) } {
+            tcb.push_local_mark(gc_ptr);
+        }
+    }
+
+    loop {
+        while let Some(gc_ptr) = tcb.pop_local_mark() {
+            if !unsafe { crate::heap::is_gc_pointer(gc_ptr) } {
+                continue;
+            }
+
+            let owner_id = unsafe { crate::heap::ptr_to_page_owner(gc_ptr) };
+
+            if owner_id == worker_id {
+                unsafe {
+                    if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(&*heap_ptr, gc_ptr) {
+                        mark_object(gc_box, &mut visitor);
+                    }
+                }
+            } else if owner_id < thread_count {
+                let remote_tcb = {
+                    let reg = registry.lock().unwrap();
+                    reg.threads[owner_id].clone()
+                };
+                remote_tcb.push_remote_inbox(gc_ptr);
+                global_in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
+        if tcb.is_local_mark_stack_empty() {
+            // CRITICAL FIX: Re-check after draining to catch race where new work
+            // arrives between drain and empty check
+            let received = tcb.drain_remote_inbox_to_local();
+            if received == 0 {
+                // Double-check local stack again in case drain added something
+                if tcb.is_local_mark_stack_empty() {
+                    // Triple-check remote inbox for race condition
+                    let inbox_empty = tcb.remote_inbox.lock().unwrap().is_empty();
+                    if inbox_empty {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "parallel-gc")]
+#[allow(clippy::needless_pass_by_value)]
+fn perform_parallel_marking_integrated(
+    tcbs: &[std::sync::Arc<crate::heap::ThreadControlBlock>],
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+) {
+    let registry_ref = crate::heap::thread_registry();
+    let mut registry = registry_ref.lock().unwrap();
+
+    registry.ensure_worker_pool_initialized();
+    registry.distribute_tcbs_to_workers();
+
+    let worker_count = registry.sweep_workers.len();
+    if worker_count == 0 {
+        return;
+    }
+
+    let ptrs: Vec<usize> = stack_roots.iter().map(|&(p, _)| p as usize).collect();
+
+    for worker in &registry.sweep_workers {
+        for tcb in worker.tcbs.lock().unwrap().iter() {
+            tcb.clear_mark_stacks();
+        }
+    }
+
+    for (idx, tcb) in tcbs.iter().enumerate() {
+        let worker_id = idx % worker_count;
+        let worker = &registry.sweep_workers[worker_id];
+        let is_assigned = worker
+            .tcbs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|wtcb| std::sync::Arc::ptr_eq(wtcb, tcb));
+
+        if is_assigned {
+            for &ptr in &ptrs {
+                let gc_ptr = ptr as *const u8;
+                if unsafe { crate::heap::is_gc_pointer(gc_ptr) } {
+                    tcb.push_local_mark(gc_ptr);
+                }
+            }
+        }
+    }
+
+    for worker in &registry.sweep_workers {
+        let _guard = worker.mutex.lock().unwrap();
+        worker
+            .status
+            .store(crate::heap::SWEEPER_SWEEPING, Ordering::Release);
+        worker.work_cond.notify_one();
+    }
+
+    crate::heap::NUM_RUNNING_SWEEPERS.store(worker_count, Ordering::SeqCst);
+
+    drop(registry);
+
+    let workers = crate::heap::get_all_workers().clone();
+    for worker in &workers {
+        let mut guard = worker.mutex.lock().unwrap();
+        while worker.status.load(Ordering::Acquire) == crate::heap::SWEEPER_SWEEPING {
+            guard = worker.work_cond.wait(guard).unwrap();
+        }
+        drop(guard);
+    }
 }
 
 /// Mark roots from all threads' stacks for Minor GC.
@@ -547,9 +797,7 @@ fn mark_minor_roots_multi(
     heap: &mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
 ) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Minor,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Minor);
 
     // Scan all threads' captured stack roots (passed in, not consumed)
     for &(ptr, _) in stack_roots {
@@ -614,9 +862,7 @@ fn mark_major_roots_multi(
     heap: &mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
 ) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Major,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Major);
 
     // Scan all threads' captured stack roots (passed in, not consumed)
     for &(ptr, _) in stack_roots {
@@ -649,6 +895,7 @@ fn mark_major_roots_multi(
 }
 
 /// Minor Collection: Collect Young Generation only.
+#[allow(dead_code)]
 fn collect_minor(heap: &mut LocalHeap) -> usize {
     // 1. Mark Phase
     mark_minor_roots(heap);
@@ -700,6 +947,7 @@ fn promote_young_pages(heap: &mut LocalHeap) {
 }
 
 /// Major Collection: Collect Entire Heap.
+#[allow(dead_code)]
 fn collect_major(heap: &mut LocalHeap) -> usize {
     // 1. Mark Phase
     // Clear marks first
@@ -728,10 +976,9 @@ fn clear_all_marks_and_dirty(heap: &LocalHeap) {
 }
 
 /// Mark roots for Minor GC (Stack + `RemSet`).
+#[allow(dead_code)]
 fn mark_minor_roots(heap: &LocalHeap) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Minor,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Minor);
 
     // 1. Scan Stack
     unsafe {
@@ -791,10 +1038,9 @@ fn mark_minor_roots(heap: &LocalHeap) {
 }
 
 /// Mark roots for Major GC (Stack).
+#[allow(dead_code)]
 fn mark_major_roots(heap: &LocalHeap) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Major,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Major);
     unsafe {
         // 1. Mark stack roots (Conservative)
         crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
@@ -815,7 +1061,7 @@ fn mark_major_roots(heap: &LocalHeap) {
 }
 
 /// Mark object for Minor GC.
-unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
+pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     let ptr_addr = ptr.as_ptr() as *const u8;
     let page_addr = (ptr_addr as usize) & crate::heap::PAGE_MASK;
     // SAFETY: ptr_addr is a valid pointer to a GcBox
@@ -947,7 +1193,7 @@ fn promote_all_pages(heap: &LocalHeap) {
 /// # Safety
 ///
 /// The pointer must be a valid `GcBox` pointer.
-unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
+pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     // Get the page header
     let ptr_addr = ptr.as_ptr() as *const u8;
     // SAFETY: ptr is a valid GcBox pointer
@@ -1069,12 +1315,18 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
 
 impl Visitor for GcVisitor {
     fn visit<T: Trace + ?Sized>(&mut self, gc: &crate::Gc<T>) {
-        if let Some(ptr) = gc.raw_ptr().as_option() {
-            unsafe {
-                if self.kind == VisitorKind::Minor {
-                    mark_object_minor(ptr.cast(), self);
-                } else {
-                    mark_object(ptr.cast(), self);
+        // If we have a registry, use Remote Mentions (parallel marking)
+        if self.registry.is_some() {
+            self.visit_with_ownership(gc);
+        } else {
+            // Single-threaded mode: direct marking
+            if let Some(ptr) = gc.raw_ptr().as_option() {
+                unsafe {
+                    if self.kind == VisitorKind::Minor {
+                        mark_object_minor(ptr.cast(), self);
+                    } else {
+                        mark_object(ptr.cast(), self);
+                    }
                 }
             }
         }
