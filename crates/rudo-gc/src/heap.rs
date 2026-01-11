@@ -8,13 +8,353 @@
 //! Memory is divided into 4KB pages. Each page contains objects of a single
 //! size class. This allows O(1) lookup of object metadata from its address.
 
-use std::cell::RefCell;
+use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex, OnceLock};
 
 use sys_alloc::{Mmap, MmapOptions};
+
+// ============================================================================
+// Thread Registry & Control Block - Multi-threaded GC Support
+// ============================================================================
+
+/// Thread state: executing mutator code.
+pub const THREAD_STATE_EXECUTING: usize = 0;
+/// Thread state: at a safe point, waiting for GC.
+pub const THREAD_STATE_SAFEPOINT: usize = 1;
+/// Thread state: inactive (blocked in syscall).
+pub const THREAD_STATE_INACTIVE: usize = 2;
+
+/// Shared control block for each thread's GC coordination.
+pub struct ThreadControlBlock {
+    /// Atomic state of the thread (EXECUTING, SAFEPOINT, or INACTIVE).
+    pub state: AtomicUsize,
+    /// Flag set by the collector to request a handshake.
+    pub gc_requested: AtomicBool,
+    /// Condition variable to park the thread during GC.
+    pub park_cond: Condvar,
+    /// Mutex protecting the condition variable.
+    pub park_mutex: Mutex<()>,
+    /// The thread's `LocalHeap`.
+    pub heap: UnsafeCell<LocalHeap>,
+    /// Stack roots captured at safepoint for the collector to scan.
+    pub stack_roots: Mutex<Vec<*const u8>>,
+}
+
+#[allow(clippy::non_send_fields_in_send_ty)]
+unsafe impl Send for ThreadControlBlock {}
+unsafe impl Sync for ThreadControlBlock {}
+
+impl Default for ThreadControlBlock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ThreadControlBlock {
+    /// Create a new `ThreadControlBlock` with an uninitialized heap.
+    /// The heap must be initialized separately.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: AtomicUsize::new(THREAD_STATE_EXECUTING),
+            gc_requested: AtomicBool::new(false),
+            park_cond: Condvar::new(),
+            park_mutex: Mutex::new(()),
+            heap: UnsafeCell::new(LocalHeap::new()),
+            stack_roots: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Get a mutable reference to the heap.
+    pub fn heap_mut(&mut self) -> &mut LocalHeap {
+        unsafe { &mut *self.heap.get() }
+    }
+
+    /// Get an immutable reference to the heap.
+    pub fn heap(&self) -> &LocalHeap {
+        unsafe { &*self.heap.get() }
+    }
+}
+
+/// Global registry of all threads with GC heaps.
+pub struct ThreadRegistry {
+    /// All active thread control blocks.
+    pub threads: Vec<std::sync::Arc<ThreadControlBlock>>,
+    /// Number of threads currently in EXECUTING state.
+    pub active_count: AtomicUsize,
+    /// Global flag indicating if a GC collection is currently in progress.
+    /// This is used to detect if GC is in progress when new threads spawn,
+    /// since thread-local IN_COLLECT can't be used across threads.
+    pub gc_in_progress: AtomicBool,
+}
+
+impl Default for ThreadRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ThreadRegistry {
+    /// Create a new empty thread registry.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            threads: Vec::new(),
+            active_count: AtomicUsize::new(0),
+            gc_in_progress: AtomicBool::new(false),
+        }
+    }
+
+    /// Register a new thread with the registry.
+    pub fn register_thread(&mut self, tcb: std::sync::Arc<ThreadControlBlock>) {
+        self.threads.push(tcb);
+    }
+
+    /// Unregister a thread from the registry.
+    pub fn unregister_thread(&mut self, tcb: &std::sync::Arc<ThreadControlBlock>) {
+        self.threads
+            .retain(|existing| !std::sync::Arc::ptr_eq(existing, tcb));
+    }
+
+    /// Mark that a GC collection is in progress.
+    /// This is used to detect if GC is in progress when new threads spawn,
+    /// since thread-local flags can't be shared across threads.
+    pub fn set_gc_in_progress(&self, in_progress: bool) {
+        self.gc_in_progress.store(in_progress, Ordering::SeqCst);
+    }
+
+    /// Check if a GC collection is currently in progress.
+    /// This uses a global flag instead of thread-local, so it works
+    /// correctly when called from newly spawned threads.
+    #[must_use]
+    pub fn is_gc_in_progress(&self) -> bool {
+        self.gc_in_progress.load(Ordering::Acquire)
+    }
+}
+
+static THREAD_REGISTRY: OnceLock<Mutex<ThreadRegistry>> = OnceLock::new();
+
+/// Access the global thread registry.
+pub fn thread_registry() -> &'static Mutex<ThreadRegistry> {
+    THREAD_REGISTRY.get_or_init(|| Mutex::new(ThreadRegistry::new()))
+}
+
+// ============================================================================
+// Safe Points - Multi-threaded GC Coordination
+// ============================================================================
+
+/// Global flag set by collector to request all threads to stop at safe point.
+/// Uses Relaxed ordering for fast-path reads - synchronization happens via the
+/// rendezvous protocol, not this flag alone.
+pub static GC_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Check if GC has been requested and handle the rendezvous if so.
+/// This is the fast-path check inserted into allocation code.
+pub fn check_safepoint() {
+    // CRITICAL FIX: Prevent deadlock when Drop handlers allocate during GC
+    // If we're already collecting, we must NOT enter rendezvous or we'll
+    // deadlock waiting for gc_requested to become false (only collector can clear it)
+    if GC_REQUESTED.load(Ordering::Relaxed) && !crate::gc::is_collecting() {
+        enter_rendezvous();
+    }
+}
+
+/// Called when a thread reaches a safe point and GC is requested.
+/// Performs the cooperative rendezvous protocol.
+#[allow(clippy::significant_drop_tightening)]
+fn enter_rendezvous() {
+    let Some(tcb) = current_thread_control_block() else {
+        return;
+    };
+
+    // CRITICAL FIX: Check per-thread gc_requested flag BEFORE doing any state transitions
+    // If this thread was created after request_gc_handshake(), its gc_requested flag
+    // will be false even though global GC_REQUESTED is true. We must NOT participate
+    // in rendezvous in this case, otherwise we'll:
+    // 1. Transition to SAFEPOINT state (incorrectly)
+    // 2. Decrement active_count (incorrectly)
+    // 3. Return immediately (since gc_requested is false)
+    // 4. Continue running while in SAFEPOINT state
+    // This causes data race when collector accesses our heap concurrently.
+    if !tcb.gc_requested.load(Ordering::Acquire) {
+        return;
+    }
+
+    let old_state = tcb.state.compare_exchange(
+        THREAD_STATE_EXECUTING,
+        THREAD_STATE_SAFEPOINT,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+
+    if old_state.is_err() {
+        return;
+    }
+
+    // CRITICAL: Capture and store stack roots BEFORE decrementing active_count
+    // This ensures that when collector sees active_count == 1, all threads have
+    // already stored their complete stack roots. Otherwise, collector may read
+    // empty/incomplete roots and miss live objects, causing memory corruption.
+    let mut roots = Vec::new();
+    unsafe {
+        crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
+            roots.push(ptr as *const u8);
+        });
+    }
+    *tcb.stack_roots.lock().unwrap() = roots;
+
+    // Now decrement active_count to signal completion to collector
+    thread_registry()
+        .lock()
+        .unwrap()
+        .active_count
+        .fetch_sub(1, Ordering::SeqCst);
+
+    let mut guard = tcb.park_mutex.lock().unwrap();
+    while tcb.gc_requested.load(Ordering::Acquire) {
+        guard = tcb.park_cond.wait(guard).unwrap();
+    }
+}
+
+/// Signal all threads waiting at safe points to resume.
+///
+/// # Panics
+///
+/// Panics if the thread registry lock is poisoned.
+pub fn resume_all_threads() {
+    let registry = thread_registry().lock().unwrap();
+    let mut woken_count = 0;
+    for tcb in &registry.threads {
+        if tcb.state.load(Ordering::Acquire) == THREAD_STATE_SAFEPOINT {
+            tcb.gc_requested.store(false, Ordering::Relaxed);
+            tcb.park_cond.notify_all();
+            tcb.state.store(THREAD_STATE_EXECUTING, Ordering::Release);
+            woken_count += 1;
+        }
+    }
+    // Restore active count only for threads that were woken up
+    // CRITICAL FIX: Don't set active_count to threads.len(), only increment by woken_count
+    // Setting to threads.len() was causing hangs by miscounting active threads
+    registry
+        .active_count
+        .fetch_add(woken_count, std::sync::atomic::Ordering::SeqCst);
+    drop(registry);
+
+    // Clear global flag
+    GC_REQUESTED.store(false, Ordering::Relaxed);
+}
+
+/// Request all threads to stop at the next safe point.
+/// Returns true if this thread should become the collector.
+///
+/// # Panics
+///
+/// Panics if the thread registry lock is poisoned.
+#[allow(dead_code)]
+pub fn request_gc_handshake() -> bool {
+    let registry = thread_registry().lock().unwrap();
+
+    // Set GC_REQUESTED flag first (before locking registry)
+    GC_REQUESTED.store(true, Ordering::Relaxed);
+
+    // Set per-thread gc_requested flag for all threads
+    for tcb in &registry.threads {
+        tcb.gc_requested.store(true, Ordering::Relaxed);
+    }
+
+    let active = registry.active_count.load(Ordering::Acquire);
+    drop(registry);
+
+    active == 1
+}
+
+/// Wait for GC to complete if a collection is in progress.
+///
+/// # Panics
+///
+/// Panics if the thread registry lock is poisoned.
+#[allow(clippy::significant_drop_tightening)]
+pub fn wait_for_gc_complete() {
+    let Some(tcb) = current_thread_control_block() else {
+        return;
+    };
+
+    let old_state = tcb.state.compare_exchange(
+        THREAD_STATE_EXECUTING,
+        THREAD_STATE_SAFEPOINT,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+
+    if old_state.is_err() {
+        return;
+    }
+
+    // CRITICAL: Capture and store stack roots BEFORE decrementing active_count
+    // This ensures that when collector sees active_count == 1, all threads have
+    // already stored their complete stack roots. Otherwise, collector may read
+    // empty/incomplete roots and miss live objects, causing memory corruption.
+    let mut roots = Vec::new();
+    unsafe {
+        crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
+            roots.push(ptr as *const u8);
+        });
+    }
+    *tcb.stack_roots.lock().unwrap() = roots;
+
+    // Now decrement active_count to signal completion to collector
+    thread_registry()
+        .lock()
+        .unwrap()
+        .active_count
+        .fetch_sub(1, Ordering::SeqCst);
+
+    let mut guard = tcb.park_mutex.lock().unwrap();
+    while tcb.gc_requested.load(Ordering::Acquire) {
+        guard = tcb.park_cond.wait(guard).unwrap();
+    }
+}
+
+/// Clear the GC request flag after collection is complete.
+///
+/// # Panics
+///
+/// Panics if the thread registry lock is poisoned.
+#[allow(dead_code)]
+pub fn clear_gc_request() {
+    let registry = thread_registry().lock().unwrap();
+    for tcb in &registry.threads {
+        tcb.gc_requested.store(false, Ordering::Relaxed);
+    }
+    drop(registry);
+    GC_REQUESTED.store(false, Ordering::Relaxed);
+}
+
+/// Get the list of all thread control blocks for scanning.
+///
+/// # Panics
+///
+/// Panics if the thread registry lock is poisoned.
+#[allow(dead_code)]
+#[must_use]
+pub fn get_all_thread_control_blocks() -> Vec<std::sync::Arc<ThreadControlBlock>> {
+    thread_registry().lock().unwrap().threads.clone()
+}
+
+/// Get stack roots from a thread control block.
+/// Returns the captured stack roots and clears the buffer.
+///
+/// # Panics
+///
+/// Panics if the stack roots lock is poisoned.
+#[allow(dead_code)]
+pub fn take_stack_roots(tcb: &ThreadControlBlock) -> Vec<*const u8> {
+    std::mem::take(&mut *tcb.stack_roots.lock().unwrap())
+}
 
 // ============================================================================
 // Constants
@@ -226,6 +566,7 @@ impl Tlab {
     /// Returns `Some(ptr)` if successful, `None` if the TLAB is exhausted.
     #[inline]
     pub fn alloc(&mut self, block_size: usize) -> Option<NonNull<u8>> {
+        check_safepoint();
         let ptr = self.bump_ptr;
         // Check if we have enough space.
         // We use wrapping_add and compare as usize to avoid UB with ptr.add(block_size)
@@ -661,6 +1002,7 @@ impl LocalHeap {
 
     #[inline(never)]
     fn alloc_slow(&mut self, _size: usize, class_index: usize) -> NonNull<u8> {
+        check_safepoint();
         let block_size = match class_index {
             0 => 16,
             1 => 32,
@@ -752,6 +1094,9 @@ impl LocalHeap {
     ///
     /// Panics if the alignment requirement exceeds `PAGE_SIZE`.
     fn alloc_large(&mut self, size: usize, align: usize) -> NonNull<u8> {
+        // Check for pending GC request - large object allocation can block GC
+        check_safepoint();
+
         // Validate alignment - page alignment (4096) should satisfy most types
         assert!(
             PAGE_SIZE >= align,
@@ -1005,9 +1350,63 @@ impl Drop for LocalHeap {
 // Thread-local heap access
 // ============================================================================
 
+/// Thread-local heap wrapper that owns the heap and its control block.
+pub struct ThreadLocalHeap {
+    /// The thread's control block for GC coordination.
+    pub tcb: std::sync::Arc<ThreadControlBlock>,
+}
+
+impl ThreadLocalHeap {
+    fn new() -> Self {
+        let tcb = std::sync::Arc::new(ThreadControlBlock::new());
+        {
+            let mut registry = thread_registry().lock().unwrap();
+
+            // CRITICAL FIX: Handle thread spawning during GC
+            // If GC is already in progress, we must NOT participate in rendezvous.
+            // Otherwise:
+            // 1. Collector takes snapshot of threads before we register
+            // 2. We register and enter rendezvous, storing our roots
+            // 3. Collector never sees our roots (snapshot doesn't include us)
+            // 4. Collector sweeps objects reachable from our stack → use-after-free
+            //
+            // NOTE: We check the global gc_in_progress flag instead of thread-local
+            // is_collecting(), because a newly spawned thread always sees its own copy
+            // of the thread-local variable (default: false), even when collector's copy
+            // is true. The global flag correctly reflects the actual GC state.
+            if registry.is_gc_in_progress() {
+                // GC is in progress - DO NOT set gc_requested flag
+                // Thread will run and allocate during GC, but won't enter rendezvous
+                // This is safe because:
+                // - Thread only allocates NEW objects (not reachable yet)
+                // - Old objects from other heaps are already marked
+                // - New objects won't be swept (GC already took snapshot of threads)
+            } else if GC_REQUESTED.load(Ordering::Acquire) {
+                // GC has been requested but not yet started
+                // Set gc_requested so we'll participate in handshake when it starts
+                tcb.gc_requested.store(true, Ordering::Release);
+            }
+
+            registry.register_thread(tcb.clone());
+            registry.active_count.fetch_add(1, Ordering::SeqCst);
+        }
+        Self { tcb }
+    }
+}
+
+impl Drop for ThreadLocalHeap {
+    fn drop(&mut self) {
+        let mut registry = thread_registry().lock().unwrap();
+        if self.tcb.state.load(Ordering::SeqCst) == THREAD_STATE_EXECUTING {
+            registry.active_count.fetch_sub(1, Ordering::SeqCst);
+        }
+        registry.unregister_thread(&self.tcb);
+    }
+}
+
 thread_local! {
-    /// Thread-local heap instance.
-    pub static HEAP: RefCell<LocalHeap> = RefCell::new(LocalHeap::new());
+    /// Thread-local heap instance with its control block.
+    pub static HEAP: ThreadLocalHeap = ThreadLocalHeap::new();
 }
 
 /// Execute a function with access to the thread-local heap.
@@ -1015,19 +1414,44 @@ pub fn with_heap<F, R>(f: F) -> R
 where
     F: FnOnce(&mut LocalHeap) -> R,
 {
-    HEAP.with(|heap| f(&mut heap.borrow_mut()))
+    HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get()) })
+}
+
+/// Get mutable access to the thread-local heap and its control block.
+/// Used for GC coordination.
+#[allow(dead_code)]
+pub fn with_heap_and_tcb<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut LocalHeap, &ThreadControlBlock) -> R,
+{
+    HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get(), &local.tcb) })
+}
+
+/// Get the current thread's control block.
+/// Returns None if called outside a thread with GC heap.
+#[allow(dead_code)]
+#[must_use]
+pub fn current_thread_control_block() -> Option<std::sync::Arc<ThreadControlBlock>> {
+    HEAP.try_with(|local| local.tcb.clone()).ok()
+}
+
+/// Update the heap pointer in the thread control block.
+/// Called after heap operations that might move/reallocate heap metadata.
+#[allow(dead_code)]
+pub const fn update_tcb_heap_ptr() {
+    // No-op now since heap is stored directly in TCB
 }
 
 /// Get the minimum address managed by the thread-local heap.
 #[must_use]
 pub fn heap_start() -> usize {
-    HEAP.with(|h| h.borrow().min_addr)
+    HEAP.with(|h| unsafe { (*h.tcb.heap.get()).min_addr })
 }
 
 /// Get the maximum address managed by the thread-local heap.
 #[must_use]
 pub fn heap_end() -> usize {
-    HEAP.with(|h| h.borrow().max_addr)
+    HEAP.with(|h| unsafe { (*h.tcb.heap.get()).max_addr })
 }
 
 /// Convert a pointer to its page header.

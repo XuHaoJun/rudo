@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 use std::ptr::NonNull;
+use std::sync::atomic::Ordering;
 
 use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
@@ -129,13 +130,15 @@ fn maybe_collect() {
     }
 
     // Check if we should collect
-    // Use try_borrow to avoid panics if we are already mutably borrowing the heap
-    // (e.g. during a sweep phase that triggers a drop)
-    let stats = crate::heap::HEAP.with(|heap| {
-        heap.try_borrow()
-            .map(|h| (h.total_allocated(), h.young_allocated(), h.old_allocated()))
-            .ok()
-    });
+    let stats = crate::heap::HEAP
+        .try_with(|heap| {
+            (
+                unsafe { &*heap.tcb.heap.get() }.total_allocated(),
+                unsafe { &*heap.tcb.heap.get() }.young_allocated(),
+                unsafe { &*heap.tcb.heap.get() }.old_allocated(),
+            )
+        })
+        .ok();
 
     let Some((total, young, old)) = stats else {
         return; // Already borrowed, skip collection check
@@ -166,53 +169,143 @@ pub fn set_collect_condition(f: CollectCondition) {
     COLLECT_CONDITION.with(|c| c.set(f));
 }
 
+/// Manually check for a pending GC request and block until it's processed.
+///
+/// This function should be called in long-running loops that don't perform
+/// allocations, to ensure threads can respond to GC requests in a timely manner.
+///
+/// # Example
+///
+/// ```
+/// use rudo_gc::safepoint;
+///
+/// for _ in 0..1000 {
+///     // Do some non-allocating work...
+///     let _: Vec<i32> = (0..100).collect();
+///
+///     // Check for GC requests
+///     safepoint();
+/// }
+/// ```
+pub fn safepoint() {
+    crate::heap::check_safepoint();
+}
+
 // ============================================================================
 // Mark-Sweep Collection
 // ============================================================================
 
-const MINOR_THRESHOLD: usize = 256 * 1024; // 256KB
 const MAJOR_THRESHOLD: usize = 10 * 1024 * 1024; // 10MB
 
 /// Perform a garbage collection.
 ///
 /// Decides between Minor and Major collection based on heuristics.
+/// Implements cooperative rendezvous for multi-threaded safety.
 pub fn collect() {
     // Reentrancy guard
     if IN_COLLECT.with(Cell::get) {
         return;
     }
+
+    let is_collector = crate::heap::request_gc_handshake();
+
+    if is_collector {
+        perform_multi_threaded_collect();
+    } else {
+        // We're not the collector - atomically clear GC flag and wake threads
+        // to prevent race condition where threads enter rendezvous after wake-up
+        perform_single_threaded_collect_with_wake();
+    }
+}
+
+/// Perform collection as the collector thread.
+fn perform_multi_threaded_collect() {
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
-    let before_bytes =
-        crate::heap::HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+    let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     // Reset drop counter
     N_DROPS.with(|n| n.set(0));
 
     let mut objects_reclaimed = 0;
-    let mut collection_type = crate::metrics::CollectionType::None;
 
-    crate::heap::with_heap(|heap| {
-        let young_size = heap.young_allocated();
-        let total_size = heap.total_allocated();
+    // CRITICAL FIX: Set global gc_in_progress flag BEFORE taking thread snapshot
+    // This ensures new threads can detect that GC is in progress and avoid
+    // participating in rendezvous. The thread-local IN_COLLECT flag can't be
+    // used here because newly spawned threads get their own copy (default: false).
+    crate::heap::thread_registry()
+        .lock()
+        .unwrap()
+        .set_gc_in_progress(true);
 
-        if total_size > MAJOR_THRESHOLD {
-            collection_type = crate::metrics::CollectionType::Major;
-            objects_reclaimed = collect_major(heap);
-        } else if young_size > MINOR_THRESHOLD {
-            collection_type = crate::metrics::CollectionType::Minor;
-            objects_reclaimed = collect_minor(heap);
-        } else {
-            // Default to Minor if we got here (some threshold was met in notify_dropped_gc)
-            collection_type = crate::metrics::CollectionType::Minor;
-            objects_reclaimed = collect_minor(heap);
-        }
+    // Determine collection type based on current thread's heap
+    let total_size = crate::heap::HEAP.with(|h| {
+        let heap = unsafe { &*h.tcb.heap.get() };
+        heap.total_allocated()
     });
 
+    // Collect all stack roots BEFORE processing heaps
+    // This ensures we capture roots from all threads before any are consumed
+    let tcbs = crate::heap::get_all_thread_control_blocks();
+    let all_stack_roots: Vec<(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)> = tcbs
+        .iter()
+        .flat_map(|tcb| {
+            let roots = crate::heap::take_stack_roots(tcb);
+            roots.into_iter().map(move |ptr| (ptr, tcb.clone()))
+        })
+        .collect();
+
+    if total_size > MAJOR_THRESHOLD {
+        // CRITICAL FIX: For major GC, we must clear ALL marks first, then mark ALL
+        // reachable objects, then sweep ALL heaps. The old approach processed each
+        // heap independently, which caused marks on other heaps (set during
+        // tracing of cross-heap references) to be cleared when processing those heaps.
+        // This led to objects only transitively reachable through other heaps being
+        // incorrectly swept, causing use-after-free bugs.
+
+        // Phase 1: Clear all marks on ALL heaps
+        for tcb in &tcbs {
+            unsafe {
+                clear_all_marks_and_dirty(&*tcb.heap.get());
+            }
+        }
+
+        // Phase 2: Mark all reachable objects (tracing across all heaps)
+        // We mark from each heap's perspective to ensure we find all cross-heap references
+        for tcb in &tcbs {
+            unsafe {
+                mark_major_roots_multi(&mut *tcb.heap.get(), &all_stack_roots);
+            }
+        }
+
+        // Phase 3: Sweep ALL heaps
+        for tcb in &tcbs {
+            unsafe {
+                let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
+                let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
+                objects_reclaimed += reclaimed + reclaimed_large;
+                promote_all_pages(&*tcb.heap.get());
+            }
+        }
+    } else {
+        // Minor GC doesn't have cross-heap issues since it only scans young objects
+        // and uses remembered sets for inter-generational references
+        for tcb in &tcbs {
+            unsafe {
+                objects_reclaimed += collect_minor_multi(&mut *tcb.heap.get(), &all_stack_roots);
+            }
+        }
+    }
+
+    let collection_type = if total_size > MAJOR_THRESHOLD {
+        crate::metrics::CollectionType::Major
+    } else {
+        crate::metrics::CollectionType::Minor
+    };
+
     let duration = start.elapsed();
-    let after_bytes =
-        crate::heap::HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     crate::metrics::record_metrics(crate::metrics::GcMetrics {
         duration,
@@ -221,8 +314,19 @@ pub fn collect() {
         objects_reclaimed,
         objects_surviving: N_EXISTING.with(Cell::get),
         collection_type,
-        total_collections: 0, // Set by record_metrics
+        total_collections: 0,
     });
+
+    crate::heap::resume_all_threads();
+    crate::heap::clear_gc_request();
+
+    // CRITICAL FIX: Clear global gc_in_progress flag after GC completes
+    // This must be done AFTER resume_all_threads() so that new threads
+    // don't see a false positive for in-progress GC.
+    crate::heap::thread_registry()
+        .lock()
+        .unwrap()
+        .set_gc_in_progress(false);
 
     IN_COLLECT.with(|in_collect| in_collect.set(false));
 }
@@ -230,16 +334,122 @@ pub fn collect() {
 /// Perform a full garbage collection (Major GC).
 ///
 /// This will collect all unreachable objects in both Young and Old generations.
+/// Implements cooperative rendezvous for multi-threaded safety.
 pub fn collect_full() {
-    // Reentrancy guard
     if IN_COLLECT.with(Cell::get) {
         return;
     }
+
+    let is_collector = crate::heap::request_gc_handshake();
+
+    if is_collector {
+        perform_multi_threaded_collect_full();
+    } else {
+        // We're not the collector - wake up any threads waiting in rendezvous
+        // and perform single-threaded collection
+        crate::heap::GC_REQUESTED.store(false, Ordering::Relaxed);
+        wake_waiting_threads();
+        perform_single_threaded_collect_full();
+    }
+}
+
+/// Wake up any threads waiting at a safe point.
+/// This is used when a non-collector thread needs to wake up waiting threads
+/// and perform single-threaded collection. It properly restores threads to
+/// EXECUTING state and restores `active_count`.
+fn wake_waiting_threads() {
+    let registry = crate::heap::thread_registry().lock().unwrap();
+    let mut woken_count = 0;
+    for tcb in &registry.threads {
+        if tcb.state.load(Ordering::Acquire) == crate::heap::THREAD_STATE_SAFEPOINT {
+            tcb.gc_requested.store(false, Ordering::Relaxed);
+            tcb.park_cond.notify_all();
+            tcb.state
+                .store(crate::heap::THREAD_STATE_EXECUTING, Ordering::Release);
+            woken_count += 1;
+        }
+    }
+    registry
+        .active_count
+        .fetch_add(woken_count, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Perform single-threaded collection with atomic GC flag clearing and thread wake-up
+/// to prevent race conditions where threads enter rendezvous after wake-up completes.
+fn perform_single_threaded_collect_with_wake() {
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
-    let before_bytes =
-        crate::heap::HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+    let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+
+    // Reset drop counter
+    N_DROPS.with(|n| n.set(0));
+
+    // Atomically clear GC flag and wake threads while holding registry lock
+    // This prevents race condition where threads see stale GC_REQUESTED value
+    {
+        let registry = crate::heap::thread_registry().lock().unwrap();
+
+        // Clear global flag first with SeqCst ordering
+        crate::heap::GC_REQUESTED.store(false, Ordering::SeqCst);
+
+        // Wake any threads already at safepoints and clear their flags
+        let mut woken_count = 0;
+        for tcb in &registry.threads {
+            if tcb.state.load(Ordering::Acquire) == crate::heap::THREAD_STATE_SAFEPOINT {
+                tcb.gc_requested.store(false, Ordering::SeqCst);
+                tcb.park_cond.notify_all();
+                tcb.state
+                    .store(crate::heap::THREAD_STATE_EXECUTING, Ordering::Release);
+                woken_count += 1;
+            }
+        }
+
+        // Restore active count for woken threads
+        registry
+            .active_count
+            .fetch_add(woken_count, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    let mut objects_reclaimed = 0;
+    let mut collection_type = crate::metrics::CollectionType::None;
+
+    crate::heap::with_heap(|heap| {
+        let total_size = heap.total_allocated();
+
+        if total_size > MAJOR_THRESHOLD {
+            collection_type = crate::metrics::CollectionType::Major;
+            objects_reclaimed = collect_major(heap);
+        } else {
+            collection_type = crate::metrics::CollectionType::Minor;
+            objects_reclaimed = collect_minor(heap);
+        }
+    });
+
+    let duration = start.elapsed();
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+
+    // Record metrics
+    let metrics = crate::metrics::GcMetrics {
+        duration,
+        bytes_reclaimed: before_bytes.saturating_sub(after_bytes),
+        bytes_surviving: after_bytes,
+        objects_reclaimed,
+        objects_surviving: 0, // Could be calculated if needed
+        collection_type,
+        total_collections: 0, // Will be set by record_metrics
+    };
+    crate::metrics::record_metrics(metrics);
+
+    IN_COLLECT.with(|in_collect| in_collect.set(false));
+}
+
+/// Perform single-threaded full collection (fallback for tests).
+fn perform_single_threaded_collect_full() {
+    IN_COLLECT.with(|in_collect| in_collect.set(true));
+
+    let start = std::time::Instant::now();
+    let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     let mut objects_reclaimed = 0;
     crate::heap::with_heap(|heap| {
@@ -247,8 +457,7 @@ pub fn collect_full() {
     });
 
     let duration = start.elapsed();
-    let after_bytes =
-        crate::heap::HEAP.with(|h| h.try_borrow().map(|r| r.total_allocated()).unwrap_or(0));
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     crate::metrics::record_metrics(crate::metrics::GcMetrics {
         duration,
@@ -261,6 +470,182 @@ pub fn collect_full() {
     });
 
     IN_COLLECT.with(|in_collect| in_collect.set(false));
+}
+
+/// Perform full collection as the collector thread.
+fn perform_multi_threaded_collect_full() {
+    IN_COLLECT.with(|in_collect| in_collect.set(true));
+
+    let start = std::time::Instant::now();
+    let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+
+    let mut objects_reclaimed = 0;
+
+    // Collect all stack roots BEFORE processing heaps
+    // This ensures we capture roots from all threads before any are consumed
+    let tcbs = crate::heap::get_all_thread_control_blocks();
+    let all_stack_roots: Vec<(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)> = tcbs
+        .iter()
+        .flat_map(|tcb| {
+            let roots = crate::heap::take_stack_roots(tcb);
+            roots.into_iter().map(move |ptr| (ptr, tcb.clone()))
+        })
+        .collect();
+
+    for tcb in &tcbs {
+        unsafe {
+            objects_reclaimed += collect_major_multi(&mut *tcb.heap.get(), &all_stack_roots);
+        }
+    }
+
+    let duration = start.elapsed();
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+
+    crate::metrics::record_metrics(crate::metrics::GcMetrics {
+        duration,
+        bytes_reclaimed: before_bytes.saturating_sub(after_bytes),
+        bytes_surviving: after_bytes,
+        objects_reclaimed,
+        objects_surviving: N_EXISTING.with(Cell::get),
+        collection_type: crate::metrics::CollectionType::Major,
+        total_collections: 0,
+    });
+
+    crate::heap::resume_all_threads();
+    crate::heap::clear_gc_request();
+
+    IN_COLLECT.with(|in_collect| in_collect.set(false));
+}
+
+/// Minor collection for a heap in multi-threaded context.
+fn collect_minor_multi(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+) -> usize {
+    mark_minor_roots_multi(heap, stack_roots);
+    let reclaimed = sweep_segment_pages(heap, true);
+    let reclaimed_large = sweep_large_objects(heap, true);
+    promote_young_pages(heap);
+    reclaimed + reclaimed_large
+}
+
+/// Major collection for a heap in multi-threaded context.
+fn collect_major_multi(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+) -> usize {
+    clear_all_marks_and_dirty(heap);
+    mark_major_roots_multi(heap, stack_roots);
+    let reclaimed = sweep_segment_pages(heap, false);
+    let reclaimed_large = sweep_large_objects(heap, false);
+    promote_all_pages(heap);
+    reclaimed + reclaimed_large
+}
+
+/// Mark roots from all threads' stacks for Minor GC.
+fn mark_minor_roots_multi(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+) {
+    let mut visitor = GcVisitor {
+        kind: VisitorKind::Minor,
+    };
+
+    // Scan all threads' captured stack roots (passed in, not consumed)
+    for &(ptr, _) in stack_roots {
+        unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                mark_object_minor(gc_box, &mut visitor);
+            }
+        }
+    }
+
+    // Also scan current thread's registers (collector thread's live registers)
+    unsafe {
+        crate::stack::spill_registers_and_scan(|potential_ptr, _addr, _is_reg| {
+            if let Some(gc_box_ptr) =
+                crate::heap::find_gc_box_from_ptr(heap, potential_ptr as *const u8)
+            {
+                mark_object_minor(gc_box_ptr, &mut visitor);
+            }
+        });
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    TEST_ROOTS.with(|roots| {
+        for &ptr in roots.borrow().iter() {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    mark_object_minor(gc_box, &mut visitor);
+                }
+            }
+        }
+    });
+
+    for page_ptr in heap.all_pages() {
+        unsafe {
+            let header = page_ptr.as_ptr();
+            if (*header).generation == 0 {
+                continue;
+            }
+            if (*header).flags & 0x01 != 0 {
+                continue;
+            }
+
+            let obj_count = (*header).obj_count as usize;
+            for i in 0..obj_count {
+                if (*header).is_dirty(i) {
+                    let block_size = (*header).block_size as usize;
+                    let header_size = PageHeader::header_size(block_size);
+                    let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+                    ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
+                }
+            }
+            (*header).clear_all_dirty();
+        }
+    }
+}
+
+/// Mark roots from all threads' stacks for Major GC.
+fn mark_major_roots_multi(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+) {
+    let mut visitor = GcVisitor {
+        kind: VisitorKind::Major,
+    };
+
+    // Scan all threads' captured stack roots (passed in, not consumed)
+    for &(ptr, _) in stack_roots {
+        unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                mark_object(gc_box, &mut visitor);
+            }
+        }
+    }
+
+    // Also scan current thread's registers (collector thread's live registers)
+    unsafe {
+        crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                mark_object(gc_box, &mut visitor);
+            }
+        });
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    TEST_ROOTS.with(|roots| {
+        for &ptr in roots.borrow().iter() {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    mark_object(gc_box, &mut visitor);
+                }
+            }
+        }
+    });
 }
 
 /// Minor Collection: Collect Young Generation only.
@@ -872,5 +1257,119 @@ mod tests {
             metrics.collection_type,
             crate::metrics::CollectionType::Major
         );
+    }
+
+    #[test]
+    fn test_multi_threaded_gc_handshake() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        clear_test_roots();
+
+        let num_threads = 4;
+        let objects_per_thread = 10; // Reduced to speed up test
+
+        let barrier = Arc::new(Barrier::new(num_threads));
+        let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let mut handles = Vec::new();
+        for i in 0..num_threads {
+            let barrier = barrier.clone();
+            let started = started.clone();
+            let done = done.clone();
+
+            let handle = thread::spawn(move || {
+                barrier.wait();
+                started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+                for j in 0..objects_per_thread {
+                    let val = i * 1000 + j;
+                    let _gc_val = crate::Gc::new(val);
+
+                    // Call safepoint - this may trigger GC
+                    crate::safepoint();
+                }
+
+                done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            });
+            handles.push(handle);
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(
+            started.load(std::sync::atomic::Ordering::SeqCst),
+            num_threads
+        );
+        assert_eq!(done.load(std::sync::atomic::Ordering::SeqCst), num_threads);
+
+        clear_test_roots();
+    }
+
+    #[test]
+    fn test_gc_requested_flag() {
+        use std::sync::atomic::Ordering;
+
+        assert!(
+            !crate::heap::GC_REQUESTED.load(Ordering::Relaxed),
+            "GC_REQUESTED should be false initially"
+        );
+
+        let _guard = crate::heap::thread_registry().lock().unwrap();
+
+        crate::heap::GC_REQUESTED.store(true, Ordering::Relaxed);
+        assert!(
+            crate::heap::GC_REQUESTED.load(Ordering::Relaxed),
+            "GC_REQUESTED should be true after setting"
+        );
+
+        crate::heap::GC_REQUESTED.store(false, Ordering::Relaxed);
+        assert!(
+            !crate::heap::GC_REQUESTED.load(Ordering::Relaxed),
+            "GC_REQUESTED should be false after clearing"
+        );
+    }
+
+    #[test]
+    fn test_thread_control_block_state() {
+        use std::sync::atomic::Ordering;
+
+        crate::heap::with_heap_and_tcb(|_, tcb| {
+            assert_eq!(
+                tcb.state.load(Ordering::Relaxed),
+                crate::heap::THREAD_STATE_EXECUTING,
+                "Thread should be in EXECUTING state initially"
+            );
+
+            tcb.state
+                .store(crate::heap::THREAD_STATE_SAFEPOINT, Ordering::Relaxed);
+            assert_eq!(
+                tcb.state.load(Ordering::Relaxed),
+                crate::heap::THREAD_STATE_SAFEPOINT,
+                "Thread state should be SAFEPOINT after setting"
+            );
+
+            tcb.state
+                .store(crate::heap::THREAD_STATE_INACTIVE, Ordering::Relaxed);
+            assert_eq!(
+                tcb.state.load(Ordering::Relaxed),
+                crate::heap::THREAD_STATE_INACTIVE,
+                "Thread state should be INACTIVE after setting"
+            );
+        });
+    }
+
+    #[test]
+    fn test_safepoint_function() {
+        crate::safepoint();
+
+        for _ in 0..100 {
+            crate::Gc::new(42i32);
+        }
+
+        crate::safepoint();
     }
 }
