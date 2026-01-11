@@ -1341,14 +1341,27 @@ impl ThreadLocalHeap {
         let tcb = std::sync::Arc::new(ThreadControlBlock::new());
         {
             let mut registry = thread_registry().lock().unwrap();
-            // CRITICAL FIX: Set gc_requested flag based on current global GC_REQUESTED state
-            // If a thread spawns during GC, it needs to participate in the handshake.
-            // Without this, the thread would run during GC while collector accesses its heap,
-            // causing a data race. We also check !is_collecting() to avoid setting flag
-            // after GC completes (to prevent spurious rendezvous in next allocation).
-            if !crate::gc::is_collecting() && GC_REQUESTED.load(Ordering::Acquire) {
+
+            // CRITICAL FIX: Handle thread spawning during GC
+            // If GC is already in progress, we must NOT participate in rendezvous.
+            // Otherwise:
+            // 1. Collector takes snapshot of threads before we register
+            // 2. We register and enter rendezvous, storing our roots
+            // 3. Collector never sees our roots (snapshot doesn't include us)
+            // 4. Collector sweeps objects reachable from our stack → use-after-free
+            if crate::gc::is_collecting() {
+                // GC is in progress - DO NOT set gc_requested flag
+                // Thread will run and allocate during GC, but won't enter rendezvous
+                // This is safe because:
+                // - Thread only allocates NEW objects (not reachable yet)
+                // - Old objects from other heaps are already marked
+                // - New objects won't be swept (GC already took snapshot of threads)
+            } else if GC_REQUESTED.load(Ordering::Acquire) {
+                // GC has been requested but not yet started
+                // Set gc_requested so we'll participate in handshake when it starts
                 tcb.gc_requested.store(true, Ordering::Release);
             }
+
             registry.register_thread(tcb.clone());
             registry.active_count.fetch_add(1, Ordering::SeqCst);
         }
