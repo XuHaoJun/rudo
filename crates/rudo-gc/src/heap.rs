@@ -42,6 +42,18 @@ pub struct ThreadControlBlock {
     pub heap: UnsafeCell<LocalHeap>,
     /// Stack roots captured at safepoint for the collector to scan.
     pub stack_roots: Mutex<Vec<*const u8>>,
+    /// Thread ID for parallel GC ownership.
+    pub thread_id: usize,
+    /// Local mark stack for parallel marking (thread-private).
+    /// Objects to be traced by this thread during GC.
+    pub local_mark_stack: Mutex<Vec<*const u8>>,
+    /// Remote inbox for receiving forwarded objects from other threads.
+    /// Uses Mutex for simplicity; could be made lock-free for performance.
+    pub remote_inbox: Mutex<Vec<*const u8>>,
+    /// Counter for objects sent to remote threads (for termination detection).
+    pub remote_sent_count: AtomicUsize,
+    /// Counter for objects received from remote threads (for termination detection).
+    pub remote_received_count: AtomicUsize,
 }
 
 #[allow(clippy::non_send_fields_in_send_ty)]
@@ -50,7 +62,7 @@ unsafe impl Sync for ThreadControlBlock {}
 
 impl Default for ThreadControlBlock {
     fn default() -> Self {
-        Self::new()
+        Self::new(0)
     }
 }
 
@@ -58,7 +70,7 @@ impl ThreadControlBlock {
     /// Create a new `ThreadControlBlock` with an uninitialized heap.
     /// The heap must be initialized separately.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(thread_id: usize) -> Self {
         Self {
             state: AtomicUsize::new(THREAD_STATE_EXECUTING),
             gc_requested: AtomicBool::new(false),
@@ -66,7 +78,76 @@ impl ThreadControlBlock {
             park_mutex: Mutex::new(()),
             heap: UnsafeCell::new(LocalHeap::new()),
             stack_roots: Mutex::new(Vec::new()),
+            thread_id,
+            local_mark_stack: Mutex::new(Vec::new()),
+            remote_inbox: Mutex::new(Vec::new()),
+            remote_sent_count: AtomicUsize::new(0),
+            remote_received_count: AtomicUsize::new(0),
         }
+    }
+
+    /// Get the thread ID.
+    #[must_use]
+    pub fn id(&self) -> usize {
+        self.thread_id
+    }
+
+    /// Push an object to the local mark stack.
+    pub fn push_local_mark(&self, ptr: *const u8) {
+        let mut stack = self.local_mark_stack.lock().unwrap();
+        stack.push(ptr);
+    }
+
+    /// Pop an object from the local mark stack.
+    pub fn pop_local_mark(&self) -> Option<*const u8> {
+        let mut stack = self.local_mark_stack.lock().unwrap();
+        stack.pop()
+    }
+
+    /// Check if local mark stack is empty.
+    pub fn is_local_mark_stack_empty(&self) -> bool {
+        let stack = self.local_mark_stack.lock().unwrap();
+        stack.is_empty()
+    }
+
+    /// Push an object to the remote inbox (for forwarding from other threads).
+    pub fn push_remote_inbox(&self, ptr: *const u8) {
+        let mut inbox = self.remote_inbox.lock().unwrap();
+        inbox.push(ptr);
+        self.remote_received_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Drain all objects from the remote inbox into the local mark stack.
+    pub fn drain_remote_inbox_to_local(&self) -> usize {
+        let mut inbox = self.remote_inbox.lock().unwrap();
+        let mut stack = self.local_mark_stack.lock().unwrap();
+        let count = inbox.len();
+        if count > 0 {
+            stack.extend(inbox.drain(..));
+        }
+        count
+    }
+
+    /// Clear both local mark stack and remote inbox (after GC).
+    pub fn clear_mark_stacks(&self) {
+        let mut stack = self.local_mark_stack.lock().unwrap();
+        stack.clear();
+        drop(stack);
+        let mut inbox = self.remote_inbox.lock().unwrap();
+        inbox.clear();
+        self.remote_sent_count.store(0, Ordering::Relaxed);
+        self.remote_received_count.store(0, Ordering::Relaxed);
+    }
+
+    /// Get the total number of remote operations (sent + received).
+    pub fn remote_operation_count(&self) -> usize {
+        self.remote_sent_count.load(Ordering::Relaxed)
+            + self.remote_received_count.load(Ordering::Relaxed)
+    }
+
+    /// Increment the remote sent counter.
+    pub fn record_remote_sent(&self) {
+        self.remote_sent_count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Get a mutable reference to the heap.
@@ -90,6 +171,16 @@ pub struct ThreadRegistry {
     /// This is used to detect if GC is in progress when new threads spawn,
     /// since thread-local IN_COLLECT can't be used across threads.
     pub gc_in_progress: AtomicBool,
+}
+
+impl Clone for ThreadRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            threads: self.threads.clone(),
+            active_count: AtomicUsize::new(self.active_count.load(Ordering::Relaxed)),
+            gc_in_progress: AtomicBool::new(self.gc_in_progress.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl Default for ThreadRegistry {
@@ -334,6 +425,23 @@ pub fn clear_gc_request() {
     GC_REQUESTED.store(false, Ordering::Relaxed);
 }
 
+/// Get a thread control block by its thread ID.
+#[must_use]
+pub fn get_thread_control_block_by_id(id: usize) -> Option<std::sync::Arc<ThreadControlBlock>> {
+    let registry = thread_registry().lock().unwrap();
+    if id < registry.threads.len() {
+        Some(registry.threads[id].clone())
+    } else {
+        None
+    }
+}
+
+/// Get the number of registered threads.
+#[must_use]
+pub fn get_thread_count() -> usize {
+    thread_registry().lock().unwrap().threads.len()
+}
+
 /// Get the list of all thread control blocks for scanning.
 ///
 /// # Panics
@@ -409,7 +517,11 @@ pub struct PageHeader {
     /// Bitflags (`is_large_object`, `is_dirty`, etc.).
     pub flags: u8,
     /// Padding for alignment.
-    _padding: [u8; 2],
+    pub _padding: [u8; 2],
+    /// Owner thread ID for parallel GC (Remote Mentions).
+    /// This identifies which thread owns this page for marking.
+    /// usize to accommodate thread IDs from different threads.
+    pub owner_id: usize,
     /// Bitmap of marked objects (one bit per slot).
     /// Size depends on `obj_count`, but we reserve space for max possible.
     pub mark_bitmap: [u64; 4], // 256 bits = enough for smallest size class (16 bytes)
@@ -1031,6 +1143,9 @@ impl LocalHeap {
         let obj_count = PageHeader::max_objects(block_size);
         let h_size = PageHeader::header_size(block_size);
 
+        // Get current thread ID for page ownership
+        let thread_id = HEAP.try_with(|heap| heap.tcb.id()).unwrap_or(0);
+
         unsafe {
             header.as_ptr().write(PageHeader {
                 magic: MAGIC_GC_PAGE,
@@ -1043,6 +1158,7 @@ impl LocalHeap {
                 generation: 0,
                 flags: 0,
                 _padding: [0; 2],
+                owner_id: thread_id,
                 mark_bitmap: [0; 4],
                 dirty_bitmap: [0; 4],
                 allocated_bitmap: [0; 4],
@@ -1123,6 +1239,9 @@ impl LocalHeap {
 
         // ptr is NonNull<u8> already check for null logic inside allocate_safe_page
 
+        // Get current thread ID for page ownership
+        let thread_id = HEAP.try_with(|heap| heap.tcb.id()).unwrap_or(0);
+
         // SAFETY: ptr is page-aligned, which is more strict than PageHeader's alignment.
         #[allow(clippy::cast_ptr_alignment)]
         let header = ptr.cast::<PageHeader>();
@@ -1138,6 +1257,7 @@ impl LocalHeap {
                 generation: 0,
                 flags: 0x01, // Mark as large object
                 _padding: [0; 2],
+                owner_id: thread_id,
                 mark_bitmap: [0; 4],
                 dirty_bitmap: [0; 4],
                 allocated_bitmap: [0; 4],
@@ -1358,7 +1478,11 @@ pub struct ThreadLocalHeap {
 
 impl ThreadLocalHeap {
     fn new() -> Self {
-        let tcb = std::sync::Arc::new(ThreadControlBlock::new());
+        let thread_id = {
+            let registry = thread_registry().lock().unwrap();
+            registry.threads.len()
+        };
+        let tcb = std::sync::Arc::new(ThreadControlBlock::new(thread_id));
         {
             let mut registry = thread_registry().lock().unwrap();
 
@@ -1463,6 +1587,22 @@ pub unsafe fn ptr_to_page_header(ptr: *const u8) -> NonNull<PageHeader> {
     let page_addr = (ptr as usize) & PAGE_MASK;
     // SAFETY: Caller guarantees ptr is within a valid GC page.
     unsafe { NonNull::new_unchecked(page_addr as *mut PageHeader) }
+}
+
+/// Get the owner thread ID of the page containing a pointer.
+///
+/// Returns the thread ID of the thread that owns this page.
+/// This is used by parallel GC for Remote Mentions.
+///
+/// # Safety
+/// The pointer must be within a valid GC page.
+#[must_use]
+pub unsafe fn ptr_to_page_owner(ptr: *const u8) -> usize {
+    // SAFETY: Caller guarantees ptr is within a valid GC page.
+    unsafe {
+        let header = ptr_to_page_header(ptr);
+        (*header.as_ptr()).owner_id
+    }
 }
 
 // 2-arg ptr_to_object_index removed

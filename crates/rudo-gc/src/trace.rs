@@ -88,6 +88,79 @@ pub enum VisitorKind {
 pub struct GcVisitor {
     /// The kind of collection being performed.
     pub kind: VisitorKind,
+    /// Current thread ID for parallel GC ownership checking.
+    pub thread_id: usize,
+    /// Reference to the thread registry for forwarding to remote threads.
+    /// None when running in single-threaded mode.
+    pub registry: Option<std::sync::Arc<std::sync::Mutex<crate::heap::ThreadRegistry>>>,
+}
+
+impl GcVisitor {
+    /// Create a new GcVisitor for single-threaded GC.
+    pub fn new(kind: VisitorKind) -> Self {
+        Self {
+            kind,
+            thread_id: 0,
+            registry: None,
+        }
+    }
+
+    /// Create a new GcVisitor for parallel GC.
+    pub fn new_parallel(
+        kind: VisitorKind,
+        thread_id: usize,
+        registry: std::sync::Arc<std::sync::Mutex<crate::heap::ThreadRegistry>>,
+    ) -> Self {
+        Self {
+            kind,
+            thread_id,
+            registry: Some(registry),
+        }
+    }
+
+    /// Visit a GC pointer with Remote Mentions support.
+    ///
+    /// If the pointer belongs to the current thread's pages, mark it directly.
+    /// Otherwise, forward it to the owning thread's remote inbox.
+    pub fn visit_with_ownership<T: Trace + ?Sized>(&mut self, gc: &Gc<T>) {
+        if let Some(ptr) = gc.raw_ptr().as_option() {
+            let gc_ptr = crate::ptr::Gc::internal_ptr(gc) as *const u8;
+
+            // Check if this is a valid GC pointer
+            if !unsafe { crate::heap::is_gc_pointer(gc_ptr) } {
+                return;
+            }
+
+            // Get the page owner
+            let owner_id = unsafe { crate::heap::ptr_to_page_owner(gc_ptr) };
+
+            if owner_id == self.thread_id {
+                // Local object - mark directly
+                unsafe {
+                    if self.kind == VisitorKind::Minor {
+                        super::gc::mark_object_minor(ptr.cast(), self);
+                    } else {
+                        super::gc::mark_object(ptr.cast(), self);
+                    }
+                }
+            } else {
+                // Remote object - forward to owner's inbox
+                self.forward_to_remote(gc_ptr, owner_id);
+            }
+        }
+    }
+
+    /// Forward a pointer to a remote thread's inbox.
+    fn forward_to_remote(&self, ptr: *const u8, owner_id: usize) {
+        if let Some(ref registry) = self.registry {
+            let registry = registry.lock().unwrap();
+            if owner_id < registry.threads.len() {
+                let owner_tcb = &registry.threads[owner_id];
+                owner_tcb.push_remote_inbox(ptr);
+                owner_tcb.record_remote_sent();
+            }
+        }
+    }
 }
 
 // ============================================================================

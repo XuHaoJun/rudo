@@ -5,7 +5,7 @@
 
 use std::cell::Cell;
 use std::ptr::NonNull;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
@@ -542,14 +542,136 @@ fn collect_major_multi(
     reclaimed + reclaimed_large
 }
 
+/// Perform parallel marking using Remote Mentions.
+///
+/// This function coordinates marking across all threads using `BiBOP` ownership
+/// and message passing for cross-thread references.
+///
+/// # Algorithm
+///
+/// 1. Each thread initializes its local mark stack with its stack roots
+/// 2. Worker loop:
+///    - Pop object from local stack
+///    - For each child pointer:
+///      - If owned by current thread: mark directly and push to local stack
+///      - If owned by another thread: forward to owner's remote inbox
+///    - When local stack empty: drain remote inbox to local stack
+/// 3. Termination: when all local stacks and remote inboxes are empty
+///
+/// # Panics
+///
+/// Panics if the thread registry lock cannot be acquired.
+pub fn perform_parallel_marking(
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+) {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
+
+    let registry_ref = crate::heap::thread_registry();
+    let registry_lock = registry_ref.lock().unwrap();
+    let registry_clone = registry_lock.clone();
+    drop(registry_lock);
+
+    let registry: Arc<std::sync::Mutex<crate::heap::ThreadRegistry>> =
+        Arc::new(std::sync::Mutex::new(registry_clone));
+
+    let global_in_flight: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+
+    let ptrs: Vec<usize> = stack_roots.iter().map(|&(p, _)| p as usize).collect();
+
+    let mut handles = Vec::new();
+
+    for (idx, tcb) in registry.lock().unwrap().threads.iter().enumerate() {
+        let tcb = tcb.clone();
+        let ptrs = ptrs.clone();
+        let registry = Arc::clone(&registry);
+        let global_in_flight = Arc::clone(&global_in_flight);
+
+        let handle = std::thread::spawn(move || {
+            parallel_mark_worker(idx, tcb, ptrs, registry, global_in_flight);
+        });
+
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+/// Worker function for parallel marking.
+///
+/// # Panics
+///
+/// Panics if the registry lock cannot be acquired.
+pub fn parallel_mark_worker(
+    worker_id: usize,
+    tcb: std::sync::Arc<crate::heap::ThreadControlBlock>,
+    stack_roots: Vec<usize>,
+    registry: std::sync::Arc<std::sync::Mutex<crate::heap::ThreadRegistry>>,
+    global_in_flight: std::sync::Arc<AtomicUsize>,
+) {
+    let thread_count = {
+        let reg = registry.lock().unwrap();
+        reg.threads.len()
+    };
+
+    let heap = unsafe { &mut *tcb.heap.get() };
+    let heap_ptr = heap as *mut LocalHeap;
+
+    let mut visitor = GcVisitor::new_parallel(VisitorKind::Major, worker_id, registry.clone());
+
+    tcb.clear_mark_stacks();
+
+    for &ptr in &stack_roots {
+        let gc_ptr = ptr as *const u8;
+        if unsafe { crate::heap::is_gc_pointer(gc_ptr) } {
+            tcb.push_local_mark(gc_ptr);
+        }
+    }
+
+    loop {
+        while let Some(gc_ptr) = tcb.pop_local_mark() {
+            if !unsafe { crate::heap::is_gc_pointer(gc_ptr) } {
+                continue;
+            }
+
+            let owner_id = unsafe { crate::heap::ptr_to_page_owner(gc_ptr) };
+
+            if owner_id == worker_id {
+                unsafe {
+                    if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(&mut *heap_ptr, gc_ptr)
+                    {
+                        mark_object(gc_box, &mut visitor);
+                    }
+                }
+            } else {
+                if owner_id < thread_count {
+                    let remote_tcb = {
+                        let reg = registry.lock().unwrap();
+                        reg.threads[owner_id].clone()
+                    };
+                    remote_tcb.push_remote_inbox(gc_ptr);
+                    global_in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+
+        if tcb.is_local_mark_stack_empty() {
+            let received = tcb.drain_remote_inbox_to_local();
+            if received == 0 && tcb.is_local_mark_stack_empty() {
+                break;
+            }
+        }
+    }
+}
+
 /// Mark roots from all threads' stacks for Minor GC.
 fn mark_minor_roots_multi(
     heap: &mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
 ) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Minor,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Minor);
 
     // Scan all threads' captured stack roots (passed in, not consumed)
     for &(ptr, _) in stack_roots {
@@ -614,9 +736,7 @@ fn mark_major_roots_multi(
     heap: &mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
 ) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Major,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Major);
 
     // Scan all threads' captured stack roots (passed in, not consumed)
     for &(ptr, _) in stack_roots {
@@ -729,9 +849,7 @@ fn clear_all_marks_and_dirty(heap: &LocalHeap) {
 
 /// Mark roots for Minor GC (Stack + `RemSet`).
 fn mark_minor_roots(heap: &LocalHeap) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Minor,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Minor);
 
     // 1. Scan Stack
     unsafe {
@@ -792,9 +910,7 @@ fn mark_minor_roots(heap: &LocalHeap) {
 
 /// Mark roots for Major GC (Stack).
 fn mark_major_roots(heap: &LocalHeap) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Major,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Major);
     unsafe {
         // 1. Mark stack roots (Conservative)
         crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
@@ -815,7 +931,7 @@ fn mark_major_roots(heap: &LocalHeap) {
 }
 
 /// Mark object for Minor GC.
-unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
+pub(crate) unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     let ptr_addr = ptr.as_ptr() as *const u8;
     let page_addr = (ptr_addr as usize) & crate::heap::PAGE_MASK;
     // SAFETY: ptr_addr is a valid pointer to a GcBox
@@ -947,7 +1063,7 @@ fn promote_all_pages(heap: &LocalHeap) {
 /// # Safety
 ///
 /// The pointer must be a valid `GcBox` pointer.
-unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
+pub(crate) unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     // Get the page header
     let ptr_addr = ptr.as_ptr() as *const u8;
     // SAFETY: ptr is a valid GcBox pointer
@@ -1069,12 +1185,18 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
 
 impl Visitor for GcVisitor {
     fn visit<T: Trace + ?Sized>(&mut self, gc: &crate::Gc<T>) {
-        if let Some(ptr) = gc.raw_ptr().as_option() {
-            unsafe {
-                if self.kind == VisitorKind::Minor {
-                    mark_object_minor(ptr.cast(), self);
-                } else {
-                    mark_object(ptr.cast(), self);
+        // If we have a registry, use Remote Mentions (parallel marking)
+        if let Some(_) = self.registry {
+            self.visit_with_ownership(gc);
+        } else {
+            // Single-threaded mode: direct marking
+            if let Some(ptr) = gc.raw_ptr().as_option() {
+                unsafe {
+                    if self.kind == VisitorKind::Minor {
+                        mark_object_minor(ptr.cast(), self);
+                    } else {
+                        mark_object(ptr.cast(), self);
+                    }
                 }
             }
         }
