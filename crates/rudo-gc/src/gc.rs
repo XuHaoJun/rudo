@@ -230,6 +230,15 @@ fn perform_multi_threaded_collect() {
 
     let mut objects_reclaimed = 0;
 
+    // CRITICAL FIX: Set global gc_in_progress flag BEFORE taking thread snapshot
+    // This ensures new threads can detect that GC is in progress and avoid
+    // participating in rendezvous. The thread-local IN_COLLECT flag can't be
+    // used here because newly spawned threads get their own copy (default: false).
+    crate::heap::thread_registry()
+        .lock()
+        .unwrap()
+        .set_gc_in_progress(true);
+
     // Determine collection type based on current thread's heap
     let total_size = crate::heap::HEAP.with(|h| {
         let heap = unsafe { &*h.tcb.heap.get() };
@@ -310,6 +319,14 @@ fn perform_multi_threaded_collect() {
 
     crate::heap::resume_all_threads();
     crate::heap::clear_gc_request();
+
+    // CRITICAL FIX: Clear global gc_in_progress flag after GC completes
+    // This must be done AFTER resume_all_threads() so that new threads
+    // don't see a false positive for in-progress GC.
+    crate::heap::thread_registry()
+        .lock()
+        .unwrap()
+        .set_gc_in_progress(false);
 
     IN_COLLECT.with(|in_collect| in_collect.set(false));
 }

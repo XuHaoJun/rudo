@@ -86,6 +86,10 @@ pub struct ThreadRegistry {
     pub threads: Vec<std::sync::Arc<ThreadControlBlock>>,
     /// Number of threads currently in EXECUTING state.
     pub active_count: AtomicUsize,
+    /// Global flag indicating if a GC collection is currently in progress.
+    /// This is used to detect if GC is in progress when new threads spawn,
+    /// since thread-local IN_COLLECT can't be used across threads.
+    pub gc_in_progress: AtomicBool,
 }
 
 impl Default for ThreadRegistry {
@@ -101,6 +105,7 @@ impl ThreadRegistry {
         Self {
             threads: Vec::new(),
             active_count: AtomicUsize::new(0),
+            gc_in_progress: AtomicBool::new(false),
         }
     }
 
@@ -113,6 +118,21 @@ impl ThreadRegistry {
     pub fn unregister_thread(&mut self, tcb: &std::sync::Arc<ThreadControlBlock>) {
         self.threads
             .retain(|existing| !std::sync::Arc::ptr_eq(existing, tcb));
+    }
+
+    /// Mark that a GC collection is in progress.
+    /// This is used to detect if GC is in progress when new threads spawn,
+    /// since thread-local flags can't be shared across threads.
+    pub fn set_gc_in_progress(&self, in_progress: bool) {
+        self.gc_in_progress.store(in_progress, Ordering::SeqCst);
+    }
+
+    /// Check if a GC collection is currently in progress.
+    /// This uses a global flag instead of thread-local, so it works
+    /// correctly when called from newly spawned threads.
+    #[must_use]
+    pub fn is_gc_in_progress(&self) -> bool {
+        self.gc_in_progress.load(Ordering::Acquire)
     }
 }
 
@@ -1349,7 +1369,12 @@ impl ThreadLocalHeap {
             // 2. We register and enter rendezvous, storing our roots
             // 3. Collector never sees our roots (snapshot doesn't include us)
             // 4. Collector sweeps objects reachable from our stack → use-after-free
-            if crate::gc::is_collecting() {
+            //
+            // NOTE: We check the global gc_in_progress flag instead of thread-local
+            // is_collecting(), because a newly spawned thread always sees its own copy
+            // of the thread-local variable (default: false), even when collector's copy
+            // is true. The global flag correctly reflects the actual GC state.
+            if registry.is_gc_in_progress() {
                 // GC is in progress - DO NOT set gc_requested flag
                 // Thread will run and allocate during GC, but won't enter rendezvous
                 // This is safe because:
