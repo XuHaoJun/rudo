@@ -17,6 +17,8 @@ use std::sync::{Condvar, Mutex, OnceLock};
 
 use sys_alloc::{Mmap, MmapOptions};
 
+use crate::trace::{GcVisitor, VisitorKind};
+
 // ============================================================================
 // Thread Registry & Control Block - Multi-threaded GC Support
 // ============================================================================
@@ -28,32 +30,57 @@ pub const THREAD_STATE_SAFEPOINT: usize = 1;
 /// Thread state: inactive (blocked in syscall).
 pub const THREAD_STATE_INACTIVE: usize = 2;
 
+#[cfg(feature = "parallel-gc")]
+#[allow(missing_docs)]
+pub const SWEEPER_NONE: usize = 0;
+#[cfg(feature = "parallel-gc")]
+#[allow(missing_docs)]
+pub const SWEEPER_READY: usize = 1;
+#[cfg(feature = "parallel-gc")]
+#[allow(missing_docs)]
+pub const SWEEPER_SWEEPING: usize = 2;
+#[cfg(feature = "parallel-gc")]
+#[allow(missing_docs)]
+pub const SWEEPER_WAITING_FOR_WORK: usize = 3;
+
+#[cfg(feature = "parallel-gc")]
+#[allow(missing_docs)]
+pub struct SweepWorker {
+    pub id: usize,
+    pub status: AtomicUsize,
+    pub work_cond: Condvar,
+    pub done_cond: Condvar,
+    pub mutex: Mutex<()>,
+    pub tcbs: Mutex<Vec<std::sync::Arc<ThreadControlBlock>>>,
+}
+
 /// Shared control block for each thread's GC coordination.
 pub struct ThreadControlBlock {
-    /// Atomic state of the thread (EXECUTING, SAFEPOINT, or INACTIVE).
+    /// The current state of the thread.
     pub state: AtomicUsize,
-    /// Flag set by the collector to request a handshake.
+    /// Whether a GC has been requested for this thread.
     pub gc_requested: AtomicBool,
-    /// Condition variable to park the thread during GC.
+    /// Condvar for parking the thread during GC.
     pub park_cond: Condvar,
-    /// Mutex protecting the condition variable.
+    /// Mutex for parking the thread during GC.
     pub park_mutex: Mutex<()>,
-    /// The thread's `LocalHeap`.
+    /// The thread's local heap.
     pub heap: UnsafeCell<LocalHeap>,
-    /// Stack roots captured at safepoint for the collector to scan.
+    /// Captured stack roots for the current GC cycle.
     pub stack_roots: Mutex<Vec<*const u8>>,
-    /// Thread ID for parallel GC ownership.
+    /// The unique ID of this thread.
     pub thread_id: usize,
-    /// Local mark stack for parallel marking (thread-private).
-    /// Objects to be traced by this thread during GC.
+    /// The local mark stack for parallel marking.
     pub local_mark_stack: Mutex<Vec<*const u8>>,
-    /// Remote inbox for receiving forwarded objects from other threads.
-    /// Uses Mutex for simplicity; could be made lock-free for performance.
+    /// The remote inbox for objects forwarded from other threads.
     pub remote_inbox: Mutex<Vec<*const u8>>,
-    /// Counter for objects sent to remote threads (for termination detection).
+    /// Number of objects this thread has forwarded to other threads.
     pub remote_sent_count: AtomicUsize,
-    /// Counter for objects received from remote threads (for termination detection).
+    /// Number of objects other threads have forwarded to this thread.
     pub remote_received_count: AtomicUsize,
+    /// Buffer for batching remote forward operations.
+    #[cfg(feature = "parallel-gc")]
+    pub send_buffer: UnsafeCell<Vec<(*const u8, usize)>>,
 }
 
 #[allow(clippy::non_send_fields_in_send_ty)]
@@ -83,41 +110,62 @@ impl ThreadControlBlock {
             remote_inbox: Mutex::new(Vec::new()),
             remote_sent_count: AtomicUsize::new(0),
             remote_received_count: AtomicUsize::new(0),
+            #[cfg(feature = "parallel-gc")]
+            send_buffer: UnsafeCell::new(Vec::new()),
         }
     }
 
     /// Get the thread ID.
     #[must_use]
-    pub fn id(&self) -> usize {
+    pub const fn id(&self) -> usize {
         self.thread_id
     }
 
     /// Push an object to the local mark stack.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `local_mark_stack` lock is poisoned.
     pub fn push_local_mark(&self, ptr: *const u8) {
         let mut stack = self.local_mark_stack.lock().unwrap();
         stack.push(ptr);
     }
 
     /// Pop an object from the local mark stack.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `local_mark_stack` lock is poisoned.
     pub fn pop_local_mark(&self) -> Option<*const u8> {
         let mut stack = self.local_mark_stack.lock().unwrap();
         stack.pop()
     }
 
     /// Check if local mark stack is empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `local_mark_stack` lock is poisoned.
     pub fn is_local_mark_stack_empty(&self) -> bool {
         let stack = self.local_mark_stack.lock().unwrap();
         stack.is_empty()
     }
 
     /// Push an object to the remote inbox (for forwarding from other threads).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `remote_inbox` lock is poisoned.
     pub fn push_remote_inbox(&self, ptr: *const u8) {
-        let mut inbox = self.remote_inbox.lock().unwrap();
-        inbox.push(ptr);
+        self.remote_inbox.lock().unwrap().push(ptr);
         self.remote_received_count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Drain all objects from the remote inbox into the local mark stack.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `remote_inbox` or `local_mark_stack` lock is poisoned.
     pub fn drain_remote_inbox_to_local(&self) -> usize {
         let mut inbox = self.remote_inbox.lock().unwrap();
         let mut stack = self.local_mark_stack.lock().unwrap();
@@ -129,12 +177,13 @@ impl ThreadControlBlock {
     }
 
     /// Clear both local mark stack and remote inbox (after GC).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `remote_inbox` or `local_mark_stack` lock is poisoned.
     pub fn clear_mark_stacks(&self) {
-        let mut stack = self.local_mark_stack.lock().unwrap();
-        stack.clear();
-        drop(stack);
-        let mut inbox = self.remote_inbox.lock().unwrap();
-        inbox.clear();
+        self.local_mark_stack.lock().unwrap().clear();
+        self.remote_inbox.lock().unwrap().clear();
         self.remote_sent_count.store(0, Ordering::Relaxed);
         self.remote_received_count.store(0, Ordering::Relaxed);
     }
@@ -159,6 +208,57 @@ impl ThreadControlBlock {
     pub fn heap(&self) -> &LocalHeap {
         unsafe { &*self.heap.get() }
     }
+
+    /// Flush the batch buffer of remote forward operations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `SWEEP_MUTEX` or `THREAD_REGISTRY` lock is poisoned.
+    #[cfg(feature = "parallel-gc")]
+    pub fn flush_send_buffer(&self) {
+        let _guard = SWEEP_MUTEX.lock().unwrap();
+        let buffer = unsafe { &mut *self.send_buffer.get() };
+        if buffer.is_empty() {
+            return;
+        }
+        let registry = thread_registry().lock().unwrap();
+        for (ptr, target_worker_id) in buffer.drain(..) {
+            if target_worker_id < registry.sweep_workers.len() {
+                let target_worker = &registry.sweep_workers[target_worker_id];
+                {
+                    let tcbs = target_worker.tcbs.lock().unwrap();
+                    if !tcbs.is_empty() {
+                        let target_tcb = tcbs[0].clone();
+                        drop(tcbs);
+                        target_tcb.push_remote_inbox(ptr);
+                        let status = target_worker.status.load(Ordering::Acquire);
+                        if status == SWEEPER_WAITING_FOR_WORK {
+                            target_worker
+                                .status
+                                .store(SWEEPER_SWEEPING, Ordering::Release);
+                            NUM_RUNNING_SWEEPERS.fetch_add(1, Ordering::SeqCst);
+                            target_worker.work_cond.notify_one();
+                        }
+                    }
+                }
+            }
+        }
+        drop(registry);
+    }
+
+    /// Queue a remote forward operation in the batch buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `SWEEP_MUTEX` or `THREAD_REGISTRY` lock is poisoned.
+    #[cfg(feature = "parallel-gc")]
+    pub fn queue_remote_forward(&self, ptr: *const u8, target_worker_id: usize) {
+        let buffer = unsafe { &mut *self.send_buffer.get() };
+        buffer.push((ptr, target_worker_id));
+        if buffer.len() >= BATCH_FORWARD_SIZE {
+            self.flush_send_buffer();
+        }
+    }
 }
 
 /// Global registry of all threads with GC heaps.
@@ -168,9 +268,16 @@ pub struct ThreadRegistry {
     /// Number of threads currently in EXECUTING state.
     pub active_count: AtomicUsize,
     /// Global flag indicating if a GC collection is currently in progress.
-    /// This is used to detect if GC is in progress when new threads spawn,
-    /// since thread-local IN_COLLECT can't be used across threads.
     pub gc_in_progress: AtomicBool,
+    /// Pool of worker threads for parallel GC.
+    #[cfg(feature = "parallel-gc")]
+    pub sweep_workers: Vec<std::sync::Arc<SweepWorker>>,
+    /// Number of parallel workers currently active.
+    #[cfg(feature = "parallel-gc")]
+    pub num_running_sweepers: AtomicUsize,
+    /// Target number of parallel worker threads.
+    #[cfg(feature = "parallel-gc")]
+    pub worker_count: usize,
 }
 
 impl Clone for ThreadRegistry {
@@ -179,6 +286,12 @@ impl Clone for ThreadRegistry {
             threads: self.threads.clone(),
             active_count: AtomicUsize::new(self.active_count.load(Ordering::Relaxed)),
             gc_in_progress: AtomicBool::new(self.gc_in_progress.load(Ordering::Relaxed)),
+            #[cfg(feature = "parallel-gc")]
+            sweep_workers: Vec::new(),
+            #[cfg(feature = "parallel-gc")]
+            num_running_sweepers: AtomicUsize::new(0),
+            #[cfg(feature = "parallel-gc")]
+            worker_count: 0,
         }
     }
 }
@@ -197,12 +310,19 @@ impl ThreadRegistry {
             threads: Vec::new(),
             active_count: AtomicUsize::new(0),
             gc_in_progress: AtomicBool::new(false),
+            #[cfg(feature = "parallel-gc")]
+            sweep_workers: Vec::new(),
+            #[cfg(feature = "parallel-gc")]
+            num_running_sweepers: AtomicUsize::new(0),
+            #[cfg(feature = "parallel-gc")]
+            worker_count: 0,
         }
     }
 
     /// Register a new thread with the registry.
     pub fn register_thread(&mut self, tcb: std::sync::Arc<ThreadControlBlock>) {
         self.threads.push(tcb);
+        self.active_count.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Unregister a thread from the registry.
@@ -224,6 +344,47 @@ impl ThreadRegistry {
     #[must_use]
     pub fn is_gc_in_progress(&self) -> bool {
         self.gc_in_progress.load(Ordering::Acquire)
+    }
+
+    /// Ensure that the parallel worker pool is initialized.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `ALL_WORKERS` lock is poisoned.
+    #[cfg(feature = "parallel-gc")]
+    pub fn ensure_worker_pool_initialized(&mut self) {
+        if self.sweep_workers.is_empty() {
+            self.worker_count = get_worker_count();
+            initialize_worker_pool();
+        }
+    }
+
+    /// Distribute thread control blocks among the parallel workers.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the workers' `tcbs` locks are poisoned.
+    #[cfg(feature = "parallel-gc")]
+    pub fn distribute_tcbs_to_workers(&mut self) {
+        let worker_count = self.sweep_workers.len();
+        if worker_count == 0 {
+            return;
+        }
+
+        for worker in &self.sweep_workers {
+            worker.tcbs.lock().unwrap().clear();
+        }
+
+        for (idx, tcb) in self.threads.iter().enumerate() {
+            let worker_idx = idx % worker_count;
+            if worker_idx < self.sweep_workers.len() {
+                self.sweep_workers[worker_idx]
+                    .tcbs
+                    .lock()
+                    .unwrap()
+                    .push(tcb.clone());
+            }
+        }
     }
 }
 
@@ -339,6 +500,9 @@ pub fn resume_all_threads() {
     GC_REQUESTED.store(false, Ordering::Relaxed);
 }
 
+/// Global flag to ensure only one thread attempts GC handshake at a time
+static GC_HANDSHAKE_CLAIMED: AtomicBool = AtomicBool::new(false);
+
 /// Request all threads to stop at the next safe point.
 /// Returns true if this thread should become the collector.
 ///
@@ -347,20 +511,71 @@ pub fn resume_all_threads() {
 /// Panics if the thread registry lock is poisoned.
 #[allow(dead_code)]
 pub fn request_gc_handshake() -> bool {
-    let registry = thread_registry().lock().unwrap();
+    // Try to claim the handshake atomically - only one thread can proceed
+    if GC_HANDSHAKE_CLAIMED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        // Another thread already claimed the handshake
+        return false;
+    }
 
-    // Set GC_REQUESTED flag first (before locking registry)
-    GC_REQUESTED.store(true, Ordering::Relaxed);
+    let mut registry = thread_registry().lock().unwrap();
+
+    // CRITICAL FIX: Auto-register current thread if not already registered.
+    // This handles threads spawned via thread::spawn without explicit registration.
+    let current_tcb = current_thread_control_block();
+    if let Some(tcb) = &current_tcb {
+        let is_registered = registry
+            .threads
+            .iter()
+            .any(|reg_tcb| std::sync::Arc::ptr_eq(reg_tcb, tcb));
+        if !is_registered {
+            registry.register_thread(tcb.clone());
+        }
+    }
+
+    // Wait for other threads to register (up to a timeout)
+    // This handles the case where threads are spawned but haven't called collect() yet
+    let start_time = std::time::Instant::now();
+    let timeout = std::time::Duration::from_millis(50);
+    let initial_count = registry.active_count.load(Ordering::Acquire);
+
+    loop {
+        let current_count = registry.active_count.load(Ordering::Acquire);
+        // If count is stable for a bit, proceed
+        if current_count > 1 && current_count == initial_count {
+            break;
+        }
+        if start_time.elapsed() > timeout {
+            break;
+        }
+        drop(registry);
+        std::thread::sleep(std::time::Duration::from_micros(500));
+        registry = thread_registry().lock().unwrap();
+    }
+
+    // Check if we're the only active thread (excluding newly spawned threads that haven't registered)
+    // Actually, we should include ALL registered threads, not just active_count
+    let registered_count = registry.threads.len();
+
+    if registered_count != 1 {
+        // Not the only registered thread - release the claim and return false
+        // This means another thread should do the collection
+        GC_HANDSHAKE_CLAIMED.store(false, Ordering::SeqCst);
+        drop(registry);
+        return false;
+    }
+
+    // We're the collector - set GC flags
+    GC_REQUESTED.store(true, Ordering::SeqCst);
 
     // Set per-thread gc_requested flag for all threads
     for tcb in &registry.threads {
-        tcb.gc_requested.store(true, Ordering::Relaxed);
+        tcb.gc_requested.store(true, Ordering::SeqCst);
     }
 
-    let active = registry.active_count.load(Ordering::Acquire);
-    drop(registry);
-
-    active == 1
+    true
 }
 
 /// Wait for GC to complete if a collection is in progress.
@@ -426,6 +641,10 @@ pub fn clear_gc_request() {
 }
 
 /// Get a thread control block by its thread ID.
+///
+/// # Panics
+///
+/// Panics if the `THREAD_REGISTRY` lock is poisoned.
 #[must_use]
 pub fn get_thread_control_block_by_id(id: usize) -> Option<std::sync::Arc<ThreadControlBlock>> {
     let registry = thread_registry().lock().unwrap();
@@ -437,9 +656,222 @@ pub fn get_thread_control_block_by_id(id: usize) -> Option<std::sync::Arc<Thread
 }
 
 /// Get the number of registered threads.
+///
+/// # Panics
+///
+/// Panics if the `THREAD_REGISTRY` lock is poisoned.
 #[must_use]
 pub fn get_thread_count() -> usize {
     thread_registry().lock().unwrap().threads.len()
+}
+
+/// Get the number of parallel GC worker threads.
+#[cfg(feature = "parallel-gc")]
+#[must_use]
+pub fn get_worker_count() -> usize {
+    std::env::var("RUDO_GC_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| std::cmp::max(4, num_cpus::get()))
+}
+
+#[cfg(feature = "parallel-gc")]
+pub(crate) fn get_all_workers() -> std::sync::MutexGuard<'static, Vec<std::sync::Arc<SweepWorker>>>
+{
+    ALL_WORKERS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap()
+}
+
+/// Initialize the parallel worker pool.
+///
+/// # Panics
+///
+/// Panics if the `ALL_WORKERS` or `THREAD_REGISTRY` lock is poisoned.
+#[cfg(feature = "parallel-gc")]
+pub fn initialize_worker_pool() {
+    let worker_count = get_worker_count();
+    let mut workers = get_all_workers();
+
+    if !workers.is_empty() {
+        return;
+    }
+
+    let _registry = thread_registry().lock().unwrap();
+
+    for i in 0..worker_count {
+        let worker = std::sync::Arc::new(SweepWorker {
+            id: i,
+            status: AtomicUsize::new(SWEEPER_NONE),
+            work_cond: Condvar::new(),
+            done_cond: Condvar::new(),
+            mutex: Mutex::new(()),
+            tcbs: Mutex::new(Vec::new()),
+        });
+
+        std::thread::spawn({
+            let worker = std::sync::Arc::clone(&worker);
+            move || sweeper_thread_main(worker)
+        });
+
+        workers.push(worker);
+    }
+}
+
+#[cfg(feature = "parallel-gc")]
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
+fn sweeper_thread_main(worker: std::sync::Arc<SweepWorker>) {
+    loop {
+        let mut guard = worker.mutex.lock().unwrap();
+
+        while worker.status.load(Ordering::Acquire) != SWEEPER_SWEEPING {
+            if worker.status.load(Ordering::Acquire) == SWEEPER_NONE {
+                drop(guard);
+                std::thread::sleep(std::time::Duration::from_micros(100));
+                guard = worker.mutex.lock().unwrap();
+                continue;
+            }
+
+            if worker.status.load(Ordering::Acquire) == SWEEPER_WAITING_FOR_WORK {
+                guard = worker.work_cond.wait(guard).unwrap();
+            }
+        }
+
+        drop(guard);
+
+        let (workers_len, thread_count) = {
+            let workers = get_all_workers();
+            let registry = thread_registry().lock().unwrap();
+            (workers.len(), registry.threads.len())
+        };
+
+        loop {
+            let mut local_done = true;
+            let mut has_remote = false;
+
+            let tcbs: Vec<_> = worker.tcbs.lock().unwrap().clone();
+            for tcb in &tcbs {
+                while let Some(gc_ptr) = tcb.pop_local_mark() {
+                    if !unsafe { is_gc_pointer(gc_ptr) } {
+                        continue;
+                    }
+
+                    let owner_id = unsafe { ptr_to_page_owner(gc_ptr) };
+
+                    if owner_id == worker.id {
+                        let heap_ptr = tcb.heap.get() as *mut LocalHeap;
+                        if let Some(gc_box) = unsafe { find_gc_box_from_ptr(&*heap_ptr, gc_ptr) } {
+                            let registry_ref = thread_registry();
+                            let registry_arc = std::sync::Arc::new(std::sync::Mutex::new(
+                                registry_ref.lock().unwrap().clone(),
+                            ));
+                            let mut visitor = GcVisitor::new_parallel(
+                                VisitorKind::Major,
+                                worker.id,
+                                registry_arc,
+                            );
+                            unsafe {
+                                crate::gc::mark_object(gc_box, &mut visitor);
+                            }
+                        }
+                    } else if owner_id < thread_count {
+                        let target_worker_id = owner_id % workers_len;
+                        tcb.queue_remote_forward(gc_ptr, target_worker_id);
+                    }
+                }
+
+                let received = tcb.drain_remote_inbox_to_local();
+                if received > 0 {
+                    has_remote = true;
+                }
+
+                tcb.flush_send_buffer();
+            }
+
+            if has_remote {
+                continue;
+            }
+
+            let tcbs_check: Vec<_> = worker.tcbs.lock().unwrap().clone();
+            for tcb in &tcbs_check {
+                if !tcb.is_local_mark_stack_empty() {
+                    local_done = false;
+                    break;
+                }
+            }
+
+            if local_done {
+                // CRITICAL FIX: Re-check remote inbox after confirming local stack is empty.
+                // There is a race window where new work could arrive between:
+                // 1. drain_remote_inbox_to_local() returning 0
+                // 2. is_local_mark_stack_empty() returning true
+                // 3. This check
+                // The new work would be in the remote inbox, not the local stack yet.
+                let tcbs_recheck: Vec<_> = worker.tcbs.lock().unwrap().clone();
+                let mut any_pending = false;
+                for tcb in &tcbs_recheck {
+                    let inbox = tcb.remote_inbox.lock().unwrap();
+                    if !inbox.is_empty() {
+                        any_pending = true;
+                        break;
+                    }
+                }
+                if any_pending {
+                    continue; // New work arrived, process it
+                }
+                break;
+            }
+        }
+
+        NUM_RUNNING_SWEEPERS.fetch_sub(1, Ordering::SeqCst);
+
+        let _guard = SWEEP_MUTEX.lock().unwrap();
+        let remaining = NUM_RUNNING_SWEEPERS.load(Ordering::SeqCst);
+
+        let mut any_pending = false;
+        let tcbs_pending: Vec<_> = worker.tcbs.lock().unwrap().clone();
+        for tcb in &tcbs_pending {
+            if !tcb.remote_inbox.lock().unwrap().is_empty() {
+                any_pending = true;
+                break;
+            }
+        }
+
+        if remaining == 0 && !any_pending {
+            let workers = get_all_workers().clone();
+            for w in &workers {
+                let _g = w.mutex.lock().unwrap();
+                w.status.store(SWEEPER_READY, Ordering::Release);
+                w.work_cond.notify_all();
+            }
+
+            let g = worker.work_cond.wait(worker.mutex.lock().unwrap()).unwrap();
+            drop(g);
+        } else {
+            if any_pending {
+                // CRITICAL FIX: Re-check after acquiring lock. New work might have arrived.
+                let tcbs_recheck: Vec<_> = worker.tcbs.lock().unwrap().clone();
+                let mut still_pending = false;
+                for tcb in &tcbs_recheck {
+                    if !tcb.remote_inbox.lock().unwrap().is_empty() {
+                        still_pending = true;
+                        break;
+                    }
+                }
+                if still_pending {
+                    NUM_RUNNING_SWEEPERS.fetch_add(1, Ordering::SeqCst);
+                    continue; // Go back to processing loop
+                }
+            }
+            // No pending work, wait for more
+            worker
+                .status
+                .store(SWEEPER_WAITING_FOR_WORK, Ordering::Release);
+            let g = worker.work_cond.wait(worker.mutex.lock().unwrap()).unwrap();
+            drop(g);
+        }
+    }
 }
 
 /// Get the list of all thread control blocks for scanning.
@@ -494,6 +926,23 @@ pub const SIZE_CLASSES: [usize; 8] = [16, 32, 64, 128, 256, 512, 1024, 2048];
 /// Objects larger than this go to the Large Object Space.
 pub const MAX_SMALL_OBJECT_SIZE: usize = 2048;
 
+#[cfg(feature = "parallel-gc")]
+#[allow(missing_docs)]
+pub const BATCH_FORWARD_SIZE: usize = 64;
+
+#[cfg(feature = "parallel-gc")]
+#[allow(missing_docs)]
+static SWEEP_MUTEX: Mutex<()> = Mutex::new(());
+
+#[cfg(feature = "parallel-gc")]
+#[allow(missing_docs)]
+pub static NUM_RUNNING_SWEEPERS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "parallel-gc")]
+pub(crate) static ALL_WORKERS: std::sync::OnceLock<
+    std::sync::Mutex<Vec<std::sync::Arc<SweepWorker>>>,
+> = std::sync::OnceLock::new();
+
 // ============================================================================
 // PageHeader - Metadata at the start of each page
 // ============================================================================
@@ -517,7 +966,7 @@ pub struct PageHeader {
     /// Bitflags (`is_large_object`, `is_dirty`, etc.).
     pub flags: u8,
     /// Padding for alignment.
-    pub _padding: [u8; 2],
+    pub padding: [u8; 2],
     /// Owner thread ID for parallel GC (Remote Mentions).
     /// This identifies which thread owns this page for marking.
     /// usize to accommodate thread IDs from different threads.
@@ -924,7 +1373,7 @@ impl Default for GlobalSegmentManager {
 /// Handles allocation requests from the thread, using TLABs for speed
 /// and getting new pages from the `GlobalSegmentManager`.
 pub struct LocalHeap {
-    /// TLABs for each small size class.
+    /// TLAB for 16-byte size class.
     pub tlab_16: Tlab,
     /// TLAB for 32-byte size class.
     pub tlab_32: Tlab,
@@ -948,35 +1397,18 @@ pub struct LocalHeap {
     /// Set of small page addresses for O(1) safety checks during conservative scanning.
     pub small_pages: HashSet<usize>,
 
-    /// Pages for objects larger than 2KB (kept separate for some logic?).
-    /// Actually, let's keep `pages` as the unified list for simple sweeping.
-    /// But we might want `large_object_pages` ref for specific logic.
-    /// Original code had `large_objects` separate.
-    /// Let's merge them into `pages` for simplicity, OR keep separate if needed.
-    /// Current `sweep` logic iterates all segments then large objects.
-    /// Merging them is better for simple iteration.
-    /// But large objects have different headers... wait, no, same header structure, distinct flag.
-    /// So unified list is fine.
-
-    // We retain `large_objects` separately if we want to quickly identify them without checking flags?
-    // Nah, flag check is fast.
-
     /// Map from page address to its corresponding large object head.
     /// Still useful for interior pointers.
     pub large_object_map: HashMap<usize, (usize, usize, usize)>,
 
-    // Stats
+    /// Bytes allocated in young generation.
     young_allocated: usize,
+    /// Bytes allocated in old generation.
     old_allocated: usize,
+    /// Minimum address managed by this heap.
     min_addr: usize,
+    /// Maximum address managed by this heap.
     max_addr: usize,
-    // Quarantined pages (thread-local cache before pushing to global?)
-    // Actually GlobalSegmentManager handles this now.
-    // We might keep this if we want to avoid lock contention on "discarding" bad pages?
-    // But `allocate_page` is now on Manager.
-    // So LocalHeap doesn't strictly need this unless we pass it to Manager to avoid re-locking?
-    // Manager has its own.
-    // We can remove it from here.
 }
 
 impl LocalHeap {
@@ -1157,7 +1589,7 @@ impl LocalHeap {
                 header_size: h_size as u16,
                 generation: 0,
                 flags: 0,
-                _padding: [0; 2],
+                padding: [0; 2],
                 owner_id: thread_id,
                 mark_bitmap: [0; 4],
                 dirty_bitmap: [0; 4],
@@ -1256,7 +1688,7 @@ impl LocalHeap {
                 header_size: h_size as u16,
                 generation: 0,
                 flags: 0x01, // Mark as large object
-                _padding: [0; 2],
+                padding: [0; 2],
                 owner_id: thread_id,
                 mark_bitmap: [0; 4],
                 dirty_bitmap: [0; 4],

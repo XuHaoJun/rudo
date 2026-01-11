@@ -29,7 +29,11 @@ use crate::Gc;
 ///
 /// For primitive types that don't contain `Gc` pointers:
 ///
-/// ```ignore
+/// ```rust
+/// use rudo_gc::{Trace, Visitor};
+///
+/// struct MyPrimitive;
+///
 /// unsafe impl Trace for MyPrimitive {
 ///     fn trace(&self, _visitor: &mut impl Visitor) {
 ///         // No Gc fields, nothing to trace
@@ -39,7 +43,14 @@ use crate::Gc;
 ///
 /// For types containing `Gc` fields:
 ///
-/// ```ignore
+/// ```rust
+/// use rudo_gc::{Trace, Visitor, Gc};
+///
+/// struct MyStruct {
+///     gc_field: Gc<i32>,
+///     another_gc: Gc<String>,
+/// }
+///
 /// unsafe impl Trace for MyStruct {
 ///     fn trace(&self, visitor: &mut impl Visitor) {
 ///         self.gc_field.trace(visitor);
@@ -96,8 +107,9 @@ pub struct GcVisitor {
 }
 
 impl GcVisitor {
-    /// Create a new GcVisitor for single-threaded GC.
-    pub fn new(kind: VisitorKind) -> Self {
+    /// Create a new `GcVisitor` for single-threaded GC.
+    #[must_use]
+    pub const fn new(kind: VisitorKind) -> Self {
         Self {
             kind,
             thread_id: 0,
@@ -105,8 +117,9 @@ impl GcVisitor {
         }
     }
 
-    /// Create a new GcVisitor for parallel GC.
-    pub fn new_parallel(
+    /// Create a new `GcVisitor` for parallel GC.
+    #[must_use]
+    pub const fn new_parallel(
         kind: VisitorKind,
         thread_id: usize,
         registry: std::sync::Arc<std::sync::Mutex<crate::heap::ThreadRegistry>>,
@@ -124,7 +137,7 @@ impl GcVisitor {
     /// Otherwise, forward it to the owning thread's remote inbox.
     pub fn visit_with_ownership<T: Trace + ?Sized>(&mut self, gc: &Gc<T>) {
         if let Some(ptr) = gc.raw_ptr().as_option() {
-            let gc_ptr = crate::ptr::Gc::internal_ptr(gc) as *const u8;
+            let gc_ptr = crate::ptr::Gc::internal_ptr(gc).cast::<u8>();
 
             // Check if this is a valid GC pointer
             if !unsafe { crate::heap::is_gc_pointer(gc_ptr) } {
@@ -159,6 +172,7 @@ impl GcVisitor {
                 owner_tcb.push_remote_inbox(ptr);
                 owner_tcb.record_remote_sent();
             }
+            drop(registry);
         }
     }
 }
