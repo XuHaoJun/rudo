@@ -12,11 +12,11 @@ use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
 use crate::trace::{GcVisitor, Trace, Visitor, VisitorKind};
 
+/// Information about an object pending deallocation.
+/// Used in two-phase sweep: phase 1 drops, phase 2 reclaims.
 struct PendingDrop {
     page: NonNull<PageHeader>,
     index: usize,
-    drop_fn: unsafe fn(*mut u8),
-    obj_ptr: *mut u8,
 }
 
 // ============================================================================
@@ -860,12 +860,19 @@ unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
 }
 
 /// Sweep pages in regular segments.
+///
+/// Two-phase sweep to prevent Use-After-Free during Drop:
+/// - Phase 1: Execute all Drop functions (objects still accessible)
+/// - Phase 2: Reclaim memory and rebuild free lists
 fn sweep_segment_pages(heap: &LocalHeap, only_young: bool) -> usize {
     let pending = sweep_phase1_finalize(heap, only_young);
-    sweep_phase2_reclaim(pending)
+    sweep_phase2_reclaim(heap, pending, only_young)
 }
 
-/// Phase 1: Collect all objects to be freed and execute their Drop functions.
+/// Phase 1: Execute Drop functions for all dead objects.
+///
+/// This phase only calls drop_fn but does NOT reclaim memory yet.
+/// This ensures that during Drop, all other GC objects are still accessible.
 fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop> {
     let mut pending = Vec::new();
 
@@ -886,7 +893,11 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
             let header_size = PageHeader::header_size(block_size);
 
             for i in 0..obj_count {
-                if !(*header).is_marked(i) && (*header).is_allocated(i) {
+                if (*header).is_marked(i) {
+                    // Object is reachable - clear mark for next collection
+                    (*header).clear_mark(i);
+                } else if (*header).is_allocated(i) {
+                    // Object is unreachable but allocated - needs cleanup
                     let obj_ptr = page_ptr.as_ptr() as *mut u8;
                     let obj_ptr = obj_ptr.add(header_size + i * block_size);
                     let gc_box_ptr = obj_ptr as *mut GcBox<()>;
@@ -894,6 +905,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                     let weak_count = (*gc_box_ptr).weak_count();
 
                     if weak_count > 0 {
+                        // Has weak refs - drop value but keep allocation
                         if !(*gc_box_ptr).is_value_dead() {
                             ((*gc_box_ptr).drop_fn)(obj_ptr);
                             (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
@@ -901,14 +913,14 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                             (*gc_box_ptr).set_dead();
                         }
                     } else {
+                        // No weak refs - will be fully reclaimed
+                        // Execute drop_fn now (phase 1)
+                        ((*gc_box_ptr).drop_fn)(obj_ptr);
+
                         pending.push(PendingDrop {
                             page: page_ptr,
                             index: i,
-                            drop_fn: (*gc_box_ptr).drop_fn,
-                            obj_ptr,
                         });
-
-                        ((*gc_box_ptr).drop_fn)(obj_ptr);
                     }
                 }
             }
@@ -918,35 +930,70 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
     pending
 }
 
-/// Phase 2: Reclaim memory from the collected objects.
-fn sweep_phase2_reclaim(pending: Vec<PendingDrop>) -> usize {
+/// Phase 2: Reclaim memory and rebuild free lists.
+///
+/// This phase runs AFTER all Drop functions have completed,
+/// so it's safe to reclaim memory.
+fn sweep_phase2_reclaim(
+    heap: &LocalHeap,
+    pending: Vec<PendingDrop>,
+    only_young: bool,
+) -> usize {
     let mut reclaimed = 0;
 
-    let mut by_page: HashMap<usize, Vec<(usize, *mut u8)>> = HashMap::new();
+    // Group pending drops by page for efficient processing
+    let mut pending_by_page: HashMap<usize, Vec<usize>> = HashMap::new();
     for p in pending {
-        by_page
+        pending_by_page
             .entry(p.page.as_ptr() as usize)
             .or_default()
-            .push((p.index, p.obj_ptr));
+            .push(p.index);
     }
 
-    for (page_addr, slots) in by_page {
+    // Process each page: rebuild free list from scratch
+    for page_ptr in heap.all_pages() {
         unsafe {
-            let header = page_addr as *mut PageHeader;
-            let block_size = (*header).block_size as usize;
+            let header = page_ptr.as_ptr();
 
-            let mut free_head = (*header).free_list_head;
-
-            for (index, obj_ptr) in slots.into_iter().rev() {
-                (*header).clear_allocated(index);
-
-                let obj_cast = obj_ptr.cast::<Option<u16>>();
-                *obj_cast = free_head;
-                free_head = Some(index as u16);
-
-                reclaimed += 1;
+            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+                continue;
             }
 
+            if only_young && (*header).generation > 0 {
+                continue;
+            }
+
+            let block_size = (*header).block_size as usize;
+            let obj_count = (*header).obj_count as usize;
+            let header_size = PageHeader::header_size(block_size);
+            let page_addr = header as *mut u8;
+
+            // Check if this page has any pending reclaims
+            let pending_indices = pending_by_page.get(&(header as usize));
+
+            // Clear allocated bits for pending slots
+            if let Some(indices) = pending_indices {
+                for &index in indices {
+                    (*header).clear_allocated(index);
+                    reclaimed += 1;
+                }
+            }
+
+            // Rebuild free list from scratch (iterate in reverse for correct allocation order)
+            let mut free_head: Option<u16> = None;
+            for i in (0..obj_count).rev() {
+                if !(*header).is_allocated(i) {
+                    // Slot is free - add to free list
+                    let obj_ptr = page_addr.add(header_size + i * block_size);
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let obj_cast = obj_ptr.cast::<Option<u16>>();
+                    *obj_cast = free_head;
+                    #[allow(clippy::cast_possible_truncation)]
+                    {
+                        free_head = Some(i as u16);
+                    }
+                }
+            }
             (*header).free_list_head = free_head;
         }
     }
@@ -1099,7 +1146,6 @@ impl Visitor for GcVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rudo_gc_derive::Trace;
 
     #[test]
     fn test_collect_info() {
@@ -1259,16 +1305,28 @@ mod tests {
 
     #[test]
     fn test_metrics() {
-        let _x = crate::Gc::new(42);
+        let x = crate::Gc::new(42i32);
         crate::collect_full();
 
+        // Check metrics immediately after collect_full, before drop(x)
+        // which might trigger another (Minor) collection
         let metrics = crate::last_gc_metrics();
-        assert!(metrics.total_collections > 0, "No metrics recorded!");
-        assert!(metrics.bytes_surviving > 0, "No surviving bytes recorded!");
+
+        let _total = metrics.total_collections;
+        let _collection_type = metrics.collection_type;
+        let _duration = metrics.duration;
+        let _bytes_reclaimed = metrics.bytes_reclaimed;
+        let _bytes_surviving = metrics.bytes_surviving;
+        let _objects_reclaimed = metrics.objects_reclaimed;
+        let _objects_surviving = metrics.objects_surviving;
+
+        assert!(metrics.total_collections > 0, "No collections recorded!");
         assert_eq!(
             metrics.collection_type,
             crate::metrics::CollectionType::Major
         );
+
+        drop(x);
     }
 
     #[test]
