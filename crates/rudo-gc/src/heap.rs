@@ -12,7 +12,7 @@ use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 
 use sys_alloc::{Mmap, MmapOptions};
@@ -378,6 +378,11 @@ pub const PAGE_MASK: usize = !(PAGE_SIZE - 1);
 /// Magic number for validating GC pages ("RUDG" in ASCII).
 pub const MAGIC_GC_PAGE: u32 = 0x5255_4447;
 
+/// Flag: Page is a large object.
+pub const PAGE_FLAG_LARGE: u8 = 0x01;
+/// Flag: Page is an orphan (owner thread has terminated).
+pub const PAGE_FLAG_ORPHAN: u8 = 0x02;
+
 /// Size classes for object allocation.
 /// Objects are routed to the smallest size class that fits them.
 #[allow(dead_code)]
@@ -410,14 +415,11 @@ pub struct PageHeader {
     pub flags: u8,
     /// Padding for alignment.
     _padding: [u8; 2],
-    /// Bitmap of marked objects (one bit per slot).
-    /// Size depends on `obj_count`, but we reserve space for max possible.
-    pub mark_bitmap: [u64; 4], // 256 bits = enough for smallest size class (16 bytes)
-    /// Bitmap of dirty objects (one bit per slot).
-    /// Used for generational GC to track old objects that point to young objects.
-    pub dirty_bitmap: [u64; 4],
-    /// Bitmap of allocated objects (one bit per slot).
-    /// Used to distinguish between newly unreachable and already free slots.
+    /// Bitmap of marked objects (atomic for concurrent marking).
+    pub mark_bitmap: [AtomicU64; 4],
+    /// Bitmap of dirty objects (atomic for concurrent write barriers).
+    pub dirty_bitmap: [AtomicU64; 4],
+    /// Bitmap of allocated objects (non-atomic, only modified by owner thread).
     pub allocated_bitmap: [u64; 4],
     /// Index of first free slot in free list.
     pub free_list_head: Option<u16>,
@@ -447,58 +449,65 @@ impl PageHeader {
 
     /// Check if an object at the given index is marked.
     #[must_use]
-    pub const fn is_marked(&self, index: usize) -> bool {
+    pub fn is_marked(&self, index: usize) -> bool {
         let word = index / 64;
         let bit = index % 64;
-        (self.mark_bitmap[word] & (1 << bit)) != 0
+        (self.mark_bitmap[word].load(Ordering::Acquire) & (1 << bit)) != 0
     }
 
-    /// Set the mark bit for an object at the given index.
-    pub const fn set_mark(&mut self, index: usize) {
+    /// Set the mark bit for an object (atomic, suitable for concurrent marking).
+    /// Returns true if the bit was newly set (not previously marked).
+    pub fn set_mark(&mut self, index: usize) -> bool {
         let word = index / 64;
         let bit = index % 64;
-        self.mark_bitmap[word] |= 1 << bit;
+        let mask = 1u64 << bit;
+        let old = self.mark_bitmap[word].fetch_or(mask, Ordering::AcqRel);
+        (old & mask) == 0
     }
 
     /// Clear the mark bit for an object at the given index.
     #[allow(dead_code)]
-    pub const fn clear_mark(&mut self, index: usize) {
+    pub fn clear_mark(&mut self, index: usize) {
         let word = index / 64;
         let bit = index % 64;
-        self.mark_bitmap[word] &= !(1 << bit);
+        self.mark_bitmap[word].fetch_and(!(1u64 << bit), Ordering::Release);
     }
 
     /// Clear all mark bits.
-    pub const fn clear_all_marks(&mut self) {
-        self.mark_bitmap = [0; 4];
+    pub fn clear_all_marks(&mut self) {
+        for word in &self.mark_bitmap {
+            word.store(0, Ordering::Release);
+        }
     }
 
     /// Check if an object at the given index is dirty.
     #[must_use]
-    pub const fn is_dirty(&self, index: usize) -> bool {
+    pub fn is_dirty(&self, index: usize) -> bool {
         let word = index / 64;
         let bit = index % 64;
-        (self.dirty_bitmap[word] & (1 << bit)) != 0
+        (self.dirty_bitmap[word].load(Ordering::Acquire) & (1 << bit)) != 0
     }
 
     /// Set the dirty bit for an object at the given index.
-    pub const fn set_dirty(&mut self, index: usize) {
+    pub fn set_dirty(&mut self, index: usize) {
         let word = index / 64;
         let bit = index % 64;
-        self.dirty_bitmap[word] |= 1 << bit;
+        self.dirty_bitmap[word].fetch_or(1u64 << bit, Ordering::Release);
     }
 
     /// Clear the dirty bit for an object at the given index.
     #[allow(dead_code)]
-    pub const fn clear_dirty(&mut self, index: usize) {
+    pub fn clear_dirty(&mut self, index: usize) {
         let word = index / 64;
         let bit = index % 64;
-        self.dirty_bitmap[word] &= !(1 << bit);
+        self.dirty_bitmap[word].fetch_and(!(1u64 << bit), Ordering::Release);
     }
 
     /// Clear all dirty bits.
-    pub const fn clear_all_dirty(&mut self) {
-        self.dirty_bitmap = [0; 4];
+    pub fn clear_all_dirty(&mut self) {
+        for word in &self.dirty_bitmap {
+            word.store(0, Ordering::Release);
+        }
     }
 
     /// Check if an object at the given index is allocated.
@@ -673,6 +682,15 @@ const fn compute_class_index(size: usize) -> usize {
 // GlobalSegmentManager - Shared memory manager
 // ============================================================================
 
+/// Orphan page: a page whose owner thread has terminated but may still contain
+/// live objects referenced by other threads.
+pub struct OrphanPage {
+    pub addr: usize,
+    pub size: usize,
+    pub is_large: bool,
+    pub original_owner: std::thread::ThreadId,
+}
+
 /// Shared memory manager coordinating all pages.
 pub struct GlobalSegmentManager {
     /// Pages that are free and can be handed out to threads.
@@ -687,6 +705,9 @@ pub struct GlobalSegmentManager {
     /// Large object tracking map.
     /// Map from page address to its corresponding large object head, size, and `header_size`.
     pub large_object_map: HashMap<usize, (usize, usize, usize)>,
+
+    /// Orphan pages: pages from terminated threads that may contain live objects.
+    pub orphan_pages: Vec<OrphanPage>,
 }
 
 /// Global singleton for the segment manager.
@@ -705,6 +726,7 @@ impl GlobalSegmentManager {
             free_pages: Vec::new(),
             quarantined: Vec::new(),
             large_object_map: HashMap::new(),
+            orphan_pages: Vec::new(),
         }
     }
 
@@ -973,7 +995,7 @@ impl LocalHeap {
             unsafe {
                 let header = page_ptr.as_ptr();
                 // We only care about regular pages (not large objects)
-                if ((*header).flags & 0x01) == 0
+                if ((*header).flags & PAGE_FLAG_LARGE) == 0
                     && (*header).block_size as usize == block_size
                     && (*header).free_list_head.is_some()
                 {
@@ -1043,8 +1065,18 @@ impl LocalHeap {
                 generation: 0,
                 flags: 0,
                 _padding: [0; 2],
-                mark_bitmap: [0; 4],
-                dirty_bitmap: [0; 4],
+                mark_bitmap: [
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                ],
+                dirty_bitmap: [
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                ],
                 allocated_bitmap: [0; 4],
                 free_list_head: None,
             });
@@ -1131,15 +1163,25 @@ impl LocalHeap {
             header.as_ptr().write(PageHeader {
                 magic: MAGIC_GC_PAGE,
                 #[allow(clippy::cast_possible_truncation)]
-                block_size: size as u32, // Store actual size for large objects (now u32)
+                block_size: size as u32,
                 obj_count: 1,
                 #[allow(clippy::cast_possible_truncation)]
                 header_size: h_size as u16,
                 generation: 0,
-                flags: 0x01, // Mark as large object
+                flags: PAGE_FLAG_LARGE,
                 _padding: [0; 2],
-                mark_bitmap: [0; 4],
-                dirty_bitmap: [0; 4],
+                mark_bitmap: [
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                ],
+                dirty_bitmap: [
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                    AtomicU64::new(0),
+                ],
                 allocated_bitmap: [0; 4],
                 free_list_head: None,
             });
@@ -1223,7 +1265,7 @@ impl LocalHeap {
     pub fn large_object_pages(&self) -> Vec<NonNull<PageHeader>> {
         self.pages
             .iter()
-            .filter(|p| unsafe { (p.as_ptr().read().flags & 0x01) != 0 })
+            .filter(|p| unsafe { (p.as_ptr().read().flags & PAGE_FLAG_LARGE) != 0 })
             .copied()
             .collect()
     }
@@ -1239,7 +1281,7 @@ impl LocalHeap {
     pub fn large_object_pages_mut(&mut self) -> Vec<NonNull<PageHeader>> {
         self.pages
             .iter()
-            .filter(|p| unsafe { (p.as_ptr().read().flags & 0x01) != 0 })
+            .filter(|p| unsafe { (p.as_ptr().read().flags & PAGE_FLAG_LARGE) != 0 })
             .copied()
             .collect()
     }
@@ -1301,47 +1343,110 @@ impl Default for LocalHeap {
 
 impl Drop for LocalHeap {
     fn drop(&mut self) {
-        // When a thread terminates, its LocalHeap is dropped.
-        // We must unmap all pages owned by this heap to avoid memory leaks.
-        for page_ptr in &self.pages {
+        let current_thread = std::thread::current().id();
+
+        let mut manager = segment_manager()
+            .lock()
+            .expect("segment manager lock poisoned");
+
+        for page_ptr in std::mem::take(&mut self.pages) {
             unsafe {
                 let header = page_ptr.as_ptr();
-                // Validate this is still a GC page before attempting to read metadata
+
                 if (*header).magic != MAGIC_GC_PAGE {
                     continue;
                 }
 
-                let is_large = ((*header).flags & 0x01) != 0;
+                let is_large = ((*header).flags & PAGE_FLAG_LARGE) != 0;
                 let block_size = (*header).block_size as usize;
                 let header_size = (*header).header_size as usize;
 
-                let (alloc_size, pages_needed) = if is_large {
-                    let total_size = header_size + block_size;
-                    let pages = total_size.div_ceil(PAGE_SIZE);
-                    (pages * PAGE_SIZE, pages)
+                let size = if is_large {
+                    let total = header_size + block_size;
+                    total.div_ceil(PAGE_SIZE) * PAGE_SIZE
                 } else {
-                    (PAGE_SIZE, 1)
+                    PAGE_SIZE
                 };
 
-                // Unregister from global large_object_map if it was a large object.
-                // This is important because other threads might still be scanning
-                // their stacks and could find an interior pointer to this memory.
+                (*header).flags |= PAGE_FLAG_ORPHAN;
+
+                manager.orphan_pages.push(OrphanPage {
+                    addr: page_ptr.as_ptr() as usize,
+                    size,
+                    is_large,
+                    original_owner: current_thread,
+                });
+
                 if is_large {
-                    let mut manager = segment_manager()
-                        .lock()
-                        .expect("segment manager lock poisoned");
                     let header_addr = header as usize;
-                    for p in 0..pages_needed {
+                    for p in 0..(size / PAGE_SIZE) {
                         let page_addr = header_addr + (p * PAGE_SIZE);
                         manager.large_object_map.remove(&page_addr);
                     }
                 }
-
-                // Actually unmap the memory.
-                // sys_alloc::Mmap::from_raw recreate the Mmap object, which will
-                // unmap the memory when it's dropped at the end of this scope.
-                sys_alloc::Mmap::from_raw(header.cast::<u8>(), alloc_size);
             }
+        }
+
+        self.large_object_map.clear();
+        self.small_pages.clear();
+    }
+}
+
+pub fn sweep_orphan_pages() {
+    let mut manager = segment_manager().lock().unwrap();
+
+    let mut to_reclaim = Vec::new();
+
+    manager.orphan_pages.retain(|orphan| unsafe {
+        let header = orphan.addr as *mut PageHeader;
+
+        let has_survivors = if orphan.is_large {
+            (*header).is_marked(0)
+        } else {
+            let obj_count = (*header).obj_count as usize;
+            (0..obj_count).any(|i| (*header).is_marked(i))
+        };
+
+        if has_survivors {
+            (*header).clear_all_marks();
+            true
+        } else {
+            to_reclaim.push((orphan.addr, orphan.size));
+            false
+        }
+    });
+
+    drop(manager);
+
+    for (addr, size) in to_reclaim {
+        unsafe {
+            let header = addr as *mut PageHeader;
+            let is_large = ((*header).flags & PAGE_FLAG_LARGE) != 0;
+
+            if is_large {
+                let header_size = (*header).header_size as usize;
+                let obj_ptr = (addr as *mut u8).add(header_size);
+                let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                if !(*gc_box_ptr).is_value_dead() {
+                    ((*gc_box_ptr).drop_fn)(obj_ptr);
+                }
+            } else {
+                let block_size = (*header).block_size as usize;
+                let obj_count = (*header).obj_count as usize;
+                let header_size = PageHeader::header_size(block_size);
+
+                for i in 0..obj_count {
+                    if (*header).is_allocated(i) {
+                        let obj_ptr = (addr as *mut u8).add(header_size + i * block_size);
+                        let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                        if !(*gc_box_ptr).is_value_dead() {
+                            ((*gc_box_ptr).drop_fn)(obj_ptr);
+                        }
+                    }
+                }
+            }
+
+            sys_alloc::Mmap::from_raw(addr as *mut u8, size);
         }
     }
 }
@@ -1619,7 +1724,7 @@ pub unsafe fn find_gc_box_from_ptr(
 
         // 6. Large object handling: with the map, we now support interior pointers!
         // For large objects, we ensure the pointer is within the allocated bounds.
-        if header.flags & 0x01 != 0 {
+        if header.flags & PAGE_FLAG_LARGE != 0 {
             if offset_to_use >= block_size_to_use {
                 return None;
             }
