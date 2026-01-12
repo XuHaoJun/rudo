@@ -934,11 +934,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
 ///
 /// This phase runs AFTER all Drop functions have completed,
 /// so it's safe to reclaim memory.
-fn sweep_phase2_reclaim(
-    heap: &LocalHeap,
-    pending: Vec<PendingDrop>,
-    only_young: bool,
-) -> usize {
+fn sweep_phase2_reclaim(heap: &LocalHeap, pending: Vec<PendingDrop>, only_young: bool) -> usize {
     let mut reclaimed = 0;
 
     // Group pending drops by page for efficient processing
