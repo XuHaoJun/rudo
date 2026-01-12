@@ -88,7 +88,7 @@ pub struct ThreadRegistry {
     pub active_count: AtomicUsize,
     /// Global flag indicating if a GC collection is currently in progress.
     /// This is used to detect if GC is in progress when new threads spawn,
-    /// since thread-local IN_COLLECT can't be used across threads.
+    /// since thread-local `IN_COLLECT` can't be used across threads.
     pub gc_in_progress: AtomicBool,
 }
 
@@ -685,9 +685,13 @@ const fn compute_class_index(size: usize) -> usize {
 /// Orphan page: a page whose owner thread has terminated but may still contain
 /// live objects referenced by other threads.
 pub struct OrphanPage {
+    /// Address of the orphan page.
     pub addr: usize,
+    /// Size of the orphan page.
     pub size: usize,
+    /// Whether this is a large object page.
     pub is_large: bool,
+    /// Thread ID of the original owner.
     pub original_owner: std::thread::ThreadId,
 }
 
@@ -1386,12 +1390,18 @@ impl Drop for LocalHeap {
                 }
             }
         }
+        drop(manager);
 
         self.large_object_map.clear();
         self.small_pages.clear();
     }
 }
 
+/// Sweep and reclaim orphan pages.
+///
+/// # Panics
+///
+/// Panics if the segment manager lock is poisoned.
 pub fn sweep_orphan_pages() {
     let mut manager = segment_manager().lock().unwrap();
 
@@ -1426,6 +1436,7 @@ pub fn sweep_orphan_pages() {
             if is_large {
                 let header_size = (*header).header_size as usize;
                 let obj_ptr = (addr as *mut u8).add(header_size);
+                #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
                 if !(*gc_box_ptr).is_value_dead() {
                     ((*gc_box_ptr).drop_fn)(obj_ptr);
@@ -1438,6 +1449,7 @@ pub fn sweep_orphan_pages() {
                 for i in 0..obj_count {
                     if (*header).is_allocated(i) {
                         let obj_ptr = (addr as *mut u8).add(header_size + i * block_size);
+                        #[allow(clippy::cast_ptr_alignment)]
                         let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
                         if !(*gc_box_ptr).is_value_dead() {
                             ((*gc_box_ptr).drop_fn)(obj_ptr);

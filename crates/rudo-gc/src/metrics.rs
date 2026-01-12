@@ -58,7 +58,7 @@ pub enum CollectionType {
 }
 
 thread_local! {
-    static LAST_METRICS: Cell<GcMetrics> = Cell::new(GcMetrics::new());
+    static LAST_METRICS: Cell<GcMetrics> = const { Cell::new(GcMetrics::new()) };
     static TOTAL_COLLECTIONS: Cell<usize> = const { Cell::new(0) };
 }
 

@@ -871,7 +871,7 @@ fn sweep_segment_pages(heap: &LocalHeap, only_young: bool) -> usize {
 
 /// Phase 1: Execute Drop functions for all dead objects.
 ///
-/// This phase only calls drop_fn but does NOT reclaim memory yet.
+/// This phase only calls `drop_fn` but does NOT reclaim memory yet.
 /// This ensures that during Drop, all other GC objects are still accessible.
 fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop> {
     let mut pending = Vec::new();
@@ -898,9 +898,10 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                     (*header).clear_mark(i);
                 } else if (*header).is_allocated(i) {
                     // Object is unreachable but allocated - needs cleanup
-                    let obj_ptr = page_ptr.as_ptr() as *mut u8;
+                    let obj_ptr = page_ptr.as_ptr().cast::<u8>();
                     let obj_ptr = obj_ptr.add(header_size + i * block_size);
-                    let gc_box_ptr = obj_ptr as *mut GcBox<()>;
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
                     let weak_count = (*gc_box_ptr).weak_count();
 
@@ -962,7 +963,7 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, pending: Vec<PendingDrop>, only_young:
             let block_size = (*header).block_size as usize;
             let obj_count = (*header).obj_count as usize;
             let header_size = PageHeader::header_size(block_size);
-            let page_addr = header as *mut u8;
+            let page_addr = header.cast::<u8>();
 
             // Check if this page has any pending reclaims
             let pending_indices = pending_by_page.get(&(header as usize));
@@ -1062,7 +1063,8 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 let block_size = (*header).block_size as usize;
                 let header_size = (*header).header_size as usize;
                 let obj_ptr = header.cast::<u8>().add(header_size);
-                let gc_box_ptr = obj_ptr as *mut GcBox<()>;
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
                 let weak_count = (*gc_box_ptr).weak_count();
 
@@ -1108,7 +1110,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 }
             }
 
-            sys_alloc::Mmap::from_raw(page_ptr.as_ptr() as *mut u8, alloc_size);
+            sys_alloc::Mmap::from_raw(page_ptr.as_ptr().cast::<u8>(), alloc_size);
 
             reclaimed += 1;
             N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
@@ -1308,13 +1310,13 @@ mod tests {
         // which might trigger another (Minor) collection
         let metrics = crate::last_gc_metrics();
 
-        let _total = metrics.total_collections;
-        let _collection_type = metrics.collection_type;
-        let _duration = metrics.duration;
-        let _bytes_reclaimed = metrics.bytes_reclaimed;
-        let _bytes_surviving = metrics.bytes_surviving;
-        let _objects_reclaimed = metrics.objects_reclaimed;
-        let _objects_surviving = metrics.objects_surviving;
+        let _ = metrics.total_collections;
+        let _ = metrics.collection_type;
+        let _ = metrics.duration;
+        let _ = metrics.bytes_reclaimed;
+        let _ = metrics.bytes_surviving;
+        let _ = metrics.objects_reclaimed;
+        let _ = metrics.objects_surviving;
 
         assert!(metrics.total_collections > 0, "No collections recorded!");
         assert_eq!(
@@ -1444,7 +1446,7 @@ mod tests {
         use std::cell::Cell;
 
         thread_local! {
-            static DROP_COUNT: Cell<usize> = Cell::new(0);
+            static DROP_COUNT: Cell<usize> = const { Cell::new(0) };
         }
 
         struct DropChecker {
@@ -1479,6 +1481,6 @@ mod tests {
 
         crate::collect_full();
 
-        assert!(DROP_COUNT.with(|c| c.get()) >= 1);
+        assert!(DROP_COUNT.with(std::cell::Cell::get) >= 1);
     }
 }
