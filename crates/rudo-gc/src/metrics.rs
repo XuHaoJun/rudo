@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::time::Duration;
 
 /// Statistics from the most recent garbage collection.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct GcMetrics {
     /// Duration of the last collection.
     pub duration: Duration,
@@ -20,6 +20,12 @@ pub struct GcMetrics {
     pub collection_type: CollectionType,
     /// Total collections since process start.
     pub total_collections: usize,
+}
+
+impl Default for GcMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GcMetrics {
@@ -40,14 +46,15 @@ impl GcMetrics {
 
 /// Type of GC collection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[repr(u8)]
 pub enum CollectionType {
     /// No collection has run yet.
     #[default]
-    None,
+    None = 0,
     /// A minor collection (Young Gen only).
-    Minor,
+    Minor = 1,
     /// A major collection (Full heap).
-    Major,
+    Major = 2,
 }
 
 thread_local! {

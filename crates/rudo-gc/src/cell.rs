@@ -107,7 +107,16 @@ impl<T: ?Sized> GcCell<T> {
 // It just traces the inner value.
 unsafe impl<T: Trace + ?Sized> Trace for GcCell<T> {
     fn trace(&self, visitor: &mut impl crate::trace::Visitor) {
-        self.inner.borrow().trace(visitor);
+        // SAFETY:
+        // 1. GC happens during Stop-The-World (STW), all mutator threads are paused
+        // 2. There may be active RefMut on the stack, but there won't be concurrent writes
+        //    during GC scanning
+        // 3. We only read fields for marking, we don't modify RefCell's internal state
+        // 4. RefCell::as_ptr() is safe and doesn't panic
+        let ptr = self.inner.as_ptr();
+        unsafe {
+            (*ptr).trace(visitor);
+        }
     }
 }
 
@@ -135,5 +144,23 @@ impl<T: std::fmt::Debug + ?Sized> std::fmt::Debug for GcCell<T> {
 impl<T: std::fmt::Display + ?Sized> std::fmt::Display for GcCell<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.inner.borrow().fmt(f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{cell::GcCell, Gc};
+
+    #[test]
+    fn test_gc_during_borrow_mut() {
+        let cell = Gc::new(GcCell::new(Some(Gc::new(42))));
+
+        let mut borrow = cell.borrow_mut();
+        *borrow = Some(Gc::new(100));
+
+        crate::collect_full();
+
+        drop(borrow);
+        assert_eq!(**cell.borrow().as_ref().unwrap(), 100);
     }
 }

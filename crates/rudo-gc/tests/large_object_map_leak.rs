@@ -1,6 +1,33 @@
 use rudo_gc::heap::{segment_manager, PAGE_SIZE};
 use rudo_gc::Gc;
 
+/// Clear CPU callee-saved registers to prevent stale pointer values from being
+/// treated as roots by the conservative GC.
+///
+/// # Safety
+///
+/// This function clears callee-saved registers (R12-R15 on `x86_64`).
+/// It should only be called when those registers don't contain values
+/// needed by the calling code.
+#[inline(never)]
+unsafe fn clear_registers() {
+    #[cfg(all(target_arch = "x86_64", not(miri)))]
+    unsafe {
+        std::arch::asm!(
+            "xor r12, r12",
+            "xor r13, r13",
+            "xor r14, r14",
+            "xor r15, r15",
+            out("r12") _,
+            out("r13") _,
+            out("r14") _,
+            out("r15") _,
+        );
+    }
+    #[cfg(any(not(target_arch = "x86_64"), miri))]
+    std::hint::black_box(());
+}
+
 #[test]
 fn test_large_object_map_cleanup() {
     #[derive(rudo_gc::Trace)]
@@ -34,6 +61,14 @@ fn test_large_object_map_cleanup() {
         do_alloc();
 
         clear_stack();
+
+        // CRITICAL: Clear callee-saved registers to prevent stale pointer values
+        // from being treated as roots by the conservative GC.
+        // Without this, the GC might find a stale pointer value in a register
+        // and incorrectly keep the large object alive.
+        unsafe {
+            clear_registers();
+        }
 
         // Force a full collection to trigger sweep_large_objects
         rudo_gc::collect_full();

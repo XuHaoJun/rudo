@@ -97,6 +97,22 @@ pub mod test_util {
     pub fn internal_ptr<T: crate::Trace + ?Sized>(gc: &crate::Gc<T>) -> *const u8 {
         crate::Gc::internal_ptr(gc)
     }
+
+    /// Clear CPU registers to prevent stale pointer values from being treated as roots.
+    ///
+    /// This is useful in tests to ensure objects are collected even when
+    /// stale pointer values remain in callee-saved registers after function returns.
+    ///
+    /// # Safety
+    ///
+    /// This function clears callee-saved registers (R12-R15 on `x86_64`).
+    /// It should only be called when those registers don't contain values
+    /// needed by the calling code.
+    pub unsafe fn clear_registers() {
+        // SAFETY: Caller guarantees that callee-saved registers don't contain
+        // values needed by the calling code.
+        unsafe { crate::stack::clear_registers() };
+    }
 }
 
 #[cfg(test)]

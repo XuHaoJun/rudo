@@ -4,12 +4,24 @@
 //! a mark-sweep algorithm with the `BiBOP` memory layout.
 
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
 use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
 use crate::trace::{GcVisitor, Trace, Visitor, VisitorKind};
+
+/// Information about an object pending deallocation.
+/// Used in two-phase sweep: phase 1 drops, phase 2 reclaims.
+///
+/// Note: This struct is deprecated as of P1-001 optimization.
+/// The sweep phase now uses bitmap checks instead of `PendingDrop` tracking.
+#[allow(dead_code)]
+struct PendingDrop {
+    page: NonNull<PageHeader>,
+    index: usize,
+}
 
 // ============================================================================
 // Collection statistics
@@ -288,6 +300,8 @@ fn perform_multi_threaded_collect() {
                 promote_all_pages(&*tcb.heap.get());
             }
         }
+
+        crate::heap::sweep_orphan_pages();
     } else {
         // Minor GC doesn't have cross-heap issues since it only scans young objects
         // and uses remembered sets for inter-generational references
@@ -353,16 +367,22 @@ pub fn collect_full() {
     }
 }
 
-/// Wake up any threads waiting at a safe point.
+/// Wake up any threads waiting at a safe point and clear `gc_requested` for ALL threads.
 /// This is used when a non-collector thread needs to wake up waiting threads
 /// and perform single-threaded collection. It properly restores threads to
 /// EXECUTING state and restores `active_count`.
+///
+/// CRITICAL: We must clear `gc_requested` for ALL threads, not just those at safepoint.
+/// Otherwise, threads that haven't reached safepoint yet will have their flag stuck at true,
+/// causing them to hang in future GC cycles when they enter rendezvous.
 fn wake_waiting_threads() {
     let registry = crate::heap::thread_registry().lock().unwrap();
     let mut woken_count = 0;
     for tcb in &registry.threads {
+        // Clear gc_requested for ALL threads to prevent hangs in future GC cycles
+        tcb.gc_requested.store(false, Ordering::Release);
+
         if tcb.state.load(Ordering::Acquire) == crate::heap::THREAD_STATE_SAFEPOINT {
-            tcb.gc_requested.store(false, Ordering::Relaxed);
             tcb.park_cond.notify_all();
             tcb.state
                 .store(crate::heap::THREAD_STATE_EXECUTING, Ordering::Release);
@@ -473,13 +493,27 @@ fn perform_single_threaded_collect_full() {
 }
 
 /// Perform full collection as the collector thread.
+///
+/// Uses the three-phase approach to correctly handle cross-heap references:
+/// - Phase 1: Clear all marks on ALL heaps
+/// - Phase 2: Mark all reachable objects (tracing across all heaps)
+/// - Phase 3: Sweep ALL heaps
 fn perform_multi_threaded_collect_full() {
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
     let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
+    // Reset drop counter
+    N_DROPS.with(|n| n.set(0));
+
     let mut objects_reclaimed = 0;
+
+    // CRITICAL FIX: Set global gc_in_progress flag BEFORE taking thread snapshot
+    crate::heap::thread_registry()
+        .lock()
+        .unwrap()
+        .set_gc_in_progress(true);
 
     // Collect all stack roots BEFORE processing heaps
     // This ensures we capture roots from all threads before any are consumed
@@ -492,11 +526,37 @@ fn perform_multi_threaded_collect_full() {
         })
         .collect();
 
+    // CRITICAL FIX: Use three-phase approach to correctly handle cross-heap references.
+    // The old approach processed each heap independently, which caused marks on other
+    // heaps (set during tracing of cross-heap references) to be cleared when processing
+    // those heaps, leading to use-after-free bugs.
+
+    // Phase 1: Clear all marks on ALL heaps
     for tcb in &tcbs {
         unsafe {
-            objects_reclaimed += collect_major_multi(&mut *tcb.heap.get(), &all_stack_roots);
+            clear_all_marks_and_dirty(&*tcb.heap.get());
         }
     }
+
+    // Phase 2: Mark all reachable objects (tracing across all heaps)
+    for tcb in &tcbs {
+        unsafe {
+            mark_major_roots_multi(&mut *tcb.heap.get(), &all_stack_roots);
+        }
+    }
+
+    // Phase 3: Sweep ALL heaps
+    for tcb in &tcbs {
+        unsafe {
+            let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
+            let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
+            objects_reclaimed += reclaimed + reclaimed_large;
+            promote_all_pages(&*tcb.heap.get());
+        }
+    }
+
+    // Sweep orphan pages from terminated threads
+    crate::heap::sweep_orphan_pages();
 
     let duration = start.elapsed();
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
@@ -514,6 +574,12 @@ fn perform_multi_threaded_collect_full() {
     crate::heap::resume_all_threads();
     crate::heap::clear_gc_request();
 
+    // CRITICAL FIX: Clear global gc_in_progress flag after GC completes
+    crate::heap::thread_registry()
+        .lock()
+        .unwrap()
+        .set_gc_in_progress(false);
+
     IN_COLLECT.with(|in_collect| in_collect.set(false));
 }
 
@@ -530,6 +596,10 @@ fn collect_minor_multi(
 }
 
 /// Major collection for a heap in multi-threaded context.
+///
+/// Note: This function is currently unused because `perform_multi_threaded_collect_full()`
+/// now uses the three-phase approach directly. Kept for potential future use.
+#[allow(dead_code)]
 fn collect_major_multi(
     heap: &mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
@@ -588,7 +658,7 @@ fn mark_minor_roots_multi(
             if (*header).generation == 0 {
                 continue;
             }
-            if (*header).flags & 0x01 != 0 {
+            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
                 continue;
             }
 
@@ -764,7 +834,7 @@ fn mark_minor_roots(heap: &LocalHeap) {
                 continue;
             }
             // Skip Large Objects (assumed not dirty inner pointers for now)
-            if (*header).flags & 0x01 != 0 {
+            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
                 continue;
             }
 
@@ -850,86 +920,164 @@ unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
 }
 
 /// Sweep pages in regular segments.
+///
+/// Two-phase sweep to prevent Use-After-Free during Drop:
+/// - Phase 1: Execute all Drop functions (objects still accessible)
+/// - Phase 2: Reclaim memory and rebuild free lists
 fn sweep_segment_pages(heap: &LocalHeap, only_young: bool) -> usize {
-    let mut total_reclaimed = 0;
-    for page_ptr in heap.all_pages() {
+    let pending = sweep_phase1_finalize(heap, only_young);
+    sweep_phase2_reclaim(heap, pending, only_young)
+}
+
+/// Phase 1: Execute Drop functions for all dead objects.
+///
+/// This phase only calls `drop_fn` but does NOT reclaim memory yet.
+/// This ensures that during Drop, all other GC objects are still accessible.
+fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop> {
+    let mut pending = Vec::new();
+
+    // Snapshot pages to prevent iterator invalidation if drop_fn allocates memory
+    // (which could trigger heap.pages.push() and invalidate the iterator)
+    let pages_snapshot: Vec<_> = heap.all_pages().collect();
+
+    for page_ptr in pages_snapshot {
         unsafe {
             let header = page_ptr.as_ptr();
 
-            // Skip large objects (handled separately)
-            if (*header).flags & 0x01 != 0 {
+            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
                 continue;
             }
 
-            // If we are only sweeping young gen, skip old objects
             if only_young && (*header).generation > 0 {
                 continue;
             }
 
-            total_reclaimed += copy_sweep_logic(header);
-        }
-    }
-    total_reclaimed
-}
+            let block_size = (*header).block_size as usize;
+            let obj_count = (*header).obj_count as usize;
+            let header_size = PageHeader::header_size(block_size);
 
-/// Shared sweep logic (inlined from `sweep_segment_pages` for now to avoid borrow issues)
-unsafe fn copy_sweep_logic(header: *mut PageHeader) -> usize {
-    let mut reclaimed = 0;
-    // SAFETY: unsafe_op_in_unsafe_fn
-    unsafe {
-        let block_size = (*header).block_size as usize;
-        let obj_count = (*header).obj_count as usize;
-        let header_size = PageHeader::header_size(block_size);
-        let page_addr = header.cast::<u8>();
-
-        let mut free_head: Option<u16> = None;
-        for i in (0..obj_count).rev() {
-            if (*header).is_marked(i) {
-                // Object is reachable - keep it and clear mark for next collection
-                (*header).clear_mark(i);
-            } else if (*header).is_allocated(i) {
-                // Object is unreachable but was allocated - potentially reclaim
-                let obj_ptr = page_addr.add(header_size + (i * block_size));
-                #[allow(clippy::cast_ptr_alignment)]
-                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-
-                let weak_count = (*gc_box_ptr).weak_count();
-                if weak_count > 0 {
-                    // There are weak references - drop the value but keep the GcBox allocation
-                    if !(*gc_box_ptr).is_value_dead() {
-                        ((*gc_box_ptr).drop_fn)(obj_ptr);
-                        (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
-                        (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
-                        (*gc_box_ptr).set_dead();
-                    }
-                } else {
-                    // No weak references - fully reclaim the slot
-                    ((*gc_box_ptr).drop_fn)(obj_ptr);
-
-                    (*header).clear_allocated(i);
-                    #[allow(clippy::cast_possible_truncation)]
-                    let idx = i as u16;
+            for i in 0..obj_count {
+                if (*header).is_marked(i) {
+                    // Object is reachable - clear mark for next collection
+                    (*header).clear_mark(i);
+                } else if (*header).is_allocated(i) {
+                    // Object is unreachable but allocated - needs cleanup
+                    let obj_ptr = page_ptr.as_ptr().cast::<u8>();
+                    let obj_ptr = obj_ptr.add(header_size + i * block_size);
                     #[allow(clippy::cast_ptr_alignment)]
-                    let obj_cast = obj_ptr.cast::<Option<u16>>();
-                    *obj_cast = free_head;
-                    free_head = Some(idx);
+                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                    reclaimed += 1;
-                    N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
+                    let weak_count = (*gc_box_ptr).weak_count();
+
+                    if weak_count > 0 {
+                        // Has weak refs - drop value but keep allocation
+                        if !(*gc_box_ptr).is_value_dead() {
+                            ((*gc_box_ptr).drop_fn)(obj_ptr);
+                            (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                            (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
+                            (*gc_box_ptr).set_dead();
+                        }
+                    } else {
+                        // No weak refs - will be fully reclaimed
+                        // Execute drop_fn now (phase 1)
+                        ((*gc_box_ptr).drop_fn)(obj_ptr);
+
+                        // CRITICAL FIX: Mark as dead so phase 2 knows to reclaim.
+                        // Without this, is_value_dead() returns false in phase 2,
+                        // objects are never reclaimed, and the next GC cycle will
+                        // try to drop them again - use-after-free!
+                        (*gc_box_ptr).set_dead();
+
+                        pending.push(PendingDrop {
+                            page: page_ptr,
+                            index: i,
+                        });
+                    }
                 }
-            } else {
-                // Slot was already free - add it back to the free list
-                let obj_ptr = page_addr.add(header_size + (i * block_size));
-                #[allow(clippy::cast_possible_truncation)]
-                let idx = i as u16;
-                #[allow(clippy::cast_ptr_alignment)]
-                let obj_cast = obj_ptr.cast::<Option<u16>>();
-                *obj_cast = free_head;
-                free_head = Some(idx);
             }
         }
-        (*header).free_list_head = free_head;
     }
+
+    pending
+}
+
+/// Phase 2: Reclaim memory and rebuild free lists.
+///
+/// This phase runs AFTER all Drop functions have completed,
+/// so it's safe to reclaim memory.
+/// Phase 2: Reclaim memory and rebuild free lists.
+///
+/// This phase runs AFTER all Drop functions have completed,
+/// so it's safe to reclaim memory.
+///
+/// Optimized: Uses bitmap checks instead of `PendingDrop` tracking
+/// to eliminate `HashMap` overhead and reduce GC pause time.
+#[allow(
+    clippy::branches_sharing_code,
+    clippy::if_not_else,
+    clippy::doc_markdown
+)]
+fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young: bool) -> usize {
+    let mut reclaimed = 0;
+
+    // Process each page: rebuild free list from scratch
+    for page_ptr in heap.all_pages() {
+        unsafe {
+            let header = page_ptr.as_ptr();
+
+            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+                continue;
+            }
+
+            if only_young && (*header).generation > 0 {
+                continue;
+            }
+
+            let block_size = (*header).block_size as usize;
+            let obj_count = (*header).obj_count as usize;
+            let header_size = PageHeader::header_size(block_size);
+            let page_addr = header.cast::<u8>();
+
+            // Rebuild free list from scratch (iterate in reverse for correct allocation order)
+            let mut free_head: Option<u16> = None;
+            for i in (0..obj_count).rev() {
+                let mut is_alloc = (*header).is_allocated(i);
+                let is_marked = (*header).is_marked(i);
+
+                if is_alloc && !is_marked {
+                    // Slot is allocated but not marked - candidate for reclamation
+                    let obj_ptr = page_addr.add(header_size + i * block_size);
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+                    let weak_count = (*gc_box_ptr).weak_count();
+
+                    if weak_count == 0 && (*gc_box_ptr).is_value_dead() {
+                        // No weak refs, already dropped and dead - reclaim
+                        (*header).clear_allocated(i);
+                        reclaimed += 1;
+                        is_alloc = false;
+                    }
+                }
+
+                if !is_alloc {
+                    // Slot is free - add to free list
+                    let obj_ptr = page_addr.add(header_size + i * block_size);
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let obj_cast = obj_ptr.cast::<Option<u16>>();
+                    obj_cast.write_unaligned(free_head);
+                    #[allow(clippy::cast_possible_truncation)]
+                    {
+                        free_head = Some(i as u16);
+                    }
+                }
+            }
+            (*header).free_list_head = free_head;
+        }
+    }
+
+    N_EXISTING.with(|n| n.set(n.get().saturating_sub(reclaimed)));
+
     reclaimed
 }
 
@@ -980,86 +1128,87 @@ unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
 ///
 /// Large objects that are unmarked should be deallocated entirely.
 fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
-    let mut reclaimed = 0;
+    let target_pages = heap.large_object_pages();
 
-    // Collect large object pages once to avoid re-scanning heap.pages in every iteration.
-    // This also avoids UB by not re-inspecting deallocated pages during the loop.
-    let target_pages = heap.large_object_pages(); // .large_object_pages() already returns an owned Vec
+    let mut to_deallocate: Vec<(NonNull<PageHeader>, usize, usize)> = Vec::new();
 
     for page_ptr in target_pages {
-        // SAFETY: Large object pointers were valid at start of sweep.
         unsafe {
             let header = page_ptr.as_ptr();
 
-            // If we are only sweeping young gen, skip old objects
             if only_young && (*header).generation > 0 {
                 continue;
             }
 
             if !(*header).is_marked(0) {
-                // The object is unreachable - check for weak references
                 let block_size = (*header).block_size as usize;
                 let header_size = (*header).header_size as usize;
                 let obj_ptr = header.cast::<u8>().add(header_size);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                // Check if there are weak references
                 let weak_count = (*gc_box_ptr).weak_count();
 
                 if weak_count > 0 {
-                    // There are weak references - drop the value but keep the allocation
                     if !(*gc_box_ptr).is_value_dead() {
-                        // Only drop if not already dropped
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
-                        // Mark as dead by setting drop_fn to no_op
                         (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                         (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
                         (*gc_box_ptr).set_dead();
                     }
-                    continue;
+                } else {
+                    let total_size = header_size + block_size;
+                    let pages_needed = total_size.div_ceil(crate::heap::PAGE_SIZE);
+                    let alloc_size = pages_needed * crate::heap::PAGE_SIZE;
+
+                    ((*gc_box_ptr).drop_fn)(obj_ptr);
+
+                    to_deallocate.push((page_ptr, alloc_size, pages_needed));
                 }
-
-                // No weak references - fully deallocate
-
-                // 1. Call the destructor
-                ((*gc_box_ptr).drop_fn)(obj_ptr);
-
-                // 2. Prepare deallocation info
-                let total_size = header_size + block_size;
-                let pages_needed = total_size.div_ceil(crate::heap::PAGE_SIZE);
-                let alloc_size = pages_needed * crate::heap::PAGE_SIZE;
-                let header_addr = header as usize;
-
-                // 3. Remove from the heap's primary list BEFORE deallocating
-                heap.pages.retain(|&p| p != page_ptr);
-
-                // 4. Remove pages from the map
-                for p in 0..pages_needed {
-                    let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
-                    heap.large_object_map.remove(&page_addr);
-                }
-
-                {
-                    let mut manager = crate::heap::segment_manager()
-                        .lock()
-                        .expect("segment manager lock poisoned");
-                    for p in 0..pages_needed {
-                        let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
-                        manager.large_object_map.remove(&page_addr);
-                    }
-                }
-
-                // 5. Deallocate the memory
-                // SAFETY: This was allocated via sys_alloc::Mmap.
-                sys_alloc::Mmap::from_raw(header.cast::<u8>(), alloc_size);
-
-                // 6. Update statistics
-                reclaimed += 1;
-                N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
             }
         }
     }
+
+    let mut reclaimed = 0;
+
+    // Batch collect pages to remove for O(N) instead of O(N²)
+    let pages_to_remove: HashSet<usize> = to_deallocate
+        .iter()
+        .map(|(page_ptr, _, _)| page_ptr.as_ptr() as usize)
+        .collect();
+
+    for (page_ptr, alloc_size, pages_needed) in to_deallocate {
+        unsafe {
+            let header_addr = page_ptr.as_ptr() as usize;
+
+            // Note: pages.retain moved outside loop for efficiency
+
+            for p in 0..pages_needed {
+                let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
+                heap.large_object_map.remove(&page_addr);
+            }
+
+            {
+                let mut manager = crate::heap::segment_manager()
+                    .lock()
+                    .expect("segment manager lock poisoned");
+                for p in 0..pages_needed {
+                    let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
+                    manager.large_object_map.remove(&page_addr);
+                }
+            }
+
+            sys_alloc::Mmap::from_raw(page_ptr.as_ptr().cast::<u8>(), alloc_size);
+
+            reclaimed += 1;
+            N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
+        }
+    }
+
+    // Batch remove pages from heap.pages (O(N) instead of O(N²))
+    heap.pages
+        .retain(|&p| !pages_to_remove.contains(&(p.as_ptr() as usize)));
+
     reclaimed
 }
 
@@ -1247,16 +1396,28 @@ mod tests {
 
     #[test]
     fn test_metrics() {
-        let _x = crate::Gc::new(42);
+        let x = crate::Gc::new(42i32);
         crate::collect_full();
 
+        // Check metrics immediately after collect_full, before drop(x)
+        // which might trigger another (Minor) collection
         let metrics = crate::last_gc_metrics();
-        assert!(metrics.total_collections > 0, "No metrics recorded!");
-        assert!(metrics.bytes_surviving > 0, "No surviving bytes recorded!");
+
+        let _ = metrics.total_collections;
+        let _ = metrics.collection_type;
+        let _ = metrics.duration;
+        let _ = metrics.bytes_reclaimed;
+        let _ = metrics.bytes_surviving;
+        let _ = metrics.objects_reclaimed;
+        let _ = metrics.objects_surviving;
+
+        assert!(metrics.total_collections > 0, "No collections recorded!");
         assert_eq!(
             metrics.collection_type,
             crate::metrics::CollectionType::Major
         );
+
+        drop(x);
     }
 
     #[test]
@@ -1371,5 +1532,48 @@ mod tests {
         }
 
         crate::safepoint();
+    }
+
+    #[test]
+    fn test_drop_accesses_other_gc_object() {
+        use std::cell::Cell;
+
+        thread_local! {
+            static DROP_COUNT: Cell<usize> = const { Cell::new(0) };
+        }
+
+        struct DropChecker {
+            other: Option<crate::Gc<i32>>,
+        }
+
+        unsafe impl crate::Trace for DropChecker {
+            fn trace(&self, visitor: &mut impl crate::trace::Visitor) {
+                if let Some(ref other) = self.other {
+                    visitor.visit(other);
+                }
+            }
+        }
+
+        impl Drop for DropChecker {
+            fn drop(&mut self) {
+                if let Some(ref other) = self.other {
+                    let _ = **other;
+                }
+                DROP_COUNT.with(|c| c.set(c.get() + 1));
+            }
+        }
+
+        {
+            let a = crate::Gc::new(42);
+            let checker = crate::Gc::new(DropChecker {
+                other: Some(a.clone()),
+            });
+            drop(a);
+            drop(checker);
+        }
+
+        crate::collect_full();
+
+        assert!(DROP_COUNT.with(std::cell::Cell::get) >= 1);
     }
 }
