@@ -1208,6 +1208,15 @@ impl LocalHeap {
             });
             // Mark the single object as allocated
             (*header.as_ptr()).set_allocated(0);
+
+            // Initialize the GcBox with no-op drop/trace to prevent crashes if
+            // the caller doesn't properly initialize the GcBox (e.g., when using
+            // low-level alloc API directly in tests).
+            let gc_box_ptr = ptr.as_ptr().add(h_size).cast::<crate::ptr::GcBox<()>>();
+            std::ptr::addr_of_mut!((*gc_box_ptr).drop_fn)
+                .write(crate::ptr::GcBox::<()>::no_op_drop);
+            std::ptr::addr_of_mut!((*gc_box_ptr).trace_fn)
+                .write(crate::ptr::GcBox::<()>::no_op_trace);
         }
 
         let page_ptr = header; // header is NonNull

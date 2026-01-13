@@ -367,16 +367,22 @@ pub fn collect_full() {
     }
 }
 
-/// Wake up any threads waiting at a safe point.
+/// Wake up any threads waiting at a safe point and clear gc_requested for ALL threads.
 /// This is used when a non-collector thread needs to wake up waiting threads
 /// and perform single-threaded collection. It properly restores threads to
 /// EXECUTING state and restores `active_count`.
+///
+/// CRITICAL: We must clear `gc_requested` for ALL threads, not just those at safepoint.
+/// Otherwise, threads that haven't reached safepoint yet will have their flag stuck at true,
+/// causing them to hang in future GC cycles when they enter rendezvous.
 fn wake_waiting_threads() {
     let registry = crate::heap::thread_registry().lock().unwrap();
     let mut woken_count = 0;
     for tcb in &registry.threads {
+        // Clear gc_requested for ALL threads to prevent hangs in future GC cycles
+        tcb.gc_requested.store(false, Ordering::Release);
+
         if tcb.state.load(Ordering::Acquire) == crate::heap::THREAD_STATE_SAFEPOINT {
-            tcb.gc_requested.store(false, Ordering::Relaxed);
             tcb.park_cond.notify_all();
             tcb.state
                 .store(crate::heap::THREAD_STATE_EXECUTING, Ordering::Release);
@@ -487,13 +493,27 @@ fn perform_single_threaded_collect_full() {
 }
 
 /// Perform full collection as the collector thread.
+///
+/// Uses the three-phase approach to correctly handle cross-heap references:
+/// - Phase 1: Clear all marks on ALL heaps
+/// - Phase 2: Mark all reachable objects (tracing across all heaps)
+/// - Phase 3: Sweep ALL heaps
 fn perform_multi_threaded_collect_full() {
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
     let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
+    // Reset drop counter
+    N_DROPS.with(|n| n.set(0));
+
     let mut objects_reclaimed = 0;
+
+    // CRITICAL FIX: Set global gc_in_progress flag BEFORE taking thread snapshot
+    crate::heap::thread_registry()
+        .lock()
+        .unwrap()
+        .set_gc_in_progress(true);
 
     // Collect all stack roots BEFORE processing heaps
     // This ensures we capture roots from all threads before any are consumed
@@ -506,11 +526,37 @@ fn perform_multi_threaded_collect_full() {
         })
         .collect();
 
+    // CRITICAL FIX: Use three-phase approach to correctly handle cross-heap references.
+    // The old approach processed each heap independently, which caused marks on other
+    // heaps (set during tracing of cross-heap references) to be cleared when processing
+    // those heaps, leading to use-after-free bugs.
+
+    // Phase 1: Clear all marks on ALL heaps
     for tcb in &tcbs {
         unsafe {
-            objects_reclaimed += collect_major_multi(&mut *tcb.heap.get(), &all_stack_roots);
+            clear_all_marks_and_dirty(&*tcb.heap.get());
         }
     }
+
+    // Phase 2: Mark all reachable objects (tracing across all heaps)
+    for tcb in &tcbs {
+        unsafe {
+            mark_major_roots_multi(&mut *tcb.heap.get(), &all_stack_roots);
+        }
+    }
+
+    // Phase 3: Sweep ALL heaps
+    for tcb in &tcbs {
+        unsafe {
+            let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
+            let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
+            objects_reclaimed += reclaimed + reclaimed_large;
+            promote_all_pages(&*tcb.heap.get());
+        }
+    }
+
+    // Sweep orphan pages from terminated threads
+    crate::heap::sweep_orphan_pages();
 
     let duration = start.elapsed();
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
@@ -528,6 +574,12 @@ fn perform_multi_threaded_collect_full() {
     crate::heap::resume_all_threads();
     crate::heap::clear_gc_request();
 
+    // CRITICAL FIX: Clear global gc_in_progress flag after GC completes
+    crate::heap::thread_registry()
+        .lock()
+        .unwrap()
+        .set_gc_in_progress(false);
+
     IN_COLLECT.with(|in_collect| in_collect.set(false));
 }
 
@@ -544,6 +596,10 @@ fn collect_minor_multi(
 }
 
 /// Major collection for a heap in multi-threaded context.
+///
+/// Note: This function is currently unused because `perform_multi_threaded_collect_full()`
+/// now uses the three-phase approach directly. Kept for potential future use.
+#[allow(dead_code)]
 fn collect_major_multi(
     heap: &mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
@@ -925,6 +981,12 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                         // No weak refs - will be fully reclaimed
                         // Execute drop_fn now (phase 1)
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
+
+                        // CRITICAL FIX: Mark as dead so phase 2 knows to reclaim.
+                        // Without this, is_value_dead() returns false in phase 2,
+                        // objects are never reclaimed, and the next GC cycle will
+                        // try to drop them again - use-after-free!
+                        (*gc_box_ptr).set_dead();
 
                         pending.push(PendingDrop {
                             page: page_ptr,
