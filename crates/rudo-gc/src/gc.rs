@@ -367,7 +367,7 @@ pub fn collect_full() {
     }
 }
 
-/// Wake up any threads waiting at a safe point and clear gc_requested for ALL threads.
+/// Wake up any threads waiting at a safe point and clear `gc_requested` for ALL threads.
 /// This is used when a non-collector thread needs to wake up waiting threads
 /// and perform single-threaded collection. It properly restores threads to
 /// EXECUTING state and restores `active_count`.

@@ -6,7 +6,7 @@ use rudo_gc::Gc;
 ///
 /// # Safety
 ///
-/// This function clears callee-saved registers (R12-R15 on x86_64).
+/// This function clears callee-saved registers (R12-R15 on `x86_64`).
 /// It should only be called when those registers don't contain values
 /// needed by the calling code.
 #[inline(never)]
