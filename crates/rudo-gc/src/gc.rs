@@ -979,35 +979,34 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
             // Rebuild free list from scratch (iterate in reverse for correct allocation order)
             let mut free_head: Option<u16> = None;
             for i in (0..obj_count).rev() {
-                let is_alloc = (*header).is_allocated(i);
+                let mut is_alloc = (*header).is_allocated(i);
                 let is_marked = (*header).is_marked(i);
 
-                if is_alloc {
-                    // Slot is allocated - check if it should be reclaimed
-                    if !is_marked {
-                        // Unmarked allocated slot was dropped in phase 1 - reclaim it now
-                        let obj_ptr = page_addr.add(header_size + i * block_size);
-                        #[allow(clippy::cast_ptr_alignment)]
-                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                if is_alloc && !is_marked {
+                    // Slot is allocated but not marked - candidate for reclamation
+                    let obj_ptr = page_addr.add(header_size + i * block_size);
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                        let weak_count = (*gc_box_ptr).weak_count();
+                    let weak_count = (*gc_box_ptr).weak_count();
 
-                        if weak_count == 0 && (*gc_box_ptr).is_value_dead() {
-                            // No weak refs, already dropped and dead - reclaim
-                            (*header).clear_allocated(i);
-                            reclaimed += 1;
-                        }
-                        // else: has weak refs or not dead yet - keep allocated
-                    } else {
-                        // Slot is free - add to free list
-                        let obj_ptr = page_addr.add(header_size + i * block_size);
-                        #[allow(clippy::cast_ptr_alignment)]
-                        let obj_cast = obj_ptr.cast::<Option<u16>>();
-                        *obj_cast = free_head;
-                        #[allow(clippy::cast_possible_truncation)]
-                        {
-                            free_head = Some(i as u16);
-                        }
+                    if weak_count == 0 && (*gc_box_ptr).is_value_dead() {
+                        // No weak refs, already dropped and dead - reclaim
+                        (*header).clear_allocated(i);
+                        reclaimed += 1;
+                        is_alloc = false;
+                    }
+                }
+
+                if !is_alloc {
+                    // Slot is free - add to free list
+                    let obj_ptr = page_addr.add(header_size + i * block_size);
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let obj_cast = obj_ptr.cast::<Option<u16>>();
+                    obj_cast.write_unaligned(free_head);
+                    #[allow(clippy::cast_possible_truncation)]
+                    {
+                        free_head = Some(i as u16);
                     }
                 }
             }
