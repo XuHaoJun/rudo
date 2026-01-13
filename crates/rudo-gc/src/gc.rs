@@ -4,7 +4,7 @@
 //! a mark-sweep algorithm with the `BiBOP` memory layout.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
@@ -14,6 +14,10 @@ use crate::trace::{GcVisitor, Trace, Visitor, VisitorKind};
 
 /// Information about an object pending deallocation.
 /// Used in two-phase sweep: phase 1 drops, phase 2 reclaims.
+///
+/// Note: This struct is deprecated as of P1-001 optimization.
+/// The sweep phase now uses bitmap checks instead of `PendingDrop` tracking.
+#[allow(dead_code)]
 struct PendingDrop {
     page: NonNull<PageHeader>,
     index: usize,
@@ -876,7 +880,11 @@ fn sweep_segment_pages(heap: &LocalHeap, only_young: bool) -> usize {
 fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop> {
     let mut pending = Vec::new();
 
-    for page_ptr in heap.all_pages() {
+    // Snapshot pages to prevent iterator invalidation if drop_fn allocates memory
+    // (which could trigger heap.pages.push() and invalidate the iterator)
+    let pages_snapshot: Vec<_> = heap.all_pages().collect();
+
+    for page_ptr in pages_snapshot {
         unsafe {
             let header = page_ptr.as_ptr();
 
@@ -935,17 +943,20 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
 ///
 /// This phase runs AFTER all Drop functions have completed,
 /// so it's safe to reclaim memory.
-fn sweep_phase2_reclaim(heap: &LocalHeap, pending: Vec<PendingDrop>, only_young: bool) -> usize {
+/// Phase 2: Reclaim memory and rebuild free lists.
+///
+/// This phase runs AFTER all Drop functions have completed,
+/// so it's safe to reclaim memory.
+///
+/// Optimized: Uses bitmap checks instead of `PendingDrop` tracking
+/// to eliminate `HashMap` overhead and reduce GC pause time.
+#[allow(
+    clippy::branches_sharing_code,
+    clippy::if_not_else,
+    clippy::doc_markdown
+)]
+fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young: bool) -> usize {
     let mut reclaimed = 0;
-
-    // Group pending drops by page for efficient processing
-    let mut pending_by_page: HashMap<usize, Vec<usize>> = HashMap::new();
-    for p in pending {
-        pending_by_page
-            .entry(p.page.as_ptr() as usize)
-            .or_default()
-            .push(p.index);
-    }
 
     // Process each page: rebuild free list from scratch
     for page_ptr in heap.all_pages() {
@@ -965,29 +976,38 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, pending: Vec<PendingDrop>, only_young:
             let header_size = PageHeader::header_size(block_size);
             let page_addr = header.cast::<u8>();
 
-            // Check if this page has any pending reclaims
-            let pending_indices = pending_by_page.get(&(header as usize));
-
-            // Clear allocated bits for pending slots
-            if let Some(indices) = pending_indices {
-                for &index in indices {
-                    (*header).clear_allocated(index);
-                    reclaimed += 1;
-                }
-            }
-
             // Rebuild free list from scratch (iterate in reverse for correct allocation order)
             let mut free_head: Option<u16> = None;
             for i in (0..obj_count).rev() {
-                if !(*header).is_allocated(i) {
-                    // Slot is free - add to free list
-                    let obj_ptr = page_addr.add(header_size + i * block_size);
-                    #[allow(clippy::cast_ptr_alignment)]
-                    let obj_cast = obj_ptr.cast::<Option<u16>>();
-                    *obj_cast = free_head;
-                    #[allow(clippy::cast_possible_truncation)]
-                    {
-                        free_head = Some(i as u16);
+                let is_alloc = (*header).is_allocated(i);
+                let is_marked = (*header).is_marked(i);
+
+                if is_alloc {
+                    // Slot is allocated - check if it should be reclaimed
+                    if !is_marked {
+                        // Unmarked allocated slot was dropped in phase 1 - reclaim it now
+                        let obj_ptr = page_addr.add(header_size + i * block_size);
+                        #[allow(clippy::cast_ptr_alignment)]
+                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+                        let weak_count = (*gc_box_ptr).weak_count();
+
+                        if weak_count == 0 && (*gc_box_ptr).is_value_dead() {
+                            // No weak refs, already dropped and dead - reclaim
+                            (*header).clear_allocated(i);
+                            reclaimed += 1;
+                        }
+                        // else: has weak refs or not dead yet - keep allocated
+                    } else {
+                        // Slot is free - add to free list
+                        let obj_ptr = page_addr.add(header_size + i * block_size);
+                        #[allow(clippy::cast_ptr_alignment)]
+                        let obj_cast = obj_ptr.cast::<Option<u16>>();
+                        *obj_cast = free_head;
+                        #[allow(clippy::cast_possible_truncation)]
+                        {
+                            free_head = Some(i as u16);
+                        }
                     }
                 }
             }
@@ -1089,11 +1109,18 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
     }
 
     let mut reclaimed = 0;
+
+    // Batch collect pages to remove for O(N) instead of O(N²)
+    let pages_to_remove: HashSet<usize> = to_deallocate
+        .iter()
+        .map(|(page_ptr, _, _)| page_ptr.as_ptr() as usize)
+        .collect();
+
     for (page_ptr, alloc_size, pages_needed) in to_deallocate {
         unsafe {
             let header_addr = page_ptr.as_ptr() as usize;
 
-            heap.pages.retain(|&p| p != page_ptr);
+            // Note: pages.retain moved outside loop for efficiency
 
             for p in 0..pages_needed {
                 let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
@@ -1116,6 +1143,11 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
             N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
         }
     }
+
+    // Batch remove pages from heap.pages (O(N) instead of O(N²))
+    heap.pages
+        .retain(|&p| !pages_to_remove.contains(&(p.as_ptr() as usize)));
+
     reclaimed
 }
 
