@@ -4,7 +4,7 @@
 //! notifies the Garbage Collector when mutations occur. Use this for
 //! all interior mutability of GC-managed objects.
 
-use crate::heap::{ptr_to_object_index, ptr_to_page_header};
+use crate::heap::ptr_to_page_header;
 use crate::trace::Trace;
 use std::cell::{Ref, RefCell, RefMut};
 
@@ -93,9 +93,20 @@ impl<T: ?Sized> GcCell<T> {
                 // Check generation.
                 if (*header.as_ptr()).generation > 0 {
                     // We are in an old page. We must record this write.
-                    // Find our object index.
-                    if let Some(index) = ptr_to_object_index(ptr) {
-                        (*header.as_ptr()).set_dirty(index);
+                    // Find our object index manually to avoid redundant header lookup.
+                    let block_size = (*header.as_ptr()).block_size as usize;
+                    let header_size = (*header.as_ptr()).header_size as usize;
+                    let page_addr = header.as_ptr() as usize;
+                    let ptr_addr = ptr as usize;
+
+                    // Check pointer is within valid range
+                    if ptr_addr >= page_addr + header_size {
+                        let offset = ptr_addr - (page_addr + header_size);
+                        let index = offset / block_size;
+
+                        if index < (*header.as_ptr()).obj_count as usize {
+                            (*header.as_ptr()).set_dirty(index);
+                        }
                     }
                 }
             }
