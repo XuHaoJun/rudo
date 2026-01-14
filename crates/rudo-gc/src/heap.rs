@@ -1347,7 +1347,6 @@ impl LocalHeap {
     /// assert_eq!(name, "16-byte");
     /// ```
     #[must_use]
-    #[allow(dead_code)]
     pub const fn debug_size_class<T>() -> (usize, &'static str) {
         let size = std::mem::size_of::<T>();
         let class = compute_size_class(size);
@@ -1363,6 +1362,90 @@ impl LocalHeap {
             _ => "large-object",
         };
         (class, name)
+    }
+
+    /// Deallocate memory allocated by `alloc`.
+    ///
+    /// This is used for panic cleanup in `new_cyclic_weak` when the construction
+    /// closure panics before the value is written to the `GcBox`.
+    ///
+    /// # Safety
+    ///
+    /// - `ptr` must have been returned by a previous call to `alloc` on `self`
+    /// - `size` and `align` must match what was passed to `alloc`
+    /// - The memory at `ptr` must not be accessed after deallocation
+    ///
+    /// # Panics
+    ///
+    /// Panics if the segment manager lock is poisoned.
+    #[allow(unsafe_op_in_unsafe_fn)]
+    pub unsafe fn dealloc(&mut self, ptr: NonNull<u8>) {
+        let addr = ptr.as_ptr() as usize;
+
+        // Find which page this object belongs to
+        let page_addr = addr & PAGE_MASK;
+
+        // Check if it's a large object
+        if let Some(&(header_addr, size, header_size)) = self.large_object_map.get(&page_addr) {
+            // It's a large object - deallocate directly
+            let total_size = header_size + size;
+            let alloc_size = total_size.div_ceil(PAGE_SIZE) * PAGE_SIZE;
+
+            // Drop the value if it was initialized
+            let gc_box_ptr = addr as *mut crate::ptr::GcBox<()>;
+            if !(*gc_box_ptr).is_value_dead() {
+                ((*gc_box_ptr).drop_fn)(addr as *mut u8);
+            }
+
+            // Remove from tracking structures
+            for p in 0..(alloc_size / PAGE_SIZE) {
+                let page = header_addr + (p * PAGE_SIZE);
+                self.large_object_map.remove(&page);
+                segment_manager()
+                    .lock()
+                    .unwrap()
+                    .large_object_map
+                    .remove(&page);
+            }
+
+            // Deallocate the memory
+            unsafe {
+                sys_alloc::Mmap::from_raw(addr as *mut u8, alloc_size);
+            }
+        } else if self.small_pages.contains(&page_addr) {
+            // It's a small object - find the page header
+            for page_ptr in &self.pages {
+                if page_ptr.as_ptr() as usize == page_addr {
+                    let header = page_ptr.as_ptr();
+                    let is_large = unsafe { ((*header).flags & PAGE_FLAG_LARGE) != 0 };
+                    if !is_large {
+                        let block_size = unsafe { (*header).block_size as usize };
+                        let header_size = PageHeader::header_size(block_size);
+                        let obj_count = unsafe { (*header).obj_count as usize };
+                        let idx = (addr - page_addr - header_size) / block_size;
+
+                        if idx < obj_count {
+                            // Drop the value if it was initialized
+                            let obj_ptr = addr as *mut u8;
+                            #[allow(clippy::cast_ptr_alignment)]
+                            let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                            if !unsafe { (*gc_box_ptr).is_value_dead() } {
+                                unsafe { ((*gc_box_ptr).drop_fn)(obj_ptr) };
+                            }
+
+                            // Add back to free list
+                            unsafe {
+                                let next_head = (*header).free_list_head;
+                                obj_ptr.cast::<Option<u16>>().write_unaligned(next_head);
+                                (*header).free_list_head = Some(u16::try_from(idx).unwrap());
+                                (*header).clear_allocated(idx);
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
     }
 }
 

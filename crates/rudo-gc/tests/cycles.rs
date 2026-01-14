@@ -1,5 +1,7 @@
 //! Cycle collection tests for rudo-gc.
 
+#![allow(deprecated)] // Testing deprecated new_cyclic (should migrate to new_cyclic_weak)
+
 use rudo_gc::{collect, Gc, Trace};
 use std::cell::RefCell;
 

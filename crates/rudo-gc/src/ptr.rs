@@ -33,9 +33,34 @@ pub struct GcBox<T: Trace + ?Sized> {
 }
 
 impl<T: Trace + ?Sized> GcBox<T> {
+    /// Bit mask for the "value dead" flag (highest bit).
+    const DEAD_FLAG: usize = 1 << (usize::BITS - 1);
+    /// Bit mask for the "under construction" flag (second highest bit).
+    const UNDER_CONSTRUCTION_FLAG: usize = 1 << (usize::BITS - 2);
+    /// Combined mask for all flags stored in `weak_count`.
+    const FLAGS_MASK: usize = Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG;
+
     /// Get the reference count.
     pub fn ref_count(&self) -> NonZeroUsize {
         self.ref_count.get()
+    }
+
+    /// Check if the value is currently under construction.
+    #[inline]
+    fn is_under_construction(&self) -> bool {
+        (self.weak_count.get() & Self::UNDER_CONSTRUCTION_FLAG) != 0
+    }
+
+    /// Set the under-construction flag.
+    #[inline]
+    fn set_under_construction(&self, flag: bool) {
+        let current = self.weak_count.get();
+        let mask = Self::UNDER_CONSTRUCTION_FLAG;
+        if flag {
+            self.weak_count.set(current | mask);
+        } else {
+            self.weak_count.set(current & !mask);
+        }
     }
 
     /// Increment the reference count.
@@ -66,43 +91,42 @@ impl<T: Trace + ?Sized> GcBox<T> {
 
     /// Get the weak reference count.
     pub fn weak_count(&self) -> usize {
-        self.weak_count.get() & !(1 << (std::mem::size_of::<usize>() * 8 - 1))
+        self.weak_count.get() & !Self::FLAGS_MASK
     }
 
     /// Increment the weak reference count.
     pub fn inc_weak(&self) {
         let current = self.weak_count.get();
-        let flag = current & (1 << (std::mem::size_of::<usize>() * 8 - 1));
-        let count = current & !(1 << (std::mem::size_of::<usize>() * 8 - 1));
-        self.weak_count.set(flag | count.saturating_add(1));
+        let flags = current & Self::FLAGS_MASK;
+        let count = current & !Self::FLAGS_MASK;
+        self.weak_count.set(flags | count.saturating_add(1));
     }
 
     /// Decrement the weak reference count. Returns true if count reached zero.
     pub fn dec_weak(&self) -> bool {
         let current = self.weak_count.get();
-        let flag = current & (1 << (std::mem::size_of::<usize>() * 8 - 1));
-        let count = current & !(1 << (std::mem::size_of::<usize>() * 8 - 1));
+        let flags = current & Self::FLAGS_MASK;
+        let count = current & !Self::FLAGS_MASK;
 
         if count == 0 {
             true
         } else if count == 1 {
-            self.weak_count.set(flag);
+            self.weak_count.set(flags);
             true
         } else {
-            self.weak_count.set(flag | (count - 1));
+            self.weak_count.set(flags | (count - 1));
             false
         }
     }
 
     /// Check if the value has been dropped (only weak refs remain).
     pub fn is_value_dead(&self) -> bool {
-        (self.weak_count.get() & (1 << (std::mem::size_of::<usize>() * 8 - 1))) != 0
+        (self.weak_count.get() & Self::DEAD_FLAG) != 0
     }
 
     /// Mark the value as dropped.
     pub(crate) fn set_dead(&self) {
-        self.weak_count
-            .set(self.weak_count.get() | (1 << (std::mem::size_of::<usize>() * 8 - 1)));
+        self.weak_count.set(self.weak_count.get() | Self::DEAD_FLAG);
     }
 }
 
@@ -361,51 +385,24 @@ impl<T: Trace> Gc<T> {
         }
     }
 
-    /// Create a self-referential garbage-collected value.
-    ///
-    /// The closure receives a "dead" `Gc` that will be rehydrated after
-    /// construction completes.
-    ///
-    /// # Limitations
-    ///
-    /// Self-referential cycles are currently **not fully supported**. The dead `Gc<T>`
-    /// passed to the closure cannot be rehydrated to a live `Gc<T>` after construction.
-    /// This is due to type erasure in the current design. Using this function may lead
-    /// to panics or undefined behavior if you attempt to use the self-reference.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use rudo_gc::{Gc, Trace};
-    ///
-    /// #[derive(Trace)]
-    /// struct Node {
-    ///     self_ref: Gc<Node>,
-    /// }
-    ///
-    /// // WARNING: This currently does NOT work properly!
-    /// // The `this` reference remains dead and cannot be used.
-    /// let node = Gc::new_cyclic(|this| Node { self_ref: this });
-    /// ```
-    ///
-    /// **Do not use `new_cyclic` until self-referential cycle support is implemented.**
-    #[allow(unused_variables)] // FIXME: Remove when rehydration is implemented
+    #[deprecated(
+        since = "0.0.1",
+        note = "Self-referential cycles are not supported. Use `new_cyclic_weak` instead."
+    )]
+    #[allow(unused)]
+    #[must_use]
+    #[doc(hidden)]
     pub fn new_cyclic<F: FnOnce(Self) -> T>(data_fn: F) -> Self {
-        // Allocate space
         let ptr = with_heap(LocalHeap::alloc::<GcBox<T>>);
         let gc_box = ptr.as_ptr().cast::<GcBox<T>>();
 
-        // Create a dead Gc to pass to the closure
         let dead_gc = Self {
             ptr: Cell::new(Nullable::new(unsafe { NonNull::new_unchecked(gc_box) }).as_null()),
             _marker: PhantomData,
         };
 
-        // Call the closure to get the value
         let value = data_fn(dead_gc);
 
-        // Initialize the GcBox
-        // SAFETY: We just allocated this memory
         unsafe {
             gc_box.write(GcBox {
                 ref_count: Cell::new(NonZeroUsize::MIN),
@@ -418,19 +415,130 @@ impl<T: Trace> Gc<T> {
 
         let gc_box_ptr = unsafe { NonNull::new_unchecked(gc_box) };
 
-        // Create the live Gc
         let gc = Self {
             ptr: Cell::new(Nullable::new(gc_box_ptr)),
             _marker: PhantomData,
         };
 
-        // Rehydrate any dead Gcs in the value that point to us
-        // SAFETY: The GcBox is now initialized
         unsafe {
             rehydrate_self_refs(gc_box_ptr, &(*gc_box).value);
         }
 
         gc
+    }
+
+    /// Create a self-referential garbage-collected value using a Weak reference.
+    ///
+    /// The closure receives a `Weak<T>` that will be upgradeable after
+    /// construction completes. Store this `Weak` in the constructed value
+    /// and call `upgrade()` when access to the self-reference is needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `T` is a zero-sized type (ZST).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Weak, Trace, GcCell};
+    ///
+    /// #[derive(Trace)]
+    /// struct Node {
+    ///     self_ref: GcCell<Option<Weak<Node>>>,
+    ///     data: i32,
+    /// }
+    ///
+    /// let node = Gc::new_cyclic_weak(|weak_self| {
+    ///     Node {
+    ///         self_ref: GcCell::new(Some(weak_self)),
+    ///         data: 42,
+    ///     }
+    /// });
+    ///
+    /// // Access self through upgrade()
+    /// let weak = node.self_ref.borrow();
+    /// let self_ref = weak.as_ref().unwrap().upgrade().unwrap();
+    /// assert_eq!(self_ref.data, 42);
+    /// ```
+    #[track_caller]
+    #[allow(clippy::items_after_statements)]
+    pub fn new_cyclic_weak<F>(data_fn: F) -> Self
+    where
+        F: FnOnce(Weak<T>) -> T,
+    {
+        assert!(
+            std::mem::size_of::<T>() != 0,
+            "Gc::new_cyclic_weak does not support zero-sized types"
+        );
+
+        struct DropGuard {
+            ptr: NonNull<u8>,
+            completed: bool,
+        }
+
+        impl Drop for DropGuard {
+            fn drop(&mut self) {
+                if !self.completed {
+                    with_heap(|heap| unsafe {
+                        heap.dealloc(self.ptr);
+                    });
+                }
+            }
+        }
+
+        let raw_ptr = with_heap(LocalHeap::alloc::<GcBox<T>>);
+        let gc_box = raw_ptr.as_ptr().cast::<GcBox<T>>();
+
+        let gc_box_ptr = unsafe { NonNull::new_unchecked(gc_box) };
+
+        let mut guard = DropGuard {
+            ptr: raw_ptr,
+            completed: false,
+        };
+
+        unsafe {
+            std::ptr::write(
+                std::ptr::addr_of_mut!((*gc_box).ref_count),
+                Cell::new(NonZeroUsize::MIN),
+            );
+            std::ptr::write(
+                std::ptr::addr_of_mut!((*gc_box).weak_count),
+                Cell::new(GcBox::<T>::UNDER_CONSTRUCTION_FLAG),
+            );
+            std::ptr::write(
+                std::ptr::addr_of_mut!((*gc_box).drop_fn),
+                GcBox::<T>::drop_fn_for,
+            );
+            std::ptr::write(
+                std::ptr::addr_of_mut!((*gc_box).trace_fn),
+                GcBox::<T>::trace_fn_for,
+            );
+        }
+
+        let weak_self = Weak {
+            ptr: Cell::new(Nullable::new(gc_box_ptr)),
+            _marker: PhantomData,
+        };
+
+        let value = data_fn(weak_self);
+
+        unsafe {
+            std::ptr::write(std::ptr::addr_of_mut!((*gc_box).value), value);
+        }
+
+        unsafe {
+            (*gc_box_ptr.as_ptr()).set_under_construction(false);
+        }
+
+        guard.completed = true;
+        std::mem::forget(guard);
+
+        crate::gc::notify_created_gc();
+
+        Self {
+            ptr: Cell::new(Nullable::new(gc_box_ptr)),
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -748,11 +856,38 @@ impl<T: Trace + ?Sized> Weak<T> {
     ///
     /// assert!(weak.upgrade().is_some());
     /// ```
+    /// Attempt to upgrade to a strong `Gc<T>` reference.
+    ///
+    /// Returns `None` if the value has been collected.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `Weak` points to a `GcBox` that is currently under construction
+    /// (e.g., during `Gc::new_cyclic_weak`).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use rudo_gc::{Gc, Weak};
+    ///
+    /// let gc = Gc::new(42);
+    /// let weak = Gc::downgrade(&gc);
+    ///
+    /// assert!(weak.upgrade().is_some());
+    /// ```
     pub fn upgrade(&self) -> Option<Gc<T>> {
         let ptr = self.ptr.get().as_option()?;
 
         // SAFETY: The pointer is valid because we have a weak reference
         unsafe {
+            // Check if under construction (prevents UB during new_cyclic_weak)
+            assert!(
+                !(*ptr.as_ptr()).is_under_construction(),
+                "Weak::upgrade: cannot upgrade while GcBox is under construction. \
+                 This typically happens if you call upgrade() inside the closure \
+                 passed to Gc::new_cyclic_weak()."
+            );
+
             // Check if the value is still alive
             if (*ptr.as_ptr()).is_value_dead() {
                 return None;
@@ -858,15 +993,32 @@ impl<T: Trace + ?Sized> Clone for Weak<T> {
 
 impl<T: Trace + ?Sized> Drop for Weak<T> {
     fn drop(&mut self) {
-        if let Some(ptr) = self.ptr.get().as_option() {
-            // Decrement the weak count
-            // SAFETY: The pointer is valid because we have a weak reference
-            unsafe {
-                (*ptr.as_ptr()).dec_weak();
+        let Some(ptr) = self.ptr.get().as_option() else {
+            return;
+        };
+
+        // SAFETY: Use raw pointer access to weak_count field directly.
+        // This is critical for Stacked Borrows compliance: when Weak::drop is called
+        // during the drop of a value inside a GcBox (e.g., a struct containing Weak<T>),
+        // the GcBox's value field is under a mutable borrow from drop_in_place.
+        // Creating a reference to the whole GcBox via (*ptr.as_ptr()).dec_weak() would
+        // violate Stacked Borrows because it conflicts with the existing mutable borrow.
+        // By using addr_of! to get the address of weak_count directly, we avoid
+        // creating a reference to the GcBox and thus avoid the borrow conflict.
+        unsafe {
+            let weak_count_ptr = std::ptr::addr_of!((*ptr.as_ptr()).weak_count);
+
+            let current = (*weak_count_ptr).get();
+            let flags = current & GcBox::<T>::FLAGS_MASK;
+            let count = current & !GcBox::<T>::FLAGS_MASK;
+
+            // Decrement the weak count, preserving flags
+            if count > 1 {
+                (*weak_count_ptr).set(flags | (count - 1));
+            } else if count == 1 {
+                (*weak_count_ptr).set(flags);
             }
-            // Note: Memory is managed by the GC, not deallocated here.
-            // The `GcBox` memory is reclaimed during sweep when both
-            // strong and weak counts are zero.
+            // If count == 0, nothing to do (already at zero)
         }
     }
 }
@@ -874,6 +1026,13 @@ impl<T: Trace + ?Sized> Drop for Weak<T> {
 impl<T: Trace + ?Sized> std::fmt::Debug for Weak<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "(Weak)")
+    }
+}
+
+unsafe impl<T: Trace + ?Sized> Trace for Weak<T> {
+    fn trace(&self, _visitor: &mut impl crate::trace::Visitor) {
+        // Weak references do not need to be traced.
+        // They don't keep the value alive, so tracing them would be incorrect.
     }
 }
 
