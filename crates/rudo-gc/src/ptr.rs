@@ -366,6 +366,13 @@ impl<T: Trace> Gc<T> {
     /// The closure receives a "dead" `Gc` that will be rehydrated after
     /// construction completes.
     ///
+    /// # Limitations
+    ///
+    /// Self-referential cycles are currently **not fully supported**. The dead `Gc<T>`
+    /// passed to the closure cannot be rehydrated to a live `Gc<T>` after construction.
+    /// This is due to type erasure in the current design. Using this function may lead
+    /// to panics or undefined behavior if you attempt to use the self-reference.
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -376,8 +383,13 @@ impl<T: Trace> Gc<T> {
     ///     self_ref: Gc<Node>,
     /// }
     ///
+    /// // WARNING: This currently does NOT work properly!
+    /// // The `this` reference remains dead and cannot be used.
     /// let node = Gc::new_cyclic(|this| Node { self_ref: this });
     /// ```
+    ///
+    /// **Do not use `new_cyclic` until self-referential cycle support is implemented.**
+    #[allow(unused_variables)] // FIXME: Remove when rehydration is implemented
     pub fn new_cyclic<F: FnOnce(Self) -> T>(data_fn: F) -> Self {
         // Allocate space
         let ptr = with_heap(LocalHeap::alloc::<GcBox<T>>);
@@ -887,12 +899,21 @@ fn rehydrate_self_refs<T: Trace + ?Sized>(_target: NonNull<GcBox<T>>, value: &T)
 
     impl Visitor for Rehydrator {
         fn visit<U: Trace + ?Sized>(&mut self, gc: &Gc<U>) {
-            // This is a simplified rehydration - in practice we'd need
-            // type checking to ensure we only rehydrate matching types
             if gc.ptr.get().is_null() {
-                // The Gc is dead; check if we should rehydrate it
-                // For now, we can't easily rehydrate due to type mismatch
-                // This is a limitation of our current design
+                // FIXME: Self-referential cycle support is not implemented.
+                //
+                // Rehydration requires type information to ensure we only
+                // rehydrate dead Gc<T> references that point to the same
+                // allocation. Due to type erasure in our current design,
+                // we cannot safely verify type compatibility here.
+                //
+                // Potential solutions:
+                // 1. Store a unique allocation ID in GcBox for comparison
+                // 2. Use runtime type information (RTTI)
+                // 3. Require users to manually rehydrate after construction
+                //
+                // Until this is implemented, new_cyclic should be considered
+                // non-functional and should not be used.
             }
         }
     }

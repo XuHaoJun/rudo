@@ -405,13 +405,27 @@ fn perform_single_threaded_collect_with_wake() {
     // Reset drop counter
     N_DROPS.with(|n| n.set(0));
 
-    // Atomically clear GC flag and wake threads while holding registry lock
-    // This prevents race condition where threads see stale GC_REQUESTED value
+    let mut objects_reclaimed = 0;
+    let mut collection_type = crate::metrics::CollectionType::None;
+
+    crate::heap::with_heap(|heap| {
+        let total_size = heap.total_allocated();
+
+        if total_size > MAJOR_THRESHOLD {
+            collection_type = crate::metrics::CollectionType::Major;
+            objects_reclaimed = collect_major(heap);
+        } else {
+            collection_type = crate::metrics::CollectionType::Minor;
+            objects_reclaimed = collect_minor(heap);
+        }
+    });
+
+    // Clear global flag before waking threads
+    crate::heap::GC_REQUESTED.store(false, Ordering::SeqCst);
+
+    // Wake threads AFTER collection completes to prevent concurrent access during GC
     {
         let registry = crate::heap::thread_registry().lock().unwrap();
-
-        // Clear global flag first with SeqCst ordering
-        crate::heap::GC_REQUESTED.store(false, Ordering::SeqCst);
 
         // Wake any threads already at safepoints and clear their flags
         let mut woken_count = 0;
@@ -431,22 +445,8 @@ fn perform_single_threaded_collect_with_wake() {
             .fetch_add(woken_count, std::sync::atomic::Ordering::SeqCst);
     }
 
-    let mut objects_reclaimed = 0;
-    let mut collection_type = crate::metrics::CollectionType::None;
-
-    crate::heap::with_heap(|heap| {
-        let total_size = heap.total_allocated();
-
-        if total_size > MAJOR_THRESHOLD {
-            collection_type = crate::metrics::CollectionType::Major;
-            objects_reclaimed = collect_major(heap);
-        } else {
-            collection_type = crate::metrics::CollectionType::Minor;
-            objects_reclaimed = collect_minor(heap);
-        }
-    });
-
     let duration = start.elapsed();
+
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     // Record metrics
@@ -1181,13 +1181,13 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
         unsafe {
             let header_addr = page_ptr.as_ptr() as usize;
 
-            // Note: pages.retain moved outside loop for efficiency
-
+            // Remove from both maps. If a panic occurs between operations,
+            // the state may be temporarily inconsistent, but the page will
+            // still be deallocated. In practice, panics during GC are catastrophic.
             for p in 0..pages_needed {
                 let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
                 heap.large_object_map.remove(&page_addr);
             }
-
             {
                 let mut manager = crate::heap::segment_manager()
                     .lock()
