@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/rudo-gc.svg)](https://crates.io/crates/rudo-gc)
 [![Documentation](https://docs.rs/rudo-gc/badge.svg)](https://docs.rs/rudo-gc)
-[![License](https://img.shields.io/crates/l/rudo-gc.svg)](https://github.com/example/rudo/blob/main/LICENSE)
+[![License](https://img.shields.io/crates/l/rudo-gc.svg)](https://github.com/xuhaojun/rudo/blob/main/LICENSE)
 
 A high-performance, generational, non-moving garbage collector for Rust, inspired by the architecture of **Chez Scheme** and the pragmatism of **V8**.
 
