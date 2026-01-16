@@ -75,11 +75,16 @@ pub fn get_stack_bounds() -> StackBounds {
 pub fn get_stack_bounds() -> StackBounds {
     use windows_sys::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION};
 
-    let local_var_addr = std::ptr::addr_of!(local_var_addr) as *const u8;
+    let local_var = 0;
+    let local_var_addr = std::ptr::addr_of!(local_var) as *const u8;
 
     unsafe {
         let mut mbi: MEMORY_BASIC_INFORMATION = std::mem::zeroed();
-        let result = VirtualQuery(local_var_addr as *const _, &mut mbi);
+        let result = VirtualQuery(
+            local_var_addr as *const _,
+            &mut mbi,
+            std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        );
         assert!(result != 0, "VirtualQuery failed");
 
         let bottom = mbi.AllocationBase as usize;
