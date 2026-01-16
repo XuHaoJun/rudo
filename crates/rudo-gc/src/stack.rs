@@ -53,7 +53,7 @@ pub fn get_stack_bounds() -> StackBounds {
 /// Retrieve the stack bounds for the current thread (macOS implementation).
 #[cfg(all(target_os = "macos", not(miri)))]
 pub fn get_stack_bounds() -> StackBounds {
-    use libc::{pthread_get_stackaddr_np, pthread_self};
+    use libc::{pthread_get_stackaddr_np, pthread_get_stacksize_np, pthread_self};
 
     unsafe {
         let stackaddr = pthread_get_stackaddr_np(pthread_self());
