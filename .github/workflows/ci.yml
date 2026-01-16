@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          
+      - name: Install Nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+      
+      - name: Check Formatting
+        run: cargo fmt --all --check
+      
+      - name: Clippy
+        run: bash ./clippy.sh
+      
+      - name: Run Tests
+        run: bash ./test.sh
+      
+      - name: Run Miri Tests
+        run: bash ./miri-test.sh
