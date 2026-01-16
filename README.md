@@ -17,10 +17,12 @@ The library is built on a **BiBOP (Big Bag of Pages)** memory layout, which allo
 - **Generational Garbage Collection**: Optimized for the "generational hypothesis" (most objects die young) with distinct Minor and Major collection phases.
 - **BiBOP Memory Layout**: Objects are grouped by size classes into 4KB pages, enabling O(1) allocation and non-intrusive metadata storage.
 - **Address Stability**: A non-moving collector ensures that `&T` references to GC-managed data remain valid during the object's lifetime.
-- **Conservative Stack Scanning**: Automatically discovers roots on the stack and in registers, minimizing the need for manual root registration.
+- **Conservative Stack Scanning**: Automatically discovers roots on the stack and in registers, minimizing the need for manual root registration. Now supports **Linux, macOS, and Windows**.
+- **Address Space Coloring**: Uses heap capability hints to place memory in safe regions, reducing false positives during conservative stack scanning.
 - **Write Barriers**: Efficiently tracks old-to-young pointers using card-marking (dirty bitmaps) for fast minor collections.
 - **Large Object Space (LOS)**: Specialized handling for objects larger than 2KB to prevent fragmentation.
 - **Weak References**: Support for `Weak<T>` pointers with proper lifecycle management.
+- **ZST Optimization**: Zero-Sized Types (like `()`) are handled with zero heap allocation overhead.
 
 ## Installation
 
@@ -66,6 +68,33 @@ let node = Gc::new(Node {
 *node.next.borrow_mut() = None;
 ```
 
+## Handling Cycles
+
+rudo-gc handles cycles automatically when they become unreachable. However, constructing self-referential cycles requires a specific pattern using `Gc::new_cyclic_weak`.
+
+```rust
+use rudo_gc::{Gc, Trace, Weak, cell::GcCell};
+
+#[derive(Trace)]
+struct Node {
+    self_ref: GcCell<Option<Weak<Node>>>,
+    data: i32,
+}
+
+// Construct a cycle where the node holds a weak reference to itself
+let node = Gc::new_cyclic_weak(|weak_self| {
+    Node {
+        self_ref: GcCell::new(Some(weak_self)),
+        data: 42,
+    }
+});
+
+// Access self through upgrade()
+let weak = node.self_ref.borrow();
+let self_ref = weak.as_ref().unwrap().upgrade().unwrap();
+assert_eq!(self_ref.data, 42);
+```
+
 ## Architecture
 
 `rudo-gc` is designed with performance and Rust compatibility in mind:
@@ -90,7 +119,7 @@ For a deeper dive into the philosophy behind the collector, see the [design docu
 
 - **Single-threaded**: Currently, `Gc<T>` is `!Send` and `!Sync`. All GC operations are thread-local.
 - **Address Stability**: While objects don't move, their memory is reclaimed once unreachable. Holding an `&T` across a collection point is safe as long as the parent `Gc<T>` is still rooted.
-- **Platform Support**: Conservative stack scanning is currently optimized for `x86_64` Linux.
+- **Platform Support**: Conservative stack scanning is currently supported on **x86\_64 Linux, macOS, and Windows**, as well as **aarch64 Linux**. Miri is also fully supported for testing.
 
 ## License
 
