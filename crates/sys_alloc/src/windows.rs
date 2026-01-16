@@ -51,7 +51,8 @@ impl MmapInner {
 
         // If strict allocation at hint_addr failed, and we had a hint, try letting the OS decide.
         if ptr.is_null() && !addr.is_null() {
-            ptr = unsafe { VirtualAlloc(ptr::null(), len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
+            ptr =
+                unsafe { VirtualAlloc(ptr::null(), len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
         }
 
         if ptr.is_null() {

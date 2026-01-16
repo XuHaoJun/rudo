@@ -1442,9 +1442,7 @@ impl Drop for LocalHeap {
     fn drop(&mut self) {
         let current_thread = std::thread::current().id();
 
-        let mut manager = segment_manager()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut manager = segment_manager().lock().unwrap_or_else(|e| e.into_inner());
 
         for page_ptr in std::mem::take(&mut self.pages) {
             unsafe {
