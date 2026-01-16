@@ -47,7 +47,12 @@ impl MmapInner {
         };
 
         // Windows requires MEM_RESERVE | MEM_COMMIT to actually get usable memory
-        let ptr = unsafe { VirtualAlloc(addr, len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
+        let mut ptr = unsafe { VirtualAlloc(addr, len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
+
+        // If strict allocation at hint_addr failed, and we had a hint, try letting the OS decide.
+        if ptr.is_null() && !addr.is_null() {
+            ptr = unsafe { VirtualAlloc(ptr::null(), len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
+        }
 
         if ptr.is_null() {
             return Err(Error::last_os_error());

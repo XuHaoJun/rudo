@@ -87,7 +87,30 @@ pub fn get_stack_bounds() -> StackBounds {
         );
         assert!(result != 0, "VirtualQuery failed");
 
-        let bottom = mbi.AllocationBase as usize;
+        let allocation_base = mbi.AllocationBase as usize;
+
+        // Walk forward from AllocationBase to find the total size of the reserved stack.
+        // The stack is a single reservation, but may be split into multiple committed/guard regions.
+        // We iterate until AllocationBase changes.
+        let mut current_addr = allocation_base;
+        loop {
+            let mut region_info: MEMORY_BASIC_INFORMATION = std::mem::zeroed();
+            let res = VirtualQuery(
+                current_addr as *const _,
+                &mut region_info,
+                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+            );
+
+            // Stop if query fails or we moved to a different allocation
+            if res == 0 || region_info.AllocationBase as usize != allocation_base {
+                break;
+            }
+
+            current_addr += region_info.RegionSize;
+        }
+
+        // current_addr is now the end of the stack reservation (High Address)
+        let bottom = current_addr;
         let top = local_var_addr as usize;
 
         StackBounds { bottom, top }

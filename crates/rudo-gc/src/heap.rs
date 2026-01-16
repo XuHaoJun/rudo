@@ -1444,7 +1444,7 @@ impl Drop for LocalHeap {
 
         let mut manager = segment_manager()
             .lock()
-            .expect("segment manager lock poisoned");
+            .unwrap_or_else(|e| e.into_inner());
 
         for page_ptr in std::mem::take(&mut self.pages) {
             unsafe {
@@ -1496,7 +1496,7 @@ impl Drop for LocalHeap {
 ///
 /// Panics if the segment manager lock is poisoned.
 pub fn sweep_orphan_pages() {
-    let mut manager = segment_manager().lock().unwrap();
+    let mut manager = segment_manager().lock().unwrap_or_else(|e| e.into_inner());
 
     let mut to_reclaim = Vec::new();
 
