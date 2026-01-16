@@ -360,8 +360,20 @@ pub fn take_stack_roots(tcb: &ThreadControlBlock) -> Vec<*const u8> {
 // Constants
 // ============================================================================
 
-/// Size of each memory page (4KB aligned).
-pub const PAGE_SIZE: usize = 4096;
+/// Size of each memory page. Determined at runtime to support platforms
+/// with page sizes other than 4KB (e.g., Windows 64KB allocation granularity).
+static PAGE_SIZE: OnceLock<usize> = OnceLock::new();
+
+/// Returns the system page size.
+pub fn page_size() -> usize {
+    *PAGE_SIZE.get_or_init(sys_alloc::page_size)
+}
+
+/// Mask for extracting page address from a pointer.
+#[must_use]
+pub fn page_mask() -> usize {
+    !(page_size() - 1)
+}
 
 /// Target address for heap allocation (Address Space Coloring).
 /// We aim for `0x6000_0000_0000` on 64-bit systems.
@@ -371,9 +383,6 @@ pub const HEAP_HINT_ADDRESS: usize = 0x6000_0000_0000;
 /// Target address for heap allocation on 32-bit systems.
 #[cfg(target_pointer_width = "32")]
 pub const HEAP_HINT_ADDRESS: usize = 0x4000_0000;
-
-/// Mask for extracting page address from a pointer.
-pub const PAGE_MASK: usize = !(PAGE_SIZE - 1);
 
 /// Magic number for validating GC pages ("RUDG" in ASCII).
 pub const MAGIC_GC_PAGE: u32 = 0x5255_4447;
@@ -443,8 +452,8 @@ impl PageHeader {
 
     /// Calculate maximum objects per page for a given block size.
     #[must_use]
-    pub const fn max_objects(block_size: usize) -> usize {
-        (PAGE_SIZE - Self::header_size(block_size)) / block_size
+    pub fn max_objects(block_size: usize) -> usize {
+        (page_size() - Self::header_size(block_size)) / block_size
     }
 
     /// Check if an object at the given index is marked.
@@ -974,21 +983,18 @@ impl LocalHeap {
         };
 
         if let Some(ptr) = ptr_opt {
-            // Update heap range for conservative scanning
-            self.update_range(ptr.as_ptr() as usize & PAGE_MASK, PAGE_SIZE);
+            self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
             return ptr;
         }
 
-        // Try to allocate from existing pages' free lists
         if let Some(ptr) = self.alloc_from_free_list(class_index) {
-            self.update_range(ptr.as_ptr() as usize & PAGE_MASK, PAGE_SIZE);
+            self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
             return ptr;
         }
 
-        // Slow path: Refill TLAB and retry
         let ptr = self.alloc_slow(size, class_index);
 
-        self.update_range(ptr.as_ptr() as usize & PAGE_MASK, PAGE_SIZE);
+        self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
         ptr
     }
 
@@ -1065,7 +1071,7 @@ impl LocalHeap {
         let (ptr, _) = segment_manager()
             .lock()
             .unwrap()
-            .allocate_page(crate::heap::PAGE_SIZE, boundary);
+            .allocate_page(crate::heap::page_size(), boundary);
 
         // 2. Initialize Page Header
         // SAFETY: ptr is page-aligned
@@ -1145,16 +1151,15 @@ impl LocalHeap {
     ///
     /// # Panics
     ///
-    /// Panics if the alignment requirement exceeds `PAGE_SIZE`.
+    /// Panics if the alignment requirement exceeds the page size.
     fn alloc_large(&mut self, size: usize, align: usize) -> NonNull<u8> {
-        // Check for pending GC request - large object allocation can block GC
         check_safepoint();
 
-        // Validate alignment - page alignment (4096) should satisfy most types
         assert!(
-            PAGE_SIZE >= align,
-            "Type alignment ({align}) exceeds page size ({PAGE_SIZE}). \
-             Such extreme alignment requirements are not supported."
+            page_size() >= align,
+            "Type alignment ({align}) exceeds page size ({}). \
+              Such extreme alignment requirements are not supported.",
+            page_size()
         );
 
         // For large objects, allocate dedicated pages
@@ -1162,8 +1167,8 @@ impl LocalHeap {
         let base_h_size = PageHeader::header_size(size);
         let h_size = (base_h_size + align - 1) & !(align - 1);
         let total_size = h_size + size;
-        let pages_needed = total_size.div_ceil(PAGE_SIZE);
-        let alloc_size = pages_needed * PAGE_SIZE;
+        let pages_needed = total_size.div_ceil(page_size());
+        let alloc_size = pages_needed * page_size();
 
         // Use safe allocation logic
         // Create boundary to filter out our own stack frame
@@ -1238,7 +1243,7 @@ impl LocalHeap {
         // We should probably optimize this later, but for parity:
         let header_addr = header.as_ptr() as usize;
         for p in 0..pages_needed {
-            let page_addr = header_addr + (p * PAGE_SIZE);
+            let page_addr = header_addr + (p * page_size());
             self.large_object_map
                 .insert(page_addr, (header_addr, size, h_size));
             // Register in global manager too?
@@ -1382,24 +1387,19 @@ impl LocalHeap {
     pub unsafe fn dealloc(&mut self, ptr: NonNull<u8>) {
         let addr = ptr.as_ptr() as usize;
 
-        // Find which page this object belongs to
-        let page_addr = addr & PAGE_MASK;
+        let page_addr = addr & page_mask();
 
-        // Check if it's a large object
         if let Some(&(header_addr, size, header_size)) = self.large_object_map.get(&page_addr) {
-            // It's a large object - deallocate directly
             let total_size = header_size + size;
-            let alloc_size = total_size.div_ceil(PAGE_SIZE) * PAGE_SIZE;
+            let alloc_size = total_size.div_ceil(page_size()) * page_size();
 
-            // Drop the value if it was initialized
             let gc_box_ptr = addr as *mut crate::ptr::GcBox<()>;
             if !(*gc_box_ptr).is_value_dead() {
                 ((*gc_box_ptr).drop_fn)(addr as *mut u8);
             }
 
-            // Remove from tracking structures
-            for p in 0..(alloc_size / PAGE_SIZE) {
-                let page = header_addr + (p * PAGE_SIZE);
+            for p in 0..(alloc_size / page_size()) {
+                let page = header_addr + (p * page_size());
                 self.large_object_map.remove(&page);
                 segment_manager()
                     .lock()
@@ -1477,9 +1477,9 @@ impl Drop for LocalHeap {
 
                 let size = if is_large {
                     let total = header_size + block_size;
-                    total.div_ceil(PAGE_SIZE) * PAGE_SIZE
+                    total.div_ceil(page_size()) * page_size()
                 } else {
-                    PAGE_SIZE
+                    page_size()
                 };
 
                 (*header).flags |= PAGE_FLAG_ORPHAN;
@@ -1493,8 +1493,8 @@ impl Drop for LocalHeap {
 
                 if is_large {
                     let header_addr = header as usize;
-                    for p in 0..(size / PAGE_SIZE) {
-                        let page_addr = header_addr + (p * PAGE_SIZE);
+                    for p in 0..(size / page_size()) {
+                        let page_addr = header_addr + (p * page_size());
                         manager.large_object_map.remove(&page_addr);
                     }
                 }
@@ -1687,7 +1687,7 @@ pub fn heap_end() -> usize {
 /// The pointer must be within a valid GC page.
 #[must_use]
 pub unsafe fn ptr_to_page_header(ptr: *const u8) -> NonNull<PageHeader> {
-    let page_addr = (ptr as usize) & PAGE_MASK;
+    let page_addr = (ptr as usize) & page_mask();
     // SAFETY: Caller guarantees ptr is within a valid GC page.
     unsafe { NonNull::new_unchecked(page_addr as *mut PageHeader) }
 }
@@ -1779,7 +1779,7 @@ pub unsafe fn find_gc_box_from_ptr(
         }
 
         // 3. Check large object map first (handles multi-page objects and avoids reading uninit tail pages)
-        let page_addr = addr & crate::heap::PAGE_MASK;
+        let page_addr = addr & crate::heap::page_mask();
         let (header_ptr_to_use, block_size_to_use, header_size_to_use, offset_to_use) =
             if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
                 let h_ptr = head_addr as *mut PageHeader;
@@ -1806,14 +1806,14 @@ pub unsafe fn find_gc_box_from_ptr(
                 {
                     header_ptr = heap
                         .all_pages()
-                        .find(|p| p.as_ptr() as usize == (addr & crate::heap::PAGE_MASK))
+                        .find(|p| p.as_ptr() as usize == (addr & crate::heap::page_mask()))
                         .map_or(header_ptr, |p| p.as_ptr());
                 }
 
-                // SAFETY CHECK: Is this page actually managed by us?
-                // Before reading magic, verify it's in our pages list.
-                // This avoids SIGSEGV on gaps in address space between pages.
-                if !heap.small_pages.contains(&(addr & crate::heap::PAGE_MASK)) {
+                if !heap
+                    .small_pages
+                    .contains(&(addr & crate::heap::page_mask()))
+                {
                     return None;
                 }
 

@@ -1,4 +1,4 @@
-use rudo_gc::heap::{with_heap, PAGE_SIZE};
+use rudo_gc::heap::{page_size, with_heap};
 use rudo_gc::Gc;
 use std::thread;
 
@@ -46,7 +46,7 @@ fn test_tlab_thread_isolation() {
 fn test_tlab_exhaustion_allocates_new_page() {
     // We want to exhaust a TLAB for a specific size class.
     // GcBox<i32> is ~36 bytes, which fits in the 64-byte size class.
-    // PAGE_SIZE is 4096.
+    // page_size() returns the system page size (typically 4096).
     // Header size for 64-byte blocks is 128 bytes (aligned).
     // (4096 - 128) / 64 = 62 objects per page.
 
@@ -72,8 +72,8 @@ fn test_tlab_exhaustion_allocates_new_page() {
         let p1 = Gc::as_ptr(&pointers[0]) as usize;
         let p_last = Gc::as_ptr(&pointers[count - 1]) as usize;
         assert_ne!(
-            p1 & !(PAGE_SIZE - 1),
-            p_last & !(PAGE_SIZE - 1),
+            p1 & !(page_size() - 1),
+            p_last & !(page_size() - 1),
             "First and last objects should be in different pages"
         );
     }).join().unwrap();
@@ -92,9 +92,9 @@ fn test_tlab_bump_pointer_contiguity() {
         let p3 = Gc::as_ptr(&g3) as usize;
 
         // All should be in the same page
-        let page = p1 & !(PAGE_SIZE - 1);
-        assert_eq!(p2 & !(PAGE_SIZE - 1), page);
-        assert_eq!(p3 & !(PAGE_SIZE - 1), page);
+        let page = p1 & !(page_size() - 1);
+        assert_eq!(p2 & !(page_size() - 1), page);
+        assert_eq!(p3 & !(page_size() - 1), page);
 
         // Distance between them should be constant (the size class)
         let diff1 = p2 - p1;
@@ -129,8 +129,8 @@ fn test_mixed_size_class_tlabs() {
         let p_large = Gc::as_ptr(&g_large) as usize;
 
         assert_ne!(
-            p_small & !(PAGE_SIZE - 1),
-            p_large & !(PAGE_SIZE - 1),
+            p_small & !(page_size() - 1),
+            p_large & !(page_size() - 1),
             "Different size classes must be in different pages"
         );
 
