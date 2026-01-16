@@ -744,7 +744,7 @@ fn promote_young_pages(heap: &mut LocalHeap) {
                 let mut has_survivors = false;
                 let mut survivors_count = 0;
 
-                for i in 0..4 {
+                for i in 0..crate::heap::BITMAP_SIZE {
                     let bits = (*header).allocated_bitmap[i];
                     if bits != 0 {
                         has_survivors = true;

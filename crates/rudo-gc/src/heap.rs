@@ -366,7 +366,7 @@ static PAGE_SIZE: OnceLock<usize> = OnceLock::new();
 
 /// Returns the system page size.
 pub fn page_size() -> usize {
-    *PAGE_SIZE.get_or_init(sys_alloc::page_size)
+    *PAGE_SIZE.get_or_init(sys_alloc::allocation_granularity)
 }
 
 /// Mask for extracting page address from a pointer.
@@ -391,6 +391,9 @@ pub const MAGIC_GC_PAGE: u32 = 0x5255_4447;
 pub const PAGE_FLAG_LARGE: u8 = 0x01;
 /// Flag: Page is an orphan (owner thread has terminated).
 pub const PAGE_FLAG_ORPHAN: u8 = 0x02;
+
+/// Maximum number of u64 words in a bitmap to support 64KB pages with 16-byte blocks.
+pub const BITMAP_SIZE: usize = 64;
 
 /// Size classes for object allocation.
 /// Objects are routed to the smallest size class that fits them.
@@ -425,11 +428,11 @@ pub struct PageHeader {
     /// Padding for alignment.
     _padding: [u8; 2],
     /// Bitmap of marked objects (atomic for concurrent marking).
-    pub mark_bitmap: [AtomicU64; 4],
+    pub mark_bitmap: [AtomicU64; BITMAP_SIZE],
     /// Bitmap of dirty objects (atomic for concurrent write barriers).
-    pub dirty_bitmap: [AtomicU64; 4],
+    pub dirty_bitmap: [AtomicU64; BITMAP_SIZE],
     /// Bitmap of allocated objects (non-atomic, only modified by owner thread).
-    pub allocated_bitmap: [u64; 4],
+    pub allocated_bitmap: [u64; BITMAP_SIZE],
     /// Index of first free slot in free list.
     pub free_list_head: Option<u16>,
 }
@@ -543,7 +546,7 @@ impl PageHeader {
 
     /// Clear all allocated bits.
     pub const fn clear_all_allocated(&mut self) {
-        self.allocated_bitmap = [0; 4];
+        self.allocated_bitmap = [0; BITMAP_SIZE];
     }
 }
 
@@ -1092,19 +1095,9 @@ impl LocalHeap {
                 generation: 0,
                 flags: 0,
                 _padding: [0; 2],
-                mark_bitmap: [
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                ],
-                dirty_bitmap: [
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                ],
-                allocated_bitmap: [0; 4],
+                mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
+                dirty_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
+                allocated_bitmap: [0; BITMAP_SIZE],
                 free_list_head: None,
             });
 
@@ -1196,19 +1189,9 @@ impl LocalHeap {
                 generation: 0,
                 flags: PAGE_FLAG_LARGE,
                 _padding: [0; 2],
-                mark_bitmap: [
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                ],
-                dirty_bitmap: [
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                    AtomicU64::new(0),
-                ],
-                allocated_bitmap: [0; 4],
+                mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
+                dirty_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
+                allocated_bitmap: [0; BITMAP_SIZE],
                 free_list_head: None,
             });
             // Mark the single object as allocated
