@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
 
 use sys_alloc::{Mmap, MmapOptions};
 
@@ -1442,7 +1442,9 @@ impl Drop for LocalHeap {
     fn drop(&mut self) {
         let current_thread = std::thread::current().id();
 
-        let mut manager = segment_manager().lock().unwrap_or_else(|e| e.into_inner());
+        let mut manager = segment_manager()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
 
         for page_ptr in std::mem::take(&mut self.pages) {
             unsafe {
@@ -1494,7 +1496,9 @@ impl Drop for LocalHeap {
 ///
 /// Panics if the segment manager lock is poisoned.
 pub fn sweep_orphan_pages() {
-    let mut manager = segment_manager().lock().unwrap_or_else(|e| e.into_inner());
+    let mut manager = segment_manager()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
 
     let mut to_reclaim = Vec::new();
 
