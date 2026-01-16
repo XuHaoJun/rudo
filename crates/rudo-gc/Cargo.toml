@@ -16,12 +16,12 @@ derive = ["dep:rudo-gc-derive"]
 test-util = []
 
 [dependencies]
-rudo-gc-derive = { path = "../rudo-gc-derive", optional = true }
-sys_alloc = { path = "../sys_alloc" }
-libc = "0.2"
+rudo-gc-derive = { workspace = true, optional = true }
+sys_alloc = { workspace = true }
+libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = "0.52"
+windows-sys = { workspace = true }
 
 [dev-dependencies]
 # For benchmarking (future)
