@@ -64,14 +64,15 @@ impl MmapInner {
     ) -> io::Result<MmapInner> {
         #[cfg(miri)]
         {
-            use std::alloc::{alloc, Layout};
+            use std::alloc::{alloc_zeroed, Layout};
             // Miri doesn't support VirtualAlloc, use std::alloc
             // We align to allocation_granularity() to mimic Windows behavior
             let align = allocation_granularity();
             // Check if len is valid for Layout
             let layout = Layout::from_size_align(len, align)
                 .map_err(|_| Error::from(io::ErrorKind::InvalidInput))?;
-            let ptr = alloc(layout);
+            // Use alloc_zeroed to match VirtualAlloc's guarantee of zeroed memory
+            let ptr = alloc_zeroed(layout);
             if ptr.is_null() {
                 return Err(Error::from(io::ErrorKind::OutOfMemory));
             }
