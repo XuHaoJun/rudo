@@ -15,7 +15,13 @@ pub fn allocation_granularity() -> usize {
     unsafe {
         let mut info: SYSTEM_INFO = mem::zeroed();
         GetSystemInfo(&mut info);
-        info.dwAllocationGranularity as usize
+        let gran = info.dwAllocationGranularity as usize;
+        if gran == 0 {
+            // Fallback for Miri or environments where GetSystemInfo fails
+            65536
+        } else {
+            gran
+        }
     }
 }
 
@@ -23,7 +29,13 @@ pub fn page_size() -> usize {
     unsafe {
         let mut info: SYSTEM_INFO = mem::zeroed();
         GetSystemInfo(&mut info);
-        info.dwPageSize as usize
+        let size = info.dwPageSize as usize;
+        if size == 0 {
+            // Fallback for Miri or environments where GetSystemInfo fails
+            4096
+        } else {
+            size
+        }
     }
 }
 
