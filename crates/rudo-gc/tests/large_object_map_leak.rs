@@ -1,4 +1,4 @@
-use rudo_gc::heap::{segment_manager, PAGE_SIZE};
+use rudo_gc::heap::{page_size, segment_manager};
 use rudo_gc::Gc;
 
 /// Clear CPU callee-saved registers to prevent stale pointer values from being
@@ -46,7 +46,7 @@ fn test_large_object_map_cleanup() {
     fn do_alloc() {
         let g = Gc::new(Big { data: [0; 5000] });
         let ptr = Gc::as_ptr(&g) as usize;
-        let addr = ptr & !(PAGE_SIZE - 1);
+        let addr = ptr & !(page_size() - 1);
 
         // Verify it's in the global map
         let contains = segment_manager()
@@ -100,16 +100,14 @@ fn test_large_object_global_map_cleanup_on_thread_exit() {
     let page_addrs = std::thread::spawn(|| {
         let g = Gc::new(Big { data: [0; 5000] });
         let ptr = Gc::as_ptr(&g) as usize;
-        let header_addr = ptr & !(PAGE_SIZE - 1);
+        let header_addr = ptr & !(page_size() - 1);
 
-        // Large object 5000 bytes + header (~128 bytes) = 5128 bytes.
-        // Needs 2 pages.
-        let total_size: usize = 5000 + 128; // Approximate
-        let pages_needed = total_size.div_ceil(PAGE_SIZE);
+        let total_size: usize = 5000 + 128;
+        let pages_needed = total_size.div_ceil(page_size());
 
         let mut addrs = Vec::new();
         for p in 0..pages_needed {
-            addrs.push(header_addr + (p * PAGE_SIZE));
+            addrs.push(header_addr + (p * page_size()));
         }
 
         // Verify they are in the global map

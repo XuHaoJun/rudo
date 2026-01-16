@@ -50,10 +50,82 @@ pub fn get_stack_bounds() -> StackBounds {
     }
 }
 
-/// Retrieve the stack bounds for the current thread (Stub for non-Linux).
-#[cfg(all(not(target_os = "linux"), not(miri)))]
+/// Retrieve the stack bounds for the current thread (macOS implementation).
+#[cfg(all(target_os = "macos", not(miri)))]
 pub fn get_stack_bounds() -> StackBounds {
-    unimplemented!("Stack bounds retrieval only implemented for Linux")
+    use libc::{pthread_get_stackaddr_np, pthread_get_stacksize_np, pthread_self};
+
+    unsafe {
+        let stackaddr = pthread_get_stackaddr_np(pthread_self());
+        let stacksize = pthread_get_stacksize_np(pthread_self());
+
+        let bottom = stackaddr as usize;
+        let top = bottom - stacksize;
+
+        StackBounds { bottom, top }
+    }
+}
+
+/// Retrieve the stack bounds for the current thread (Windows implementation).
+///
+/// Uses `VirtualQuery` to find the stack's allocation base. This is robust
+/// but not the fastest approach. For hot paths, could use NtCurrentTeb()->StackBase
+/// which is ~10x faster but requires more fragile code.
+#[cfg(all(target_os = "windows", not(miri)))]
+pub fn get_stack_bounds() -> StackBounds {
+    use windows_sys::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION};
+
+    let local_var = 0;
+    let local_var_addr = std::ptr::addr_of!(local_var) as *const u8;
+
+    unsafe {
+        let mut mbi: MEMORY_BASIC_INFORMATION = std::mem::zeroed();
+        let result = VirtualQuery(
+            local_var_addr as *const _,
+            &mut mbi,
+            std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        );
+        assert!(result != 0, "VirtualQuery failed");
+
+        let allocation_base = mbi.AllocationBase as usize;
+
+        // Walk forward from AllocationBase to find the total size of the reserved stack.
+        // The stack is a single reservation, but may be split into multiple committed/guard regions.
+        // We iterate until AllocationBase changes.
+        let mut current_addr = allocation_base;
+        loop {
+            let mut region_info: MEMORY_BASIC_INFORMATION = std::mem::zeroed();
+            let res = VirtualQuery(
+                current_addr as *const _,
+                &mut region_info,
+                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+            );
+
+            // Stop if query fails or we moved to a different allocation
+            if res == 0 || region_info.AllocationBase as usize != allocation_base {
+                break;
+            }
+
+            current_addr += region_info.RegionSize;
+        }
+
+        // current_addr is now the end of the stack reservation (High Address)
+        let bottom = current_addr;
+        let top = local_var_addr as usize;
+
+        StackBounds { bottom, top }
+    }
+}
+
+/// Retrieve the stack bounds for the current thread (Stub for unsupported platforms).
+#[cfg(all(
+    not(target_os = "linux"),
+    not(target_os = "macos"),
+    not(target_os = "windows"),
+    not(miri)
+))]
+pub fn get_stack_bounds() -> StackBounds {
+    unimplemented!("Stack bounds retrieval only implemented for Linux, macOS, and Windows")
 }
 
 /// Spill CPU registers onto the stack and execute a closure to scan the stack.
@@ -90,11 +162,45 @@ where
     #[cfg(all(target_arch = "x86_64", not(miri)))]
     std::hint::black_box(&regs);
 
+    #[cfg(all(target_arch = "aarch64", not(miri)))]
+    let mut regs = [0usize; 12];
+    #[cfg(all(target_arch = "aarch64", not(miri)))]
+    unsafe {
+        std::arch::asm!(
+            "mov {0}, x19",
+            "mov {1}, x20",
+            "mov {2}, x21",
+            "mov {3}, x22",
+            "mov {4}, x23",
+            "mov {5}, x24",
+            "mov {6}, x25",
+            "mov {7}, x26",
+            "mov {8}, x27",
+            "mov {9}, x28",
+            "mov {10}, x29",
+            "mov {11}, x30",
+            out(reg) regs[0],
+            out(reg) regs[1],
+            out(reg) regs[2],
+            out(reg) regs[3],
+            out(reg) regs[4],
+            out(reg) regs[5],
+            out(reg) regs[6],
+            out(reg) regs[7],
+            out(reg) regs[8],
+            out(reg) regs[9],
+            out(reg) regs[10],
+            out(reg) regs[11],
+        );
+    }
+    #[cfg(all(target_arch = "aarch64", not(miri)))]
+    std::hint::black_box(&regs);
+
     // For other architectures or Miri, we might need different implementations.
     // As a fallback, we can use a large enough dummy array and black_box.
-    #[cfg(any(not(target_arch = "x86_64"), miri))]
+    #[cfg(any(not(target_arch = "x86_64"), not(target_arch = "aarch64"), miri))]
     let regs = [0usize; 32];
-    #[cfg(any(not(target_arch = "x86_64"), miri))]
+    #[cfg(any(not(target_arch = "x86_64"), not(target_arch = "aarch64"), miri))]
     std::hint::black_box(&regs);
 
     // Scan spilled registers explicitly as "Registers"
@@ -149,7 +255,31 @@ pub unsafe fn clear_registers() {
             out("r15") _,
         );
     }
+    #[cfg(all(target_arch = "aarch64", not(miri)))]
+    unsafe {
+        std::arch::asm!(
+            "movz x0, #0",
+            "movz x1, #0",
+            "movz x2, #0",
+            "movz x3, #0",
+            "movz x4, #0",
+            "movz x5, #0",
+            "movz x6, #0",
+            "movz x7, #0",
+            "movz x8, #0",
+            "movz x9, #0",
+            "movz x10, #0",
+            "movz x11, #0",
+            "movz x12, #0",
+            "movz x13, #0",
+            "movz x14, #0",
+            "movz x15, #0",
+            "movz x16, #0",
+            "movz x17, #0",
+            "movz x18, #0",
+        );
+    }
     // Miri/Other arch: Rely on optimization barrier or dummy work
-    #[cfg(any(not(target_arch = "x86_64"), miri))]
+    #[cfg(any(not(target_arch = "x86_64"), not(target_arch = "aarch64"), miri))]
     std::hint::black_box(());
 }

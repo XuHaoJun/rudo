@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::heap::{HEAP_HINT_ADDRESS, PAGE_MASK};
+    use crate::heap::{page_mask, HEAP_HINT_ADDRESS};
     use std::hint::black_box;
 
     #[test]
@@ -34,7 +34,7 @@ mod tests {
         // c. Quarantined it
         // d. Mmapped something else
         let addr = ptr.as_ptr() as usize;
-        let page_addr = addr & PAGE_MASK;
+        let page_addr = addr & page_mask();
 
         println!("Bomb: {bomb:#x}, Alloc: {addr:#x}, Page: {page_addr:#x}");
 

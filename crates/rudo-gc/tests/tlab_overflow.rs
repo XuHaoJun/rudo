@@ -1,10 +1,10 @@
-use rudo_gc::heap::{Tlab, PAGE_SIZE};
+use rudo_gc::heap::{page_size, Tlab};
 
 #[test]
 fn test_tlab_overflow_prevention() {
     let mut tlab = Tlab::new();
     // Allocate a page-sized buffer for testing
-    let layout = std::alloc::Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
+    let layout = std::alloc::Layout::from_size_align(page_size(), page_size()).unwrap();
     let page = unsafe { std::alloc::alloc(layout) };
 
     let h_size = 128;
@@ -85,10 +85,10 @@ fn test_tlab_init_uses_correct_bump_end() {
                     // end exactly at the page boundary.
                     // But if we ever had a non-power-of-two size class, this would be different.
                     // For now, we can at least verify it's NOT past the page boundary.
-                    assert!(bump_end <= page_start + PAGE_SIZE);
+                    assert!(bump_end <= page_start + page_size());
 
                     // And specifically for power-of-two size classes, it SHOULD be the page boundary.
-                    assert_eq!(bump_end, page_start + PAGE_SIZE);
+                    assert_eq!(bump_end, page_start + page_size());
                 }
             }
             assert!(found);

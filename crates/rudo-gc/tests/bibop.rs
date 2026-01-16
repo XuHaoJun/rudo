@@ -174,7 +174,7 @@ fn test_ptr_uniqueness() {
 #[test]
 fn test_page_filling() {
     // Allocate enough objects to fill at least one page
-    // PAGE_SIZE = 4096, size class 16 = ~254 objects per page
+    // page_size() returns system page size (typically 4096), size class 16 = ~254 objects per page
     let objects: Vec<Gc<u64>> = (0..300).map(Gc::new).collect();
 
     // All should be accessible
@@ -192,7 +192,7 @@ fn test_page_filling() {
 /// Test that verifies page header magic number, `block_size`, and `obj_count`.
 #[test]
 fn test_page_header_validation() {
-    use rudo_gc::heap::{with_heap, PageHeader, MAGIC_GC_PAGE, PAGE_SIZE};
+    use rudo_gc::heap::{page_size, with_heap, PageHeader, MAGIC_GC_PAGE};
 
     // Allocate an object to ensure at least one page exists
     let _obj = Gc::new(42u32);
@@ -239,7 +239,7 @@ fn test_page_header_validation() {
                     // Sanity check: should fit in a page
                     let header_size = PageHeader::header_size(block_size);
                     assert!(
-                        header_size + obj_count * block_size <= PAGE_SIZE,
+                        header_size + obj_count * block_size <= page_size(),
                         "Objects should fit in page"
                     );
                 }

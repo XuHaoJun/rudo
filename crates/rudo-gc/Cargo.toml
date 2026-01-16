@@ -20,6 +20,9 @@ rudo-gc-derive = { path = "../rudo-gc-derive", optional = true }
 sys_alloc = { path = "../sys_alloc" }
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = "0.52"
+
 [dev-dependencies]
 # For benchmarking (future)
 # criterion = "0.5"

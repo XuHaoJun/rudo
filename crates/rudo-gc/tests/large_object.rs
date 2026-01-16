@@ -1,3 +1,4 @@
+#![allow(clippy::large_stack_arrays)]
 //! Tests for large object interior pointer support.
 
 use rudo_gc::{collect_full, Gc, Trace};
@@ -51,20 +52,23 @@ fn test_large_object_interior_pointer() {
 fn test_large_struct_interior_pointer() {
     #[repr(C)]
     struct LargeStruct {
-        data: [u64; 2000], // 16000 bytes
+        data: [u64; 10000], // 80000 bytes, enough for > 64KB page
     }
 
     unsafe impl Trace for LargeStruct {
         fn trace(&self, _visitor: &mut impl rudo_gc::Visitor) {}
     }
 
-    let gc = Gc::new(LargeStruct { data: [0x55; 2000] });
+    let gc = Gc::new(LargeStruct {
+        data: [0x55; 10000],
+    });
 
     let head_ptr = Gc::as_ptr(&gc) as usize;
-    let interior_ptr = (std::ptr::from_ref(&gc.data[1500])) as usize;
+    // Use a deeper index to ensure we cross page boundaries even on 64KB pages
+    let interior_ptr = (std::ptr::from_ref(&gc.data[8500])) as usize;
 
-    let head_page = head_ptr & !4095;
-    let interior_page = interior_ptr & !4095;
+    let head_page = head_ptr & rudo_gc::heap::page_mask();
+    let interior_page = interior_ptr & rudo_gc::heap::page_mask();
 
     assert_ne!(
         head_page, interior_page,
@@ -92,7 +96,7 @@ fn test_large_struct_interior_pointer() {
 fn test_large_object_collection_with_interior_ref() {
     #[repr(C)]
     struct LargeStruct {
-        data: [u64; 2000],
+        data: [u64; 10000],
     }
 
     unsafe impl Trace for LargeStruct {
@@ -102,9 +106,11 @@ fn test_large_object_collection_with_interior_ref() {
     let interior_ptr: *const u64;
     {
         clear_roots!();
-        let gc = Gc::new(LargeStruct { data: [0x77; 2000] });
+        let gc = Gc::new(LargeStruct {
+            data: [0x77; 10000],
+        });
         root!(gc);
-        interior_ptr = std::ptr::from_ref(&gc.data[1500]);
+        interior_ptr = std::ptr::from_ref(&gc.data[8500]);
 
         // While original Gc exists, it's alive
         collect_full();
@@ -156,7 +162,7 @@ fn force_collect() {
 fn test_large_object_map_cleanup() {
     #[repr(C)]
     struct LargeStruct {
-        data: [u64; 2000],
+        data: [u64; 10000],
     }
 
     unsafe impl Trace for LargeStruct {
@@ -167,13 +173,13 @@ fn test_large_object_map_cleanup() {
     let masked_interior_page: usize;
 
     {
-        let gc = Gc::new(LargeStruct { data: [0; 2000] });
+        let gc = Gc::new(LargeStruct { data: [0; 10000] });
         let head_ptr = Gc::as_ptr(&gc) as usize;
-        let interior_ptr = (std::ptr::from_ref(&gc.data[1500])) as usize;
+        let interior_ptr = (std::ptr::from_ref(&gc.data[8500])) as usize;
 
         // Mask the addresses so they don't look like pointers to the conservative scanner
-        masked_head_page = (head_ptr & !4095) ^ 0xAAAA_AAAA_AAAA_AAAA;
-        masked_interior_page = (interior_ptr & !4095) ^ 0xAAAA_AAAA_AAAA_AAAA;
+        masked_head_page = (head_ptr & rudo_gc::heap::page_mask()) ^ 0xAAAA_AAAA_AAAA_AAAA;
+        masked_interior_page = (interior_ptr & rudo_gc::heap::page_mask()) ^ 0xAAAA_AAAA_AAAA_AAAA;
 
         rudo_gc::heap::with_heap(|heap| {
             assert!(heap
@@ -204,7 +210,7 @@ fn test_large_object_map_cleanup() {
 fn test_large_object_weak_ref() {
     #[repr(C)]
     struct LargeStruct {
-        data: [u64; 2000],
+        data: [u64; 10000],
     }
 
     unsafe impl Trace for LargeStruct {
@@ -213,7 +219,9 @@ fn test_large_object_weak_ref() {
 
     let weak: rudo_gc::Weak<LargeStruct>;
     {
-        let gc = Gc::new(LargeStruct { data: [0xBB; 2000] });
+        let gc = Gc::new(LargeStruct {
+            data: [0xBB; 10000],
+        });
         weak = Gc::downgrade(&gc);
 
         assert!(weak.upgrade().is_some());

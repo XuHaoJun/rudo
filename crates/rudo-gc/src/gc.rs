@@ -744,7 +744,7 @@ fn promote_young_pages(heap: &mut LocalHeap) {
                 let mut has_survivors = false;
                 let mut survivors_count = 0;
 
-                for i in 0..4 {
+                for i in 0..crate::heap::BITMAP_SIZE {
                     let bits = (*header).allocated_bitmap[i];
                     if bits != 0 {
                         has_survivors = true;
@@ -887,7 +887,7 @@ fn mark_major_roots(heap: &LocalHeap) {
 /// Mark object for Minor GC.
 unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     let ptr_addr = ptr.as_ptr() as *const u8;
-    let page_addr = (ptr_addr as usize) & crate::heap::PAGE_MASK;
+    let page_addr = (ptr_addr as usize) & crate::heap::page_mask();
     // SAFETY: ptr_addr is a valid pointer to a GcBox
     let header = unsafe { crate::heap::ptr_to_page_header(ptr_addr) };
 
@@ -1158,8 +1158,8 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                     }
                 } else {
                     let total_size = header_size + block_size;
-                    let pages_needed = total_size.div_ceil(crate::heap::PAGE_SIZE);
-                    let alloc_size = pages_needed * crate::heap::PAGE_SIZE;
+                    let pages_needed = total_size.div_ceil(crate::heap::page_size());
+                    let alloc_size = pages_needed * crate::heap::page_size();
 
                     ((*gc_box_ptr).drop_fn)(obj_ptr);
 
@@ -1185,7 +1185,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
             // the state may be temporarily inconsistent, but the page will
             // still be deallocated. In practice, panics during GC are catastrophic.
             for p in 0..pages_needed {
-                let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
+                let page_addr = header_addr + (p * crate::heap::page_size());
                 heap.large_object_map.remove(&page_addr);
             }
             {
@@ -1193,7 +1193,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                     .lock()
                     .expect("segment manager lock poisoned");
                 for p in 0..pages_needed {
-                    let page_addr = header_addr + (p * crate::heap::PAGE_SIZE);
+                    let page_addr = header_addr + (p * crate::heap::page_size());
                     manager.large_object_map.remove(&page_addr);
                 }
             }
