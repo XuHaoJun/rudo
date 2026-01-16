@@ -25,24 +25,25 @@ jobs:
       - name: Install Stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          default: true
           components: clippy, rustfmt
           
       - name: Install Nightly Rust
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components: miri
+          components: miri, rust-src, rustfmt, clippy
       
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
       
       - name: Check Formatting
-        run: cargo fmt --all --check
+        run: cargo +stable fmt --all --check
       
       - name: Clippy
-        run: bash ./clippy.sh
+        run: cargo +stable clippy --workspace --all-targets --all-features -- -D warnings
       
       - name: Run Tests
-        run: bash ./test.sh
+        run: cargo +stable test --workspace --lib --bins --tests --all-features -- --include-ignored --test-threads=1
       
       - name: Run Miri Tests
         run: bash ./miri-test.sh
