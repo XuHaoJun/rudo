@@ -77,13 +77,13 @@ mod trace;
 pub mod heap;
 
 // Re-export public API
+pub use cell::GcCell;
 pub use gc::{
     collect, collect_full, default_collect_condition, safepoint, set_collect_condition, CollectInfo,
 };
 pub use metrics::{last_gc_metrics, CollectionType, GcMetrics};
 pub use ptr::{Gc, Weak};
 pub use trace::{Trace, Visitor};
-pub use cell::GcCell;
 
 // Re-export derive macro when feature is enabled
 #[cfg(feature = "derive")]
