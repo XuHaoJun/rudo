@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/rudo-gc", "crates/rudo-gc-derive", "crates/sys_alloc"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.84"
 license = "MIT OR Apache-2.0"
@@ -12,8 +12,8 @@ keywords = ["garbage-collection", "gc", "memory", "smart-pointer"]
 categories = ["memory-management", "rust-patterns"]
 
 [workspace.dependencies]
-rudo-gc-derive = { path = "crates/rudo-gc-derive", version = "0.1" }
-sys_alloc = { path = "crates/sys_alloc", version = "0.1" }
+rudo-gc-derive = { path = "crates/rudo-gc-derive", version = "0.2" }
+sys_alloc = { path = "crates/sys_alloc", version = "0.2" }
 libc = "0.2"
 windows-sys = "0.52"
 proc-macro2 = "1.0"
