@@ -1839,10 +1839,8 @@ pub unsafe fn find_gc_box_from_ptr(
         }
 
         // 5.1. Allocation check for small objects (Large objects are always allocated if in map)
-        if header.flags & PAGE_FLAG_LARGE == 0 {
-            if !header.is_allocated(index) {
-                return None;
-            }
+        if header.flags & PAGE_FLAG_LARGE == 0 && !header.is_allocated(index) {
+            return None;
         }
 
         // 6. Large object handling: with the map, we now support interior pointers!

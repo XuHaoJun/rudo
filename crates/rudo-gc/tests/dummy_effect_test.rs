@@ -1,10 +1,12 @@
 use rudo_gc::{Gc, GcCell, Trace, Visitor};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 // Mimic rvue::Effect layout exactly
 pub struct DummyEffect {
     closure: Box<dyn Fn() + 'static>,
+    #[allow(dead_code)]
     is_dirty: AtomicBool,
+    #[allow(dead_code)]
     is_running: AtomicBool,
     owner: GcCell<Option<Gc<i32>>>,
     cleanups: GcCell<Vec<Box<dyn FnOnce() + 'static>>>,
@@ -58,7 +60,7 @@ fn test_dummy_effect_segfault() {
     });
 
     rudo_gc::collect_full();
-    
+
     drop(signal_data);
     drop(effect);
 }
