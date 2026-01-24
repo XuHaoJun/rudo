@@ -151,6 +151,10 @@ impl_trace_for_primitives! {
     std::net::SocketAddr,
     std::net::SocketAddrV4,
     std::net::SocketAddrV6,
+    std::sync::atomic::AtomicBool,
+    std::sync::atomic::AtomicU64,
+    std::sync::atomic::AtomicIsize,
+    std::sync::atomic::AtomicUsize,
 }
 
 // ============================================================================

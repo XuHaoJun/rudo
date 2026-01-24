@@ -1757,6 +1757,11 @@ pub unsafe fn find_gc_box_from_ptr(
         return None;
     }
 
+    // 1.1. Safety check for the zero page (first 4KB)
+    if addr < 4096 {
+        return None;
+    }
+
     // 2. Check if the pointer is aligned to something that could be a pointer
     unsafe {
         if addr % std::mem::align_of::<usize>() != 0 {
@@ -1801,6 +1806,9 @@ pub unsafe fn find_gc_box_from_ptr(
                 {
                     return None;
                 }
+                if (header_ptr as usize) % 4096 != 0 || (header_ptr as usize) < 4096 {
+                    return None;
+                }
 
                 if (*header_ptr).magic == MAGIC_GC_PAGE {
                     let header = &*header_ptr;
@@ -1810,6 +1818,7 @@ pub unsafe fn find_gc_box_from_ptr(
                     if addr < (header_ptr as usize) + h_size {
                         return None;
                     }
+
                     (
                         header_ptr,
                         b_size,
@@ -1827,6 +1836,13 @@ pub unsafe fn find_gc_box_from_ptr(
         // 5. Index check
         if index >= header.obj_count as usize {
             return None;
+        }
+
+        // 5.1. Allocation check for small objects (Large objects are always allocated if in map)
+        if header.flags & PAGE_FLAG_LARGE == 0 {
+            if !header.is_allocated(index) {
+                return None;
+            }
         }
 
         // 6. Large object handling: with the map, we now support interior pointers!
