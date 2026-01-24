@@ -65,6 +65,13 @@ pub trait Visitor {
     ///
     /// Called by `Trace::trace()` for each `Gc` field in an object.
     fn visit<T: Trace + ?Sized>(&mut self, gc: &Gc<T>);
+
+    /// Visit a memory region conservatively for potential `Gc` pointers.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be valid for reading `len` bytes.
+    unsafe fn visit_region(&mut self, ptr: *const u8, len: usize);
 }
 
 // ============================================================================

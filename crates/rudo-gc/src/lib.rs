@@ -67,8 +67,10 @@ pub mod cell;
 mod gc;
 mod metrics;
 mod ptr;
+mod scan;
 mod stack;
 mod trace;
+mod trace_closure;
 
 /// `BiBOP` memory management internals.
 ///
@@ -83,7 +85,9 @@ pub use gc::{
 };
 pub use metrics::{last_gc_metrics, CollectionType, GcMetrics};
 pub use ptr::{Gc, Weak};
+pub use scan::scan_heap_region_conservatively;
 pub use trace::{Trace, Visitor};
+pub use trace_closure::TraceClosure;
 
 // Re-export derive macro when feature is enabled
 #[cfg(feature = "derive")]

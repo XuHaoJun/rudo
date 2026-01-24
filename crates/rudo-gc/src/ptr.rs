@@ -1075,6 +1075,8 @@ fn rehydrate_self_refs<T: Trace + ?Sized>(_target: NonNull<GcBox<T>>, value: &T)
                 // non-functional and should not be used.
             }
         }
+
+        unsafe fn visit_region(&mut self, _ptr: *const u8, _len: usize) {}
     }
 
     let mut rehydrator = Rehydrator;

@@ -885,7 +885,7 @@ fn mark_major_roots(heap: &LocalHeap) {
 }
 
 /// Mark object for Minor GC.
-unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
+pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     let ptr_addr = ptr.as_ptr() as *const u8;
     let page_addr = (ptr_addr as usize) & crate::heap::page_mask();
     // SAFETY: ptr_addr is a valid pointer to a GcBox
@@ -1095,7 +1095,7 @@ fn promote_all_pages(heap: &LocalHeap) {
 /// # Safety
 ///
 /// The pointer must be a valid `GcBox` pointer.
-unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
+pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     // Get the page header
     let ptr_addr = ptr.as_ptr() as *const u8;
     // SAFETY: ptr is a valid GcBox pointer
@@ -1226,6 +1226,12 @@ impl Visitor for GcVisitor {
                     mark_object(ptr.cast(), self);
                 }
             }
+        }
+    }
+
+    unsafe fn visit_region(&mut self, ptr: *const u8, len: usize) {
+        unsafe {
+            crate::scan::scan_heap_region_conservatively(ptr, len, self);
         }
     }
 }
