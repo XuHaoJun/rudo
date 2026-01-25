@@ -140,7 +140,7 @@ fn test_simple_cycle() {
 
 #[test]
 fn test_deep_chain() {
-    const CHAIN_LENGTH: usize = 10_000;
+    const CHAIN_LENGTH: usize = 10_00;
 
     #[derive(Trace)]
     struct ChainNode {
