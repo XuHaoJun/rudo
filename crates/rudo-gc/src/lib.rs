@@ -93,7 +93,6 @@ pub use trace_closure::TraceClosure;
 #[cfg(feature = "derive")]
 pub use rudo_gc_derive::Trace;
 
-#[cfg(any(test, feature = "test-util"))]
 #[doc(hidden)]
 pub mod test_util {
     pub use crate::gc::{clear_test_roots, register_test_root};
@@ -101,6 +100,16 @@ pub mod test_util {
     /// Get the internal `GcBox` pointer.
     pub fn internal_ptr<T: crate::Trace + ?Sized>(gc: &crate::Gc<T>) -> *const u8 {
         crate::Gc::internal_ptr(gc)
+    }
+
+    /// Reconstruct a `Gc` from an internal pointer.
+    ///
+    /// # Safety
+    ///
+    /// The pointer must be a valid, currently allocated `GcBox<T>`.
+    #[must_use]
+    pub const unsafe fn from_raw<T: crate::Trace + 'static>(ptr: *const u8) -> crate::Gc<T> {
+        unsafe { crate::Gc::from_raw(ptr) }
     }
 
     /// Clear CPU registers to prevent stale pointer values from being treated as roots.

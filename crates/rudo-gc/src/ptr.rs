@@ -540,6 +540,22 @@ impl<T: Trace> Gc<T> {
             _marker: PhantomData,
         }
     }
+
+    /// Create a `Gc<T>` from a raw pointer to its `GcBox`.
+    ///
+    /// # Safety
+    ///
+    /// The pointer must be a valid, currently allocated `GcBox<T>`.
+    #[doc(hidden)]
+    #[must_use]
+    pub const unsafe fn from_raw(ptr: *const u8) -> Self {
+        Self {
+            ptr: Cell::new(Nullable::new(unsafe {
+                std::ptr::NonNull::new_unchecked(ptr as *mut GcBox<T>)
+            })),
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<T: Trace + ?Sized> Gc<T> {

@@ -1523,7 +1523,10 @@ pub fn sweep_orphan_pages() {
 
     drop(manager);
 
-    for (addr, size) in to_reclaim {
+    // Phase 1: Finalize (call drop_fn) for all doomed objects.
+    // We do this BEFORE unmapping any memory because objects may have
+    // cross-page references.
+    for &(addr, _size) in &to_reclaim {
         unsafe {
             let header = addr as *mut PageHeader;
             let is_large = ((*header).flags & PAGE_FLAG_LARGE) != 0;
@@ -1552,7 +1555,12 @@ pub fn sweep_orphan_pages() {
                     }
                 }
             }
+        }
+    }
 
+    // Phase 2: Reclaim memory.
+    for (addr, size) in to_reclaim {
+        unsafe {
             sys_alloc::Mmap::from_raw(addr as *mut u8, size);
         }
     }

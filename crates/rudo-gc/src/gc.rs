@@ -109,19 +109,16 @@ thread_local! {
     /// Whether a collection is currently in progress.
     static IN_COLLECT: Cell<bool> = const { Cell::new(false) };
 
-    #[cfg(any(test, feature = "test-util"))]
     static TEST_ROOTS: std::cell::RefCell<Vec<*const u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Register a root for GC marking. This is useful for tests where Miri cannot find
 /// roots via conservative stack scanning.
-#[cfg(any(test, feature = "test-util"))]
 pub fn register_test_root(ptr: *const u8) {
     TEST_ROOTS.with(|roots| roots.borrow_mut().push(ptr));
 }
 
 /// Clear all registered test roots.
-#[cfg(any(test, feature = "test-util"))]
 pub fn clear_test_roots() {
     TEST_ROOTS.with(|roots| roots.borrow_mut().clear());
 }
@@ -477,6 +474,7 @@ fn perform_single_threaded_collect_full() {
     });
 
     let duration = start.elapsed();
+
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     crate::metrics::record_metrics(crate::metrics::GcMetrics {
@@ -641,7 +639,6 @@ fn mark_minor_roots_multi(
         });
     }
 
-    #[cfg(any(test, feature = "test-util"))]
     TEST_ROOTS.with(|roots| {
         for &ptr in roots.borrow().iter() {
             unsafe {
@@ -706,7 +703,6 @@ fn mark_major_roots_multi(
         });
     }
 
-    #[cfg(any(test, feature = "test-util"))]
     TEST_ROOTS.with(|roots| {
         for &ptr in roots.borrow().iter() {
             unsafe {
@@ -782,6 +778,7 @@ fn collect_major(heap: &mut LocalHeap) -> usize {
 
     // 3. Promotion Phase (All to Old)
     promote_all_pages(heap);
+
     reclaimed + reclaimed_large
 }
 
