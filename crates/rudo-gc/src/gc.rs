@@ -138,7 +138,6 @@ fn maybe_collect() {
         return;
     }
 
-    // Check if we should collect
     let stats = crate::heap::HEAP
         .try_with(|heap| {
             (
@@ -150,7 +149,7 @@ fn maybe_collect() {
         .ok();
 
     let Some((total, young, old)) = stats else {
-        return; // Already borrowed, skip collection check
+        return;
     };
 
     let info = CollectInfo {
@@ -615,11 +614,8 @@ fn mark_minor_roots_multi(
     heap: &mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
 ) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Minor,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Minor);
 
-    // Scan all threads' captured stack roots (passed in, not consumed)
     for &(ptr, _) in stack_roots {
         unsafe {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
@@ -628,7 +624,6 @@ fn mark_minor_roots_multi(
         }
     }
 
-    // Also scan current thread's registers (collector thread's live registers)
     unsafe {
         crate::stack::spill_registers_and_scan(|potential_ptr, _addr, _is_reg| {
             if let Some(gc_box_ptr) =
@@ -674,6 +669,8 @@ fn mark_minor_roots_multi(
             (*header).clear_all_dirty();
         }
     }
+
+    visitor.process_worklist();
 }
 
 /// Mark roots from all threads' stacks for Major GC.
@@ -681,11 +678,8 @@ fn mark_major_roots_multi(
     heap: &mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
 ) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Major,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Major);
 
-    // Scan all threads' captured stack roots (passed in, not consumed)
     for &(ptr, _) in stack_roots {
         unsafe {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
@@ -694,7 +688,6 @@ fn mark_major_roots_multi(
         }
     }
 
-    // Also scan current thread's registers (collector thread's live registers)
     unsafe {
         crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
@@ -712,6 +705,8 @@ fn mark_major_roots_multi(
             }
         }
     });
+
+    visitor.process_worklist();
 }
 
 /// Minor Collection: Collect Young Generation only.
@@ -796,18 +791,13 @@ fn clear_all_marks_and_dirty(heap: &LocalHeap) {
 
 /// Mark roots for Minor GC (Stack + `RemSet`).
 fn mark_minor_roots(heap: &LocalHeap) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Minor,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Minor);
 
-    // 1. Scan Stack
     unsafe {
         crate::stack::spill_registers_and_scan(|potential_ptr, _addr, _is_reg| {
             if let Some(gc_box_ptr) =
                 crate::heap::find_gc_box_from_ptr(heap, potential_ptr as *const u8)
             {
-                // Only mark if it points to Young object.
-                // But mark_object_minor handles the check.
                 mark_object_minor(gc_box_ptr, &mut visitor);
             }
         });
@@ -822,48 +812,39 @@ fn mark_minor_roots(heap: &LocalHeap) {
         });
     }
 
-    // 2. Scan Dirty Old Objects (RemSet)
     for page_ptr in heap.all_pages() {
         unsafe {
             let header = page_ptr.as_ptr();
-            // Skip Young Pages (they are scanned via stack/tracing)
             if (*header).generation == 0 {
                 continue;
             }
-            // Skip Large Objects (assumed not dirty inner pointers for now)
             if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
                 continue;
             }
 
-            // Iterate Dirty Bitmap
             let obj_count = (*header).obj_count as usize;
             for i in 0..obj_count {
                 if (*header).is_dirty(i) {
-                    // Found dirty old object. Trace it!
                     let block_size = (*header).block_size as usize;
                     let header_size = PageHeader::header_size(block_size);
                     let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                    // Use the trace_fn to find pointers to Young Gen
-                    // SAFETY: We are already in an unsafe block.
                     ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
                 }
             }
-            // Clear dirty bits for this page after processing
             (*header).clear_all_dirty();
         }
     }
+
+    visitor.process_worklist();
 }
 
 /// Mark roots for Major GC (Stack).
 fn mark_major_roots(heap: &LocalHeap) {
-    let mut visitor = GcVisitor {
-        kind: VisitorKind::Major,
-    };
+    let mut visitor = GcVisitor::new(VisitorKind::Major);
     unsafe {
-        // 1. Mark stack roots (Conservative)
         crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                 mark_object(gc_box, &mut visitor);
@@ -879,22 +860,20 @@ fn mark_major_roots(heap: &LocalHeap) {
             }
         });
     }
+    visitor.process_worklist();
 }
 
-/// Mark object for Minor GC.
+/// Mark object for Minor GC - adds to worklist for iterative tracing.
 pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     let ptr_addr = ptr.as_ptr() as *const u8;
     let page_addr = (ptr_addr as usize) & crate::heap::page_mask();
-    // SAFETY: ptr_addr is a valid pointer to a GcBox
     let header = unsafe { crate::heap::ptr_to_page_header(ptr_addr) };
 
-    // SAFETY: We're inside an unsafe fn, but unsafe_op_in_unsafe_fn requires block
     unsafe {
         if (*header.as_ptr()).magic != crate::heap::MAGIC_GC_PAGE {
             return;
         }
 
-        // IF OLD GENERATION: STOP.
         if (*header.as_ptr()).generation > 0 {
             return;
         }
@@ -911,8 +890,7 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
 
         (*header.as_ptr()).set_mark(index);
 
-        // Trace children using value's trace_fn
-        ((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), visitor);
+        visitor.worklist.push(ptr);
     }
 }
 
@@ -1087,37 +1065,30 @@ fn promote_all_pages(heap: &LocalHeap) {
     }
 }
 
-/// Mark a single object and trace its children.
+/// Mark a single object and add to worklist for iterative tracing.
 ///
 /// # Safety
 ///
 /// The pointer must be a valid `GcBox` pointer.
 pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
-    // Get the page header
     let ptr_addr = ptr.as_ptr() as *const u8;
-    // SAFETY: ptr is a valid GcBox pointer
     let header = unsafe { crate::heap::ptr_to_page_header(ptr_addr) };
 
     unsafe {
-        // Validate this is a GC page
         if (*header.as_ptr()).magic != crate::heap::MAGIC_GC_PAGE {
             return;
         }
 
-        // Use 1-arg ptr_to_object_index which calls ptr_to_page_header internally
-        // Note: ptr_to_object_index checks for MAGIC_GC_PAGE and bounds.
         if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
             if (*header.as_ptr()).is_marked(idx) {
-                return; // Already marked
+                return;
             }
-            // Mark this object
             (*header.as_ptr()).set_mark(idx);
         } else {
-            return; // Invalid object index
+            return;
         }
 
-        // Trace children using value's trace_fn
-        ((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), visitor);
+        visitor.worklist.push(ptr);
     }
 }
 
@@ -1213,15 +1184,72 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
 // GcVisitor - Unified Visitor implementation
 // ============================================================================
 
+impl GcVisitor {
+    #[inline]
+    pub fn new(kind: VisitorKind) -> Self {
+        Self {
+            kind,
+            worklist: Vec::with_capacity(1024),
+        }
+    }
+
+    #[inline]
+    pub fn process_worklist(&mut self) {
+        while let Some(ptr) = self.worklist.pop() {
+            unsafe {
+                let ptr_addr = ptr.as_ptr() as *const u8;
+                let header = crate::heap::ptr_to_page_header(ptr_addr);
+
+                if (*header.as_ptr()).magic != crate::heap::MAGIC_GC_PAGE {
+                    continue;
+                }
+
+                if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+                    (*header.as_ptr()).set_mark(idx);
+                } else {
+                    continue;
+                }
+
+                ((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), self);
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    unsafe fn visit_region(&mut self, ptr: *const u8, len: usize) {
+        unsafe {
+            crate::scan::scan_heap_region_conservatively(ptr, len, self);
+        }
+    }
+}
+
 impl Visitor for GcVisitor {
     fn visit<T: Trace + ?Sized>(&mut self, gc: &crate::Gc<T>) {
         if let Some(ptr) = gc.raw_ptr().as_option() {
+            let ptr = ptr.cast::<crate::ptr::GcBox<()>>();
+
             unsafe {
-                if self.kind == VisitorKind::Minor {
-                    mark_object_minor(ptr.cast(), self);
-                } else {
-                    mark_object(ptr.cast(), self);
+                let ptr_addr = ptr.as_ptr() as *const u8;
+                let header = crate::heap::ptr_to_page_header(ptr_addr);
+
+                if (*header.as_ptr()).magic != crate::heap::MAGIC_GC_PAGE {
+                    return;
                 }
+
+                if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+                    if self.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
+                        return;
+                    }
+
+                    if (*header.as_ptr()).is_marked(idx) {
+                        return;
+                    }
+                    (*header.as_ptr()).set_mark(idx);
+                } else {
+                    return;
+                }
+
+                self.worklist.push(ptr);
             }
         }
     }
