@@ -95,6 +95,13 @@ pub enum VisitorKind {
 pub struct GcVisitor {
     /// The kind of collection being performed.
     pub kind: VisitorKind,
+    /// Worklist for iterative tracing.
+    ///
+    /// NOTE: This uses an unbounded Vec. For very deep graphs with millions
+    /// of objects, this could consume significant memory. Future optimization:
+    /// use a chunked/overflow-resistant queue that spills to heap
+    /// or uses multiple segments when approaching capacity limits.
+    pub(crate) worklist: Vec<std::ptr::NonNull<crate::ptr::GcBox<()>>>,
 }
 
 // ============================================================================

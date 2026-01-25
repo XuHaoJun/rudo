@@ -708,13 +708,9 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
             return;
         };
 
-        // SAFETY: If we are in the middle of a sweep, the target object
-        // might have already been swept and its memory reused or invalidated.
-        // We check if the object is unmarked (garbage) and skip if so.
         if is_collecting() {
             unsafe {
                 let header = ptr_to_page_header(ptr.as_ptr().cast());
-                // Valid GC pointers always have a magic number
                 if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
                     if let Some(index) = ptr_to_object_index(ptr.as_ptr().cast()) {
                         if !(*header.as_ptr()).is_marked(index) {
@@ -725,19 +721,13 @@ impl<T: Trace + ?Sized> Drop for Gc<T> {
             }
         }
 
-        // Decrement reference count
         let is_last = unsafe { (*ptr.as_ptr()).dec_ref() };
 
         if is_last {
-            // This was the last reference; drop unconditionally
-            // SAFETY: We have exclusive access
             unsafe {
-                // Call the drop_fn to drop the inner value and mark as dropped
                 ((*ptr.as_ptr()).drop_fn)(ptr.as_ptr().cast());
-                // Note: Memory is managed by the heap, not deallocated here
             }
         } else {
-            // Notify for potential cycle collection
             notify_dropped_gc();
         }
     }

@@ -123,7 +123,6 @@ impl Node {
 
 #[test]
 fn test_simple_cycle() {
-    // Create a -> b -> a cycle
     let a = Gc::new(Node::new(1));
     let b = Gc::new(Node::new(2));
 
@@ -133,11 +132,41 @@ fn test_simple_cycle() {
     assert_eq!(a.value, 1);
     assert_eq!(b.value, 2);
 
-    // Drop external references
     drop(a);
     drop(b);
 
-    // Force collection - cycle should be detected and freed
+    collect();
+}
+
+#[test]
+fn test_deep_chain() {
+    const CHAIN_LENGTH: usize = 10_00;
+
+    #[derive(Trace)]
+    struct ChainNode {
+        value: usize,
+        next: RefCell<Option<Gc<Self>>>,
+    }
+
+    let head = Gc::new(ChainNode {
+        value: 0,
+        next: RefCell::new(None),
+    });
+
+    let mut current = head.clone();
+    for i in 1..CHAIN_LENGTH {
+        let next = Gc::new(ChainNode {
+            value: i,
+            next: RefCell::new(None),
+        });
+        *current.next.borrow_mut() = Some(Gc::clone(&next));
+        current = next;
+    }
+
+    assert_eq!(head.value, 0);
+    assert_eq!(current.value, CHAIN_LENGTH - 1);
+
+    drop(head);
     collect();
 }
 
