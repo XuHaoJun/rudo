@@ -326,15 +326,21 @@ mod tests {
         let bottom = Cell::new(0);
 
         for i in 0..8 {
-            assert!(queue.push(&bottom, i));
+            assert!(queue.push(&bottom, i), "push {} failed", i);
         }
 
-        for _ in 0..4 {
-            assert_eq!(queue.pop(&bottom), Some(7));
-            assert!(queue.pop(&bottom).is_some());
-            assert!(queue.pop(&bottom).is_some());
-            assert!(queue.pop(&bottom).is_some());
+        for i in 0..8 {
+            let expected = 7 - i;
+            assert_eq!(
+                queue.pop(&bottom),
+                Some(expected),
+                "pop {} should return {}",
+                i,
+                expected
+            );
         }
+
+        assert!(queue.pop(&bottom).is_none(), "queue should be empty");
 
         for i in 0..8 {
             assert!(
