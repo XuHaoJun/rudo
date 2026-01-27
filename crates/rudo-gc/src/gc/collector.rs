@@ -372,6 +372,18 @@ pub fn collect_full() {
 /// CRITICAL: We must clear `gc_requested` for ALL threads, not just those at safepoint.
 /// Otherwise, threads that haven't reached safepoint yet will have their flag stuck at true,
 /// causing them to hang in future GC cycles when they enter rendezvous.
+///
+/// # Lock Ordering
+///
+/// Acquires `thread_registry()` lock (order 2). This function is called during
+/// GC cleanup and must not be called while holding locks with order > 2.
+///
+/// # Safety
+///
+/// This function safely accesses the thread registry to wake threads that are
+/// waiting at safepoints. The lock protects access to the thread list and their
+/// state. After waking threads, it updates the `active_count` to reflect the
+/// number of threads that have been resumed.
 fn wake_waiting_threads() {
     let registry = crate::heap::thread_registry().lock().unwrap();
     let mut woken_count = 0;

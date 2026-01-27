@@ -263,6 +263,16 @@ impl ParallelMarkConfig {
 }
 
 /// Coordinates parallel marking across multiple worker threads.
+///
+/// The coordinator manages the parallel marking phase of garbage collection.
+/// It uses atomic operations for coordination, minimizing the need for locks.
+/// Any locks used by workers must follow the lock ordering discipline:
+///
+/// 1. `LocalHeap` (order 1) - Per-thread allocation
+/// 2. `GlobalMarkState` (order 2) - Mark phase coordination
+/// 3. `GC Request` (order 3) - GC trigger
+///
+/// Workers must not acquire any locks while holding `PerThreadMarkQueue` references.
 pub struct ParallelMarkCoordinator {
     /// The number of worker threads participating in marking.
     num_workers: usize,

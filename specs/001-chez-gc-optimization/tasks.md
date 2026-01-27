@@ -52,17 +52,17 @@
 
 **Tests for User Story 2** (write first, verify fail):
 
-- [ ] T013 [P] [US2] Unit test for lock order constants in `tests/unit/test_lock_ordering.rs`
-- [ ] T014 [P] [US2] Integration test for concurrent lock acquisition in `tests/integration/lock_ordering.rs`
-- [ ] T015 [P] [US2] Stress test for lock ordering under contention in `tests/integration/lock_ordering.rs`
+- [X] T013 [P] [US2] Unit test for lock order constants in `tests/unit/test_lock_ordering.rs`
+- [X] T014 [P] [US2] Integration test for concurrent lock acquisition in `tests/integration/lock_ordering.rs`
+- [X] T015 [P] [US2] Stress test for lock ordering under contention in `tests/integration/lock_ordering.rs`
 
 **Implementation for User Story 2**:
 
-- [ ] T016 [US2] Update `LocalHeap` lock acquisition to use `LOCK_ORDER_LOCAL_HEAP` in `src/heap/sync.rs`
-- [ ] T017 [US2] Update `GlobalMarkState` lock acquisition to use `LOCK_ORDER_GLOBAL_MARK` in `src/heap/marker.rs`
-- [ ] T018 [US2] Update `GCRequest` lock acquisition to use `LOCK_ORDER_GC_REQUEST` in `src/gc.rs`
-- [ ] T019 [US2] Add SAFETY comments to all lock acquisition points documenting the ordering contract
-- [ ] T020 [US2] Add `#[cfg(debug_assertions)]` runtime validation for lock order in `src/heap/sync.rs`
+- [X] T016 [US2] Update `LocalHeap` lock acquisition to use `LOCK_ORDER_LOCAL_HEAP` in `crates/rudo-gc/src/heap.rs`
+- [X] T017 [US2] Update `GlobalMarkState` lock acquisition to use `LOCK_ORDER_GLOBAL_MARK` in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T018 [US2] Update `GCRequest` lock acquisition to use `LOCK_ORDER_GC_REQUEST` in `crates/rudo-gc/src/gc/collector.rs`
+- [X] T019 [US2] Add SAFETY comments to all lock acquisition points documenting the ordering contract
+- [X] T020 [US2] Add `#[cfg(debug_assertions)]` runtime validation for lock order in `crates/rudo-gc/src/gc/sync.rs`
 
 **Checkpoint**: Lock ordering fully enforced; User Story 2 complete and independently testable
 

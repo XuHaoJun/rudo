@@ -248,6 +248,14 @@ fn enter_rendezvous() {
 
 /// Signal all threads waiting at safe points to resume.
 ///
+/// This function acquires the thread registry lock (order 2) to safely
+/// access and modify thread state.
+///
+/// # Lock Ordering
+///
+/// Acquires `thread_registry()` lock (order 2). Caller must not hold
+/// any locks with order > 2.
+///
 /// # Panics
 ///
 /// Panics if the thread registry lock is poisoned.
