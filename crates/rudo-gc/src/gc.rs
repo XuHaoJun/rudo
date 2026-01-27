@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
-use crate::gc::marker::ParallelMarkConfig;
+use crate::gc::marker::{worker_mark_loop, ParallelMarkConfig};
 use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
 use crate::trace::{GcVisitor, Trace, Visitor, VisitorKind};
@@ -701,7 +701,7 @@ fn mark_minor_roots_parallel(
 
     let (coordinator, worker_queues) = crate::gc::marker::init_parallel_marking(num_workers);
 
-    let mut visitor = GcVisitor::new(VisitorKind::Minor);
+    let _visitor = GcVisitor::new(VisitorKind::Minor);
 
     for &(ptr, _) in stack_roots.iter().take(num_workers) {
         unsafe {
@@ -768,17 +768,20 @@ fn mark_minor_roots_parallel(
         }
     }
 
-    for queue in &worker_queues {
-        while let Some(obj) = queue.pop() {
-            let gc_box_ptr = obj as *mut GcBox<()>;
-
-            unsafe {
-                ((*obj).trace_fn)(gc_box_ptr.cast(), &mut visitor);
-            }
-        }
+    let all_queues = worker_queues.clone();
+    let mut handles = Vec::new();
+    for (_, queue) in worker_queues.into_iter().enumerate() {
+        let queues = all_queues.clone();
+        let handle =
+            std::thread::spawn(move || worker_mark_loop(queue, queues, VisitorKind::Minor));
+        handles.push(handle);
     }
 
-    coordinator.wait_for_completion();
+    for handle in handles {
+        let marked = handle.join().unwrap();
+        coordinator.record_marked(marked);
+        coordinator.worker_completed();
+    }
 
     for page in &dirty_pages {
         unsafe {
@@ -863,7 +866,7 @@ fn mark_major_roots_parallel(
 
     coordinator.start_marking(&worker_queues, &root_pages);
 
-    let mut visitor = GcVisitor::new(VisitorKind::Major);
+    let _visitor = GcVisitor::new(VisitorKind::Major);
 
     for &(ptr, _) in stack_roots.iter().take(root_pages.len().min(num_workers)) {
         unsafe {
@@ -894,17 +897,20 @@ fn mark_major_roots_parallel(
         }
     });
 
-    for queue in &worker_queues {
-        while let Some(obj) = queue.pop() {
-            let gc_box_ptr = obj as *mut GcBox<()>;
-
-            unsafe {
-                ((*obj).trace_fn)(gc_box_ptr.cast(), &mut visitor);
-            }
-        }
+    let all_queues = worker_queues.clone();
+    let mut handles = Vec::new();
+    for (_, queue) in worker_queues.into_iter().enumerate() {
+        let queues = all_queues.clone();
+        let handle =
+            std::thread::spawn(move || worker_mark_loop(queue, queues, VisitorKind::Major));
+        handles.push(handle);
     }
 
-    coordinator.wait_for_completion();
+    for handle in handles {
+        let marked = handle.join().unwrap();
+        coordinator.record_marked(marked);
+        coordinator.worker_completed();
+    }
 }
 
 /// Minor Collection: Collect Young Generation only.

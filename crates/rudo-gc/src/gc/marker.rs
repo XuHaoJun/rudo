@@ -183,6 +183,10 @@ impl Default for PerThreadMarkQueue {
     }
 }
 
+unsafe impl Send for PerThreadMarkQueue {}
+
+unsafe impl Sync for PerThreadMarkQueue {}
+
 /// Configuration for parallel marking behavior.
 #[derive(Clone, Copy, Debug)]
 pub struct ParallelMarkConfig {
@@ -392,8 +396,8 @@ impl ParallelMarkCoordinator {
 /// 2. Process local queue (LIFO)
 /// 3. Steal from other queues (FIFO) when local queue empty
 pub fn worker_mark_loop(
-    queue: &PerThreadMarkQueue,
-    all_queues: &[PerThreadMarkQueue],
+    queue: PerThreadMarkQueue,
+    all_queues: Vec<PerThreadMarkQueue>,
     kind: VisitorKind,
 ) -> usize {
     let mut marked = 0;
@@ -417,7 +421,7 @@ pub fn worker_mark_loop(
             }
         }
 
-        if !try_steal_work(queue, all_queues) {
+        if !try_steal_work(&queue, &all_queues) {
             break;
         }
     }
