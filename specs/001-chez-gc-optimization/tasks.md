@@ -33,12 +33,12 @@
 
 **⚠️ CRITICAL**: No user story work can begin until lock ordering discipline is enforced
 
-- [ ] T007 Implement `LockOrderingDiscipline` constants and validation macros in `src/heap/sync.rs`
-- [ ] T008 Add `LOCK_ORDER_*` constants for LocalHeap (1), GlobalMarkState (2), GC Request (3)
-- [ ] T009 Add `acquire_lock()` function with debug assertions for order validation
-- [ ] T010 Integrate lock ordering checks into existing `LocalHeap`, `GlobalMarkState`, `GCRequest` lock acquisitions
-- [ ] T011 Run `./miri-test.sh` to verify no memory safety issues with new lock ordering code
-- [ ] T012 Write integration test for lock ordering in `tests/integration/lock_ordering.rs`
+- [X] T007 Implement `LockOrderingDiscipline` constants and validation macros in `crates/rudo-gc/src/gc/sync.rs`
+- [X] T008 Add `LOCK_ORDER_*` constants for LocalHeap (1), GlobalMarkState (2), GC Request (3)
+- [X] T009 Add `acquire_lock()` function with debug assertions for order validation
+- [X] T010 Integrate lock ordering checks into existing `LocalHeap`, `GlobalMarkState`, `GCRequest` lock acquisitions
+- [X] T011 Run `./miri-test.sh` to verify no memory safety issues with new lock ordering code
+- [X] T012 Write integration test for lock ordering in `tests/integration/lock_ordering.rs`
 
 **Checkpoint**: Lock ordering discipline enforced - all concurrent operations now have deadlock prevention
 

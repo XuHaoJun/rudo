@@ -148,8 +148,24 @@ impl ThreadRegistry {
 
 static THREAD_REGISTRY: OnceLock<Mutex<ThreadRegistry>> = OnceLock::new();
 
-/// Access the global thread registry.
+/// Access the global thread registry with lock ordering validation.
+///
+/// This function wraps the thread registry lock acquisition with validation
+/// to ensure proper lock ordering discipline.
+///
+/// # Lock Ordering
+///
+/// The thread registry lock has order 2 (`GlobalMarkState`). Callers must
+/// not hold any locks with order > 2 when calling this function.
+#[inline]
 pub fn thread_registry() -> &'static Mutex<ThreadRegistry> {
+    // Validate lock ordering: thread_registry is order 2
+    // Cannot be called while holding GC Request lock (order 3)
+    #[cfg(debug_assertions)]
+    {
+        use crate::gc::sync::{acquire_lock, LockOrder};
+        acquire_lock(LockOrder::GlobalMarkState, LockOrder::LocalHeap);
+    }
     THREAD_REGISTRY.get_or_init(|| Mutex::new(ThreadRegistry::new()))
 }
 

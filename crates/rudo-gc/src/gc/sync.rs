@@ -73,6 +73,85 @@ impl LockOrder {
     }
 }
 
+/// Lock order constants for use in lock acquisition.
+///
+/// These constants define the strict acquisition order to prevent deadlocks.
+/// All locks must be acquired in increasing order.
+pub mod lock_order {
+    use super::LockOrder;
+
+    /// `LocalHeap` per-thread allocation lock (order 1).
+    #[allow(dead_code)]
+    pub const LOCAL_HEAP: LockOrder = LockOrder::LocalHeap;
+
+    /// `GlobalMarkState` mark phase coordination lock (order 2).
+    #[allow(dead_code)]
+    pub const GLOBAL_MARK_STATE: LockOrder = LockOrder::GlobalMarkState;
+
+    /// `GC Request` trigger and coordination lock (order 3).
+    #[allow(dead_code)]
+    pub const GC_REQUEST: LockOrder = LockOrder::GcRequest;
+}
+
+/// Acquire a lock with ordering validation.
+///
+/// This function should be called when acquiring any lock protected by
+/// the lock ordering discipline. It validates that the lock order is
+/// correct in debug builds.
+///
+/// # Arguments
+///
+/// * `lock_tag` - The lock order tag for this lock type
+/// * `current_min` - The minimum lock order currently held by this thread
+///
+/// # Panics
+///
+/// Panics in debug builds if `lock_tag` is less than `current_min`.
+#[inline]
+#[allow(clippy::missing_const_for_fn)]
+pub fn acquire_lock(lock_tag: LockOrder, current_min: LockOrder) {
+    #[cfg(debug_assertions)]
+    {
+        validate_lock_order(lock_tag, current_min);
+    }
+    let _ = (lock_tag, current_min); // Suppress unused warnings in release builds
+}
+
+/// Acquire a lock guard with automatic release order tracking.
+///
+/// This RAII-style guard automatically updates the minimum lock order
+/// when acquired and provides validation in debug builds.
+///
+/// # Example
+///
+/// ```
+/// use std::sync::{Mutex, MutexGuard};
+/// use rudo_gc::gc::sync::{LockOrder, LockGuard};
+///
+/// fn example_function() {
+///     let _guard = LockGuard::new(LockOrder::LocalHeap);
+///     // Minimum lock order is now LocalHeap
+/// }
+/// ```
+#[must_use]
+pub struct LockGuard {
+    _tag: LockOrder,
+}
+
+impl LockGuard {
+    /// Create a new lock guard for the given lock order.
+    #[must_use = "LockGuard must be held for the duration of the critical section"]
+    pub fn new(tag: LockOrder) -> Self {
+        #[cfg(debug_assertions)]
+        {
+            let current_min = get_min_lock_order();
+            validate_lock_order(tag, current_min);
+        }
+        set_min_lock_order(tag);
+        Self { _tag: tag }
+    }
+}
+
 /// Validate lock acquisition order in debug builds.
 ///
 /// In release builds, this function is optimized away.
