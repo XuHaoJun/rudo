@@ -282,7 +282,6 @@ mod tests {
     #[cfg(miri)]
     #[test]
     fn test_steal_queue_push_pop_miri() {
-        use std::thread;
         let queue: StealQueue<i32, 64> = StealQueue::new();
         let bottom = Cell::new(0);
 

@@ -770,10 +770,10 @@ fn mark_minor_roots_parallel(
 
     let all_queues = worker_queues.clone();
     let mut handles = Vec::new();
-    for (_, queue) in worker_queues.into_iter().enumerate() {
+    for queue in worker_queues {
         let queues = all_queues.clone();
         let handle =
-            std::thread::spawn(move || worker_mark_loop(queue, queues, VisitorKind::Minor));
+            std::thread::spawn(move || worker_mark_loop(&queue, &queues, VisitorKind::Minor));
         handles.push(handle);
     }
 
@@ -899,10 +899,10 @@ fn mark_major_roots_parallel(
 
     let all_queues = worker_queues.clone();
     let mut handles = Vec::new();
-    for (_, queue) in worker_queues.into_iter().enumerate() {
+    for queue in worker_queues {
         let queues = all_queues.clone();
         let handle =
-            std::thread::spawn(move || worker_mark_loop(queue, queues, VisitorKind::Major));
+            std::thread::spawn(move || worker_mark_loop(&queue, &queues, VisitorKind::Major));
         handles.push(handle);
     }
 
@@ -1235,9 +1235,10 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
                         // No weak refs, already dropped and dead - reclaim
                         // CRITICAL FIX: Write free list head BEFORE clearing allocated bit
                         // to prevent new allocations from reusing this slot with corrupted metadata
+                        #[allow(clippy::cast_ptr_alignment)]
                         let obj_cast = obj_ptr.cast::<Option<u16>>();
                         obj_cast.write_unaligned(free_head);
-                        free_head = Some(i as u16);
+                        free_head = Some(u16::try_from(i).unwrap());
 
                         (*header).clear_allocated(i);
                         reclaimed += 1;
@@ -1250,20 +1251,14 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
                     let obj_ptr = page_addr.add(header_size + i * block_size);
                     // Check if free list head was already written (for reclaimed slots)
                     let current_head = (*header).free_list_head;
-                    let idx_as_u16 = i as u16;
-                    let head_written = match current_head {
-                        Some(head) => head == idx_as_u16,
-                        None => false,
-                    };
+                    let idx_as_u16 = u16::try_from(i).unwrap();
+                    let head_written = current_head == Some(idx_as_u16);
 
                     if !head_written {
                         #[allow(clippy::cast_ptr_alignment)]
                         let obj_cast = obj_ptr.cast::<Option<u16>>();
                         obj_cast.write_unaligned(free_head);
-                        #[allow(clippy::cast_possible_truncation)]
-                        {
-                            free_head = Some(i as u16);
-                        }
+                        free_head = Some(u16::try_from(i).unwrap());
                     }
                 }
             }

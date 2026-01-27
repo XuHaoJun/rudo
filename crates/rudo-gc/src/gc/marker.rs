@@ -65,7 +65,7 @@ impl PerThreadMarkQueue {
         self.queue.push(&self.bottom, obj as usize)
     }
 
-    /// Push from a NonNull pointer.
+    /// Push from a `NonNull` pointer.
     pub fn push_non_null(&self, obj: NonNull<GcBox<()>>) -> bool {
         self.push(obj.as_ptr())
     }
@@ -147,21 +147,21 @@ impl PerThreadMarkQueue {
     unsafe fn process_owned_page(&self, page: NonNull<PageHeader>, kind: VisitorKind) -> usize {
         let header = page.as_ptr();
         let mut marked = 0;
-        let block_size = (*header).block_size as usize;
+        let block_size = unsafe { (*header).block_size } as usize;
         let header_size = PageHeader::header_size(block_size);
-        let obj_count = (*header).obj_count as usize;
+        let obj_count = unsafe { (*header).obj_count } as usize;
 
         for i in 0..obj_count {
-            if (*header).is_allocated(i) && !(*header).is_marked(i) {
-                if kind == VisitorKind::Minor && (*header).generation > 0 {
+            if unsafe { (*header).is_allocated(i) && !(*header).is_marked(i) } {
+                if kind == VisitorKind::Minor && unsafe { (*header).generation } > 0 {
                     continue;
                 }
 
-                let obj_ptr = page.cast::<u8>().add(header_size + i * block_size);
+                let obj_ptr = unsafe { page.cast::<u8>().add(header_size + i * block_size) };
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                (*header).set_mark(i);
+                unsafe { (*header).set_mark(i) };
                 marked += 1;
 
                 self.push(gc_box_ptr.as_ptr());
@@ -396,8 +396,8 @@ impl ParallelMarkCoordinator {
 /// 2. Process local queue (LIFO)
 /// 3. Steal from other queues (FIFO) when local queue empty
 pub fn worker_mark_loop(
-    queue: PerThreadMarkQueue,
-    all_queues: Vec<PerThreadMarkQueue>,
+    queue: &PerThreadMarkQueue,
+    all_queues: &[PerThreadMarkQueue],
     kind: VisitorKind,
 ) -> usize {
     let mut marked = 0;
@@ -408,20 +408,20 @@ pub fn worker_mark_loop(
             marked += 1;
 
             unsafe {
-                let ptr_addr = obj as *const GcBox<()> as *const u8;
+                let ptr_addr = obj.cast::<GcBox<()>>().cast::<u8>();
                 let header = crate::heap::ptr_to_page_header(ptr_addr);
 
                 if header.as_ref().magic != crate::heap::MAGIC_GC_PAGE {
                     continue;
                 }
 
-                let gc_box_ptr = obj as *mut GcBox<()>;
+                let gc_box_ptr = obj.cast_mut();
 
                 ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
             }
         }
 
-        if !try_steal_work(&queue, &all_queues) {
+        if !try_steal_work(queue, all_queues) {
             break;
         }
     }
@@ -467,9 +467,7 @@ pub fn available_parallelism() -> usize {
 /// Create worker queues for parallel marking.
 #[must_use]
 pub fn create_worker_queues(count: usize) -> Vec<PerThreadMarkQueue> {
-    (0..count)
-        .map(|i| PerThreadMarkQueue::new_with_index(i))
-        .collect()
+    (0..count).map(PerThreadMarkQueue::new_with_index).collect()
 }
 
 /// Initialize parallel marking infrastructure.
