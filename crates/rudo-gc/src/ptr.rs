@@ -317,8 +317,8 @@ impl<T: Sized> AtomicNullable<T> {
         }
     }
 
-    /// Create a null pointer.
-    pub fn as_null(&self) {
+    /// Set this pointer to null.
+    pub fn set_null(&self) {
         self.ptr.store(0, Ordering::Relaxed);
     }
 
@@ -782,7 +782,7 @@ impl<T: Trace> Gc<T> {
     /// Kill this Gc, making it dead.
     #[allow(dead_code)]
     pub(crate) fn kill(&self) {
-        self.ptr.as_null();
+        self.ptr.set_null();
     }
 
     /// Get the raw `GcBox` pointer.
@@ -807,10 +807,7 @@ impl<T: Trace> Clone for Gc<T> {
         let ptr = self.ptr.load(Ordering::Acquire);
         if ptr.is_null() {
             return Self {
-                ptr: AtomicNullable {
-                    ptr: AtomicUsize::new(0),
-                    _marker: PhantomData,
-                },
+                ptr: AtomicNullable::null(),
                 _marker: PhantomData,
             };
         }
@@ -1062,7 +1059,7 @@ impl<T: Trace> Weak<T> {
     /// ```
     #[must_use]
     pub fn is_alive(&self) -> bool {
-        let Some(ptr) = self.ptr.load(Ordering::Relaxed).as_option() else {
+        let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
             return false;
         };
 
@@ -1114,14 +1111,17 @@ impl<T: Trace> Weak<T> {
 impl<T: Trace> Clone for Weak<T> {
     fn clone(&self) -> Self {
         let ptr = self.ptr.load(Ordering::Relaxed);
-        if let Some(gc_box_ptr) = ptr.as_option() {
-            // Increment the weak count
-            unsafe {
-                (*gc_box_ptr.as_ptr()).inc_weak();
-            }
+        if ptr.is_null() {
+            return Self {
+                ptr: AtomicNullable::null(),
+            };
+        }
+        let gc_box_ptr = ptr.as_ptr();
+        unsafe {
+            (*gc_box_ptr).inc_weak();
         }
         Self {
-            ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(ptr.as_ptr()) }),
+            ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(gc_box_ptr) }),
         }
     }
 }
