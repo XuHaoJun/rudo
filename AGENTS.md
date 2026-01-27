@@ -102,3 +102,10 @@ This project uses `.cursor/commands/` for custom speckit workflows:
 2. Run `./test.sh` and ensure all tests pass
 3. Run `cargo fmt --all` to format code
 4. For unsafe code changes, consider running `./miri-test.sh`
+
+## Active Technologies
+- Rust 1.75+ + `std::sync::atomic` (Rust stdlib), no external crates (002-send-sync-trait)
+- N/A (in-memory garbage collector, heap managed internally) (002-send-sync-trait)
+
+## Recent Changes
+- 002-send-sync-trait: Added Rust 1.75+ + `std::sync::atomic` (Rust stdlib), no external crates

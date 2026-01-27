@@ -64,7 +64,7 @@ pub trait Visitor {
     /// Visit a garbage-collected pointer.
     ///
     /// Called by `Trace::trace()` for each `Gc` field in an object.
-    fn visit<T: Trace + ?Sized>(&mut self, gc: &Gc<T>);
+    fn visit<T: Trace>(&mut self, gc: &Gc<T>);
 
     /// Visit a memory region conservatively for potential `Gc` pointers.
     ///
@@ -109,7 +109,7 @@ pub struct GcVisitor {
 // ============================================================================
 
 // SAFETY: Gc<T> traces its inner value
-unsafe impl<T: Trace + ?Sized> Trace for Gc<T> {
+unsafe impl<T: Trace> Trace for Gc<T> {
     fn trace(&self, visitor: &mut impl Visitor) {
         visitor.visit(self);
     }
