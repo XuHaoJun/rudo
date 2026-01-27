@@ -3,11 +3,15 @@
 //! This module implements the core garbage collection logic using
 //! a mark-sweep algorithm with the `BiBOP` memory layout.
 
+mod marker;
+mod worklist;
+
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
+use crate::gc::marker::{worker_mark_loop, ParallelMarkConfig, PerThreadMarkQueue};
 use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
 use crate::trace::{GcVisitor, Trace, Visitor, VisitorKind};
@@ -423,11 +427,14 @@ fn perform_single_threaded_collect_with_wake() {
     {
         let registry = crate::heap::thread_registry().lock().unwrap();
 
-        // Wake any threads already at safepoints and clear their flags
+        // Clear gc_requested for ALL threads to prevent deadlock
+        // Threads that haven't reached safepoint yet will see gc_requested = false
+        // and skip rendezvous entirely (safe since GC already completed)
         let mut woken_count = 0;
         for tcb in &registry.threads {
+            tcb.gc_requested.store(false, Ordering::SeqCst);
+
             if tcb.state.load(Ordering::Acquire) == crate::heap::THREAD_STATE_SAFEPOINT {
-                tcb.gc_requested.store(false, Ordering::SeqCst);
                 tcb.park_cond.notify_all();
                 tcb.state
                     .store(crate::heap::THREAD_STATE_EXECUTING, Ordering::Release);
@@ -673,6 +680,144 @@ fn mark_minor_roots_multi(
     visitor.process_worklist();
 }
 
+#[inline]
+unsafe fn mark_and_push_to_worker_queue(
+    ptr: *const u8,
+    gc_box: NonNull<GcBox<()>>,
+    worker_queues: &[PerThreadMarkQueue],
+    num_workers: usize,
+) {
+    unsafe {
+        let ptr_addr = gc_box.as_ptr() as *const u8;
+        let header = crate::heap::ptr_to_page_header(ptr_addr);
+        if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box.as_ptr().cast()) {
+                if !(*header.as_ptr()).is_marked(idx) {
+                    (*header.as_ptr()).set_mark(idx);
+                }
+            }
+        }
+        let worker_idx = ptr as usize % num_workers;
+        worker_queues[worker_idx].push(gc_box.as_ptr());
+    }
+}
+
+/// Mark roots using parallel marking for Minor GC.
+///
+/// This function processes dirty pages in parallel, distributing them
+/// across worker queues based on page ownership.
+#[allow(dead_code)]
+#[allow(clippy::unnecessary_cast, clippy::ptr_cast_constness)]
+fn mark_minor_roots_parallel(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+    config: ParallelMarkConfig,
+) {
+    if config.max_workers < 2 || !config.parallel_minor_gc {
+        mark_minor_roots_multi(heap, stack_roots);
+        return;
+    }
+
+    let num_workers = config
+        .max_workers
+        .min(crate::gc::marker::available_parallelism());
+
+    let (coordinator, worker_queues) = crate::gc::marker::init_parallel_marking(num_workers);
+
+    let _visitor = GcVisitor::new(VisitorKind::Minor);
+
+    for &(ptr, _) in stack_roots.iter().take(num_workers) {
+        unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                mark_and_push_to_worker_queue(ptr, gc_box, &worker_queues, num_workers);
+            }
+        }
+    }
+
+    unsafe {
+        crate::stack::spill_registers_and_scan(|potential_ptr, _addr, _is_reg| {
+            if let Some(gc_box_ptr) =
+                crate::heap::find_gc_box_from_ptr(heap, potential_ptr as *const u8)
+            {
+                mark_and_push_to_worker_queue(
+                    potential_ptr as *const u8,
+                    gc_box_ptr,
+                    &worker_queues,
+                    num_workers,
+                );
+            }
+        });
+    }
+
+    TEST_ROOTS.with(|roots| {
+        for &ptr in roots.borrow().iter() {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    mark_and_push_to_worker_queue(ptr, gc_box, &worker_queues, num_workers);
+                }
+            }
+        }
+    });
+
+    let mut dirty_pages: Vec<*const PageHeader> = Vec::new();
+    for page_ptr in heap.all_pages() {
+        unsafe {
+            let header = page_ptr.as_ptr();
+            if (*header).generation == 0 {
+                continue;
+            }
+            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+                continue;
+            }
+            dirty_pages.push(header);
+        }
+    }
+
+    let distribution = coordinator.distribute_dirty_pages(&dirty_pages, &worker_queues);
+
+    for (idx, page) in dirty_pages.iter().enumerate() {
+        let worker_idx = distribution[idx];
+        unsafe {
+            let header = *page;
+            let obj_count = (*header).obj_count as usize;
+            for i in 0..obj_count {
+                if (*header).is_dirty(i) {
+                    let block_size = (*header).block_size as usize;
+                    let header_size = PageHeader::header_size(block_size);
+                    let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                    worker_queues[worker_idx].push(gc_box_ptr);
+                }
+            }
+        }
+    }
+
+    let all_queues = worker_queues.clone();
+    let mut handles = Vec::new();
+    for queue in worker_queues {
+        let queues = all_queues.clone();
+        let handle =
+            std::thread::spawn(move || worker_mark_loop(&queue, &queues, VisitorKind::Minor));
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        let marked = handle.join().unwrap();
+        coordinator.record_marked(marked);
+        coordinator.worker_completed();
+    }
+
+    for page in &dirty_pages {
+        unsafe {
+            (*page as *mut PageHeader)
+                .as_mut()
+                .unwrap()
+                .clear_all_dirty();
+        }
+    }
+}
+
 /// Mark roots from all threads' stacks for Major GC.
 fn mark_major_roots_multi(
     heap: &mut LocalHeap,
@@ -707,6 +852,92 @@ fn mark_major_roots_multi(
     });
 
     visitor.process_worklist();
+}
+
+/// Mark roots using parallel marking with work stealing.
+///
+/// This function sets up parallel marking infrastructure and distributes
+/// root objects across worker queues. Workers process their queues in parallel,
+/// with work stealing to balance load.
+#[allow(dead_code)]
+#[allow(clippy::unnecessary_cast, clippy::ptr_cast_constness)]
+fn mark_major_roots_parallel(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+    config: ParallelMarkConfig,
+) {
+    if config.max_workers < 2 || !config.parallel_major_gc {
+        mark_major_roots_multi(heap, stack_roots);
+        return;
+    }
+
+    let num_workers = config
+        .max_workers
+        .min(crate::gc::marker::available_parallelism());
+
+    let (coordinator, worker_queues) = crate::gc::marker::init_parallel_marking(num_workers);
+
+    let root_pages: Vec<*const PageHeader> = heap
+        .all_pages()
+        .filter_map(|p| unsafe {
+            let header = p.as_ptr();
+            if (*header).generation == 1 {
+                Some(header.cast_const())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    coordinator.start_marking(&worker_queues, &root_pages);
+
+    let _visitor = GcVisitor::new(VisitorKind::Major);
+
+    for &(ptr, _) in stack_roots.iter().take(root_pages.len().min(num_workers)) {
+        unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                mark_and_push_to_worker_queue(ptr, gc_box, &worker_queues, num_workers);
+            }
+        }
+    }
+
+    unsafe {
+        crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                mark_and_push_to_worker_queue(
+                    ptr as *const u8,
+                    gc_box,
+                    &worker_queues,
+                    num_workers,
+                );
+            }
+        });
+    }
+
+    TEST_ROOTS.with(|roots| {
+        for &ptr in roots.borrow().iter() {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    mark_and_push_to_worker_queue(ptr, gc_box, &worker_queues, num_workers);
+                }
+            }
+        }
+    });
+
+    let all_queues = worker_queues.clone();
+    let mut handles = Vec::new();
+    for queue in worker_queues {
+        let queues = all_queues.clone();
+        let handle =
+            std::thread::spawn(move || worker_mark_loop(&queue, &queues, VisitorKind::Major));
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        let marked = handle.join().unwrap();
+        coordinator.record_marked(marked);
+        coordinator.worker_completed();
+    }
 }
 
 /// Minor Collection: Collect Young Generation only.
@@ -1029,6 +1260,13 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
 
                     if weak_count == 0 && (*gc_box_ptr).is_value_dead() {
                         // No weak refs, already dropped and dead - reclaim
+                        // CRITICAL FIX: Write free list head BEFORE clearing allocated bit
+                        // to prevent new allocations from reusing this slot with corrupted metadata
+                        #[allow(clippy::cast_ptr_alignment)]
+                        let obj_cast = obj_ptr.cast::<Option<u16>>();
+                        obj_cast.write_unaligned(free_head);
+                        free_head = Some(u16::try_from(i).unwrap());
+
                         (*header).clear_allocated(i);
                         reclaimed += 1;
                         is_alloc = false;
@@ -1036,14 +1274,18 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
                 }
 
                 if !is_alloc {
-                    // Slot is free - add to free list
+                    // Slot is free - add to free list (if not already done above)
                     let obj_ptr = page_addr.add(header_size + i * block_size);
-                    #[allow(clippy::cast_ptr_alignment)]
-                    let obj_cast = obj_ptr.cast::<Option<u16>>();
-                    obj_cast.write_unaligned(free_head);
-                    #[allow(clippy::cast_possible_truncation)]
-                    {
-                        free_head = Some(i as u16);
+                    // Check if free list head was already written (for reclaimed slots)
+                    let current_head = (*header).free_list_head;
+                    let idx_as_u16 = u16::try_from(i).unwrap();
+                    let head_written = current_head == Some(idx_as_u16);
+
+                    if !head_written {
+                        #[allow(clippy::cast_ptr_alignment)]
+                        let obj_cast = obj_ptr.cast::<Option<u16>>();
+                        obj_cast.write_unaligned(free_head);
+                        free_head = Some(u16::try_from(i).unwrap());
                     }
                 }
             }
@@ -1051,7 +1293,11 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
         }
     }
 
-    N_EXISTING.with(|n| n.set(n.get().saturating_sub(reclaimed)));
+    // NOTE: We do NOT decrement N_EXISTING here.
+    // N_EXISTING tracks total allocated objects for GC heuristics.
+    // Decrementing during sweep causes the heuristic to think heap is nearly empty,
+    // triggering unnecessary GC cycles during the subsequent Drop phase.
+    // Objects are counted at allocation time only; N_EXISTING reflects live objects.
 
     reclaimed
 }
@@ -1169,13 +1415,15 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
             sys_alloc::Mmap::from_raw(page_ptr.as_ptr().cast::<u8>(), alloc_size);
 
             reclaimed += 1;
-            N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
         }
     }
 
     // Batch remove pages from heap.pages (O(N) instead of O(N²))
     heap.pages
         .retain(|&p| !pages_to_remove.contains(&(p.as_ptr() as usize)));
+
+    // NOTE: We do NOT decrement N_EXISTING here.
+    // See sweep_phase2_reclaim for explanation.
 
     reclaimed
 }

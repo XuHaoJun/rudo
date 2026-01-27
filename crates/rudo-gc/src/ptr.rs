@@ -89,7 +89,13 @@ impl<T: Trace + ?Sized> GcBox<T> {
         let this = unsafe { &*self_ptr };
         loop {
             let count = this.ref_count.load(Ordering::Relaxed);
+            if count == 0 {
+                // Already at zero - this is a bug (double-free or use-after-free)
+                // Return true to prevent further issues
+                return true;
+            }
             if count == 1 {
+                // Last reference - drop the value
                 // SAFETY: We're the last reference, safe to drop
                 // The drop function handles value dropping
                 unsafe {

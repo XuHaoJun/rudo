@@ -106,6 +106,7 @@ This project uses `.cursor/commands/` for custom speckit workflows:
 ## Active Technologies
 - Rust 1.75+ + `std::sync::atomic` (Rust stdlib), no external crates (002-send-sync-trait)
 - N/A (in-memory garbage collector, heap managed internally) (002-send-sync-trait)
+- Rust 1.75+ (stable, with `std::sync::atomic` features) + `std::sync::atomic`, `std::thread`, `std::sync::Barrier`, `std::sync::Mutex` (003-parallel-marking)
 
 ## Recent Changes
 - 002-send-sync-trait: Added Rust 1.75+ + `std::sync::atomic` (Rust stdlib), no external crates

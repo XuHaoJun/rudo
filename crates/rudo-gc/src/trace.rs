@@ -9,6 +9,7 @@ use std::hash::BuildHasher;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::ptr::GcBox;
 use crate::Gc;
 
 // ============================================================================
@@ -102,6 +103,102 @@ pub struct GcVisitor {
     /// use a chunked/overflow-resistant queue that spills to heap
     /// or uses multiple segments when approaching capacity limits.
     pub(crate) worklist: Vec<std::ptr::NonNull<crate::ptr::GcBox<()>>>,
+}
+
+/// A visitor for concurrent/parallel garbage collection marking.
+///
+/// This visitor routes discovered references to the appropriate worker's
+/// mark queue based on the target object's page ownership. This enables
+/// efficient load balancing when objects in one thread's heap reference
+/// objects in another thread's heap.
+#[allow(dead_code)]
+pub struct GcVisitorConcurrent<'a> {
+    /// The kind of collection being performed.
+    pub kind: VisitorKind,
+    /// Reference to the shared page-to-worker mapping.
+    /// Maps page addresses to worker queue indices for routing references.
+    page_to_queue: &'a HashMap<usize, usize>,
+    /// Thread ID for checking ownership.
+    thread_id: u64,
+    /// Callback for routing discovered references to work queues.
+    route_fn: &'a mut dyn FnMut(*const GcBox<()>),
+}
+
+#[allow(dead_code)]
+impl<'a> GcVisitorConcurrent<'a> {
+    /// Create a new concurrent visitor.
+    #[inline]
+    #[must_use]
+    pub fn new(
+        kind: VisitorKind,
+        page_to_queue: &'a HashMap<usize, usize>,
+        route_fn: &'a mut dyn FnMut(*const GcBox<()>),
+    ) -> Self {
+        Self {
+            kind,
+            page_to_queue,
+            thread_id: super::heap::get_thread_id(),
+            route_fn,
+        }
+    }
+
+    /// Route a Gc pointer to the appropriate worker's queue.
+    ///
+    /// If the target object is on a page owned by another thread, this
+    /// routes the reference to that thread's work queue for efficient
+    /// load balancing.
+    fn route_reference<T: Trace>(&mut self, gc: &Gc<T>) {
+        let raw = Gc::<T>::as_ptr(gc);
+        if raw.is_null() {
+            return;
+        }
+
+        // SAFETY: We verified raw is non-null above. The ptr_to_page_header
+        // returns a valid NonNull<PageHeader> for any valid GC pointer.
+        // We verify the magic number before accessing the header fields.
+        // The object index is validated before marking to ensure we don't
+        // access out-of-bounds bitmap bits.
+        unsafe {
+            let ptr_addr = raw.cast::<u8>();
+            let header = super::heap::ptr_to_page_header(ptr_addr);
+
+            if (*header.as_ptr()).magic != super::heap::MAGIC_GC_PAGE {
+                return;
+            }
+
+            let page_addr = header.as_ptr() as usize;
+
+            if let Some(idx) = super::heap::ptr_to_object_index(raw.cast()) {
+                if self.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
+                    return;
+                }
+
+                if (*header.as_ptr()).is_marked(idx) {
+                    return;
+                }
+                (*header.as_ptr()).set_mark(idx);
+            } else {
+                return;
+            }
+
+            let worker_idx = self.page_to_queue.get(&page_addr).copied();
+
+            if let Some(_idx) = worker_idx {
+                (self.route_fn)(raw.cast());
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl Visitor for GcVisitorConcurrent<'_> {
+    fn visit<T: Trace>(&mut self, gc: &Gc<T>) {
+        self.route_reference(gc);
+    }
+
+    unsafe fn visit_region(&mut self, _ptr: *const u8, _len: usize) {
+        // Conservative scanning would be implemented here
+    }
 }
 
 // ============================================================================
