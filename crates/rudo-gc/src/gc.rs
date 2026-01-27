@@ -1266,6 +1266,12 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
         }
     }
 
+    // NOTE: We do NOT decrement N_EXISTING here.
+    // N_EXISTING tracks total allocated objects for GC heuristics.
+    // Decrementing during sweep causes the heuristic to think heap is nearly empty,
+    // triggering unnecessary GC cycles during the subsequent Drop phase.
+    // Objects are counted at allocation time only; N_EXISTING reflects live objects.
+
     reclaimed
 }
 
@@ -1388,6 +1394,9 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
     // Batch remove pages from heap.pages (O(N) instead of O(N²))
     heap.pages
         .retain(|&p| !pages_to_remove.contains(&(p.as_ptr() as usize)));
+
+    // NOTE: We do NOT decrement N_EXISTING here.
+    // See sweep_phase2_reclaim for explanation.
 
     reclaimed
 }
