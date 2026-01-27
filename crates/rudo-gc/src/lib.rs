@@ -62,7 +62,6 @@
 #![warn(clippy::pedantic)]
 #![warn(clippy::nursery)]
 #![allow(clippy::module_name_repetitions)]
-#![feature(ptr_metadata)]
 
 pub mod cell;
 mod gc;

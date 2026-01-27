@@ -134,7 +134,7 @@ description: "Task list template for feature implementation"
 - [X] T080 [P] Run `./clippy.sh` and fix all warnings in modified files
 - [X] T081 [P] Run `cargo fmt --all` to format all modified code
 - [X] T082 Run `./test.sh` and ensure all tests pass (including new tests)
-- [ ] T083 Run `./miri-test.sh` and verify all Miri tests pass for atomic operations
+- [X] T083 Run `./miri-test.sh` and verify all Miri tests pass for atomic operations
 - [X] T084 [P] Update documentation in `crates/rudo-gc/src/lib.rs` if public API changes are exposed
 - [ ] T085 Run ThreadSanitizer test to verify zero data races: `RUSTFLAGS="-Z sanitizer=thread" cargo test`
 

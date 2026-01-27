@@ -83,19 +83,22 @@ impl<T: Trace + ?Sized> GcBox<T> {
 
     /// Decrement the reference count. Returns true if count reached zero.
     /// Uses `AcqRel` ordering to synchronize with other threads.
-    pub fn dec_ref(&self) -> bool {
+    /// Takes a raw pointer to avoid Miri's stacked borrows issues with `&self` casting.
+    pub fn dec_ref(self_ptr: *mut Self) -> bool {
+        // SAFETY: self_ptr is valid because it's obtained from the atomic pointer in Gc::drop
+        let this = unsafe { &*self_ptr };
         loop {
-            let count = self.ref_count.load(Ordering::Relaxed);
+            let count = this.ref_count.load(Ordering::Relaxed);
             if count == 1 {
                 // SAFETY: We're the last reference, safe to drop
                 // The drop function handles value dropping
                 unsafe {
-                    (self.drop_fn)(std::ptr::from_ref(self) as *mut u8);
+                    (this.drop_fn)(self_ptr.cast::<u8>());
                 }
                 return true;
             }
             // Attempt to decrement
-            if self
+            if this
                 .ref_count
                 .compare_exchange_weak(count, count - 1, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
@@ -321,12 +324,14 @@ impl<T: Sized> AtomicNullable<T> {
 
     /// Load the value with the given ordering.
     #[must_use]
+    #[allow(clippy::ptr_as_ptr)]
     pub fn load(&self, ordering: Ordering) -> Nullable<T> {
         let addr = self.ptr.load(ordering);
         Nullable::from_ptr(addr as *mut T)
     }
 
     /// Store a value with the given ordering.
+    #[allow(clippy::ptr_as_ptr)]
     pub fn store(&self, ptr: Nullable<T>, ordering: Ordering) {
         self.ptr.store(ptr.as_ptr().cast::<()>() as usize, ordering);
     }
@@ -847,7 +852,7 @@ impl<T: Trace> Drop for Gc<T> {
             }
         }
 
-        let is_last = unsafe { (*gc_box_ptr).dec_ref() };
+        let is_last = GcBox::<T>::dec_ref(gc_box_ptr);
 
         if is_last {
             unsafe {
