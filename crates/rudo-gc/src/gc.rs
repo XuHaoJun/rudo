@@ -1227,6 +1227,12 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
 
                     if weak_count == 0 && (*gc_box_ptr).is_value_dead() {
                         // No weak refs, already dropped and dead - reclaim
+                        // CRITICAL FIX: Write free list head BEFORE clearing allocated bit
+                        // to prevent new allocations from reusing this slot with corrupted metadata
+                        let obj_cast = obj_ptr.cast::<Option<u16>>();
+                        obj_cast.write_unaligned(free_head);
+                        free_head = Some(i as u16);
+
                         (*header).clear_allocated(i);
                         reclaimed += 1;
                         is_alloc = false;
@@ -1234,22 +1240,30 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
                 }
 
                 if !is_alloc {
-                    // Slot is free - add to free list
+                    // Slot is free - add to free list (if not already done above)
                     let obj_ptr = page_addr.add(header_size + i * block_size);
-                    #[allow(clippy::cast_ptr_alignment)]
-                    let obj_cast = obj_ptr.cast::<Option<u16>>();
-                    obj_cast.write_unaligned(free_head);
-                    #[allow(clippy::cast_possible_truncation)]
-                    {
-                        free_head = Some(i as u16);
+                    // Check if free list head was already written (for reclaimed slots)
+                    let current_head = (*header).free_list_head;
+                    let idx_as_u16 = i as u16;
+                    let head_written = match current_head {
+                        Some(head) => head == idx_as_u16,
+                        None => false,
+                    };
+
+                    if !head_written {
+                        #[allow(clippy::cast_ptr_alignment)]
+                        let obj_cast = obj_ptr.cast::<Option<u16>>();
+                        obj_cast.write_unaligned(free_head);
+                        #[allow(clippy::cast_possible_truncation)]
+                        {
+                            free_head = Some(i as u16);
+                        }
                     }
                 }
             }
             (*header).free_list_head = free_head;
         }
     }
-
-    N_EXISTING.with(|n| n.set(n.get().saturating_sub(reclaimed)));
 
     reclaimed
 }
@@ -1367,7 +1381,6 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
             sys_alloc::Mmap::from_raw(page_ptr.as_ptr().cast::<u8>(), alloc_size);
 
             reclaimed += 1;
-            N_EXISTING.with(|n| n.set(n.get().saturating_sub(1)));
         }
     }
 
