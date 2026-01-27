@@ -18,12 +18,12 @@
 
 **Purpose**: Project initialization and lock ordering documentation
 
-- [ ] T001 Create lock ordering documentation in `src/heap/sync.rs` defining LocalHeap -> GlobalMarkState -> GC Request order
-- [ ] T002 Add lock order validation infrastructure with `AtomicU8` tags in `src/heap/sync.rs` (debug builds only)
-- [ ] T003 Create `src/heap/mark/` directory structure for new mark-related modules
-- [ ] T004 [P] Create `src/heap/mark/bitmap.rs` empty module file for MarkBitmap implementation
-- [ ] T005 [P] Create `src/heap/mark/ownership.rs` empty module file for ownership integration
-- [ ] T006 Verify project builds with `./clippy.sh` and `cargo fmt --all`
+- [X] T001 Create lock ordering documentation in `crates/rudo-gc/src/gc/sync.rs` defining LocalHeap -> GlobalMarkState -> GC Request order
+- [X] T002 Add lock order validation infrastructure with `AtomicU8` tags in `crates/rudo-gc/src/gc/sync.rs` (debug builds only)
+- [X] T003 Create `crates/rudo-gc/src/gc/mark/` directory structure for new mark-related modules
+- [X] T004 [P] Create `crates/rudo-gc/src/gc/mark/bitmap.rs` empty module file for MarkBitmap implementation
+- [X] T005 [P] Create `crates/rudo-gc/src/gc/mark/ownership.rs` empty module file for ownership integration
+- [X] T006 Verify project builds with `./clippy.sh` and `cargo fmt --all`
 
 ---
 

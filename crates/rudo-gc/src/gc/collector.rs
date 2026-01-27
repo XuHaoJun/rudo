@@ -3,9 +3,6 @@
 //! This module implements the core garbage collection logic using
 //! a mark-sweep algorithm with the `BiBOP` memory layout.
 
-mod marker;
-mod worklist;
-
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::ptr::NonNull;
