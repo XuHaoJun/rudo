@@ -44,12 +44,12 @@ Phase 6: US4 (Cross-Thread Refs) ──┘
 
 ### Tasks
 
-- [ ] T001 Create `crates/rudo-gc/src/gc/worklist.rs` module file with basic module declaration in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
-- [ ] T002 Create `crates/rudo-gc/src/gc/marker.rs` module file with basic module declaration in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T003 Add module exports to `crates/rudo-gc/src/gc.rs` for `worklist` and `marker` modules in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc.rs`
-- [ ] T004 Create test file `crates/rudo-gc/tests/parallel_gc.rs` with basic test module structure in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
-- [ ] T005 Run `./clippy.sh` to verify no lint warnings in project root
-- [ ] T006 Run `./test.sh` to verify all existing tests pass in project root
+- [X] T001 Create `crates/rudo-gc/src/gc/worklist.rs` module file with basic module declaration in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
+- [X] T002 Create `crates/rudo-gc/src/gc/marker.rs` module file with basic module declaration in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T003 Add module exports to `crates/rudo-gc/src/gc.rs` for `worklist` and `marker` modules in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc.rs`
+- [X] T004 Create test file `crates/rudo-gc/tests/parallel_gc.rs` with basic test module structure in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
+- [X] T005 Run `./clippy.sh` to verify no lint warnings in project root
+- [X] T006 Run `./test.sh` to verify all existing tests pass in project root
 
 ---
 
@@ -59,16 +59,16 @@ Phase 6: US4 (Cross-Thread Refs) ──┘
 
 ### Tasks
 
-- [ ] T007 [P] Implement `StealQueue<T, const N: usize>` struct with buffer, bottom, top, mask fields in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
-- [ ] T008 [P] Implement `StealQueue::new()` constructor with power-of-2 validation in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
-- [ ] T009 [P] Implement `StealQueue::push()` LIFO push operation with SAFETY comments in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
-- [ ] T010 [P] Implement `StealQueue::pop()` LIFO pop operation with SAFETY comments in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
-- [ ] T011 [P] Implement `StealQueue::steal()` FIFO steal operation with SAFETY comments in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
-- [ ] T012 [P] Implement `StealQueue::len()`, `is_empty()`, `is_full()` helper methods in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
-- [ ] T013 Add unit tests for `StealQueue` operations in `crates/rudo-gc/src/gc/worklist.rs`
-- [ ] T014 [P] Add `owner_thread: std::thread::ThreadId` field to `PageHeader` struct in `/home/noah/Desktop/rudo/crates/rudo-gc/src/heap.rs`
-- [ ] T015 [P] Implement `PageHeader::try_mark()` CAS-based atomic marking with SAFETY comments in `/home/noah/Desktop/rudo/crates/rudo-gc/src/heap.rs`
-- [ ] T016 [P] Implement `PageHeader::is_fully_marked()` method to check all objects marked in `/home/noah/Desktop/rudo/crates/rudo-gc/src/heap.rs`
+- [X] T007 [P] Implement `StealQueue<T, const N: usize>` struct with buffer, bottom, top, mask fields in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
+- [X] T008 [P] Implement `StealQueue::new()` constructor with power-of-2 validation in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
+- [X] T009 [P] Implement `StealQueue::push()` LIFO push operation with SAFETY comments in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
+- [X] T010 [P] Implement `StealQueue::pop()` LIFO pop operation with SAFETY comments in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
+- [X] T011 [P] Implement `StealQueue::steal()` FIFO steal operation with SAFETY comments in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
+- [X] T012 [P] Implement `StealQueue::len()`, `is_empty()`, `is_full()` helper methods in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
+- [X] T013 Add unit tests for `StealQueue` operations in `crates/rudo-gc/src/gc/worklist.rs`
+- [X] T014 [P] Add `owner_thread: std::thread::ThreadId` field to `PageHeader` struct in `/home/noah/Desktop/rudo/crates/rudo-gc/src/heap.rs`
+- [X] T015 [P] Implement `PageHeader::try_mark()` CAS-based atomic marking with SAFETY comments in `/home/noah/Desktop/rudo/crates/rudo-gc/src/heap.rs`
+- [X] T016 [P] Implement `PageHeader::is_fully_marked()` method to check all objects marked in `/home/noah/Desktop/rudo/crates/rudo-gc/src/heap.rs`
 
 ---
 
@@ -81,20 +81,20 @@ Phase 6: US4 (Cross-Thread Refs) ──┘
 
 ### Tasks
 
-- [ ] T017 [P] [US1] Implement `PerThreadMarkQueue` struct with local_queue, steal_queue, owned_pages, marked_count fields in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T018 [US1] Implement `PerThreadMarkQueue::new()` constructor in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T019 [US1] Implement `PerThreadMarkQueue::push_local()` and `pop_local()` methods in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T020 [US1] Implement `PerThreadMarkQueue::steal()` method (called by other threads) in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T017 [P] [US1] Implement `PerThreadMarkQueue` struct with local_queue, steal_queue, owned_pages, marked_count fields in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T018 [US1] Implement `PerThreadMarkQueue::new()` constructor in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T019 [US1] Implement `PerThreadMarkQueue::push_local()` and `pop_local()` methods in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T020 [US1] Implement `PerThreadMarkQueue::steal()` method (called by other threads) in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
 - [ ] T021 [US1] Implement `PerThreadMarkQueue::process_owned_page()` to process all objects on owned page in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T022 [P] [US1] Implement `ParallelMarkCoordinator` struct with queues, barrier, page_to_queue, total_marked fields in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T023 [US1] Implement `ParallelMarkCoordinator::new()` with worker count validation in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T022 [P] [US1] Implement `ParallelMarkCoordinator` struct with queues, barrier, page_to_queue, total_marked fields in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T023 [US1] Implement `ParallelMarkCoordinator::new()` with worker count validation in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
 - [ ] T024 [US1] Implement `ParallelMarkCoordinator::register_pages()` to map page addresses to queue indices in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
 - [ ] T025 [US1] Implement `ParallelMarkCoordinator::distribute_roots()` to assign roots to appropriate workers in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
 - [ ] T026 [US1] Implement `ParallelMarkCoordinator::mark()` with barrier synchronization in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T027 [US1] Integrate parallel marking into `perform_multi_threaded_collect()` in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc.rs`
-- [ ] T028 [US1] Add `GcVisitorConcurrent` visitor for parallel marking with reference routing in `/home/noah/Desktop/rudo/crates/rudo-gc/src/trace.rs`
-- [ ] T029 [US1] Add integration test `test_parallel_major_gc()` for correctness in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
-- [ ] T030 [US1] Add benchmark test `benchmark_parallel_marking_performance()` to verify speedup in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
+- [X] T027 [US1] Integrate parallel marking into `perform_multi_threaded_collect()` in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc.rs`
+- [X] T028 [US1] Add `GcVisitorConcurrent` visitor for parallel marking with reference routing in `/home/noah/Desktop/rudo/crates/rudo-gc/src/trace.rs`
+- [X] T029 [US1] Add integration test `test_parallel_major_gc()` for correctness in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
+- [X] T030 [US1] Add benchmark test `benchmark_parallel_marking_performance()` to verify speedup in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
 
 ---
 

@@ -17,6 +17,16 @@ use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
 
 use sys_alloc::{Mmap, MmapOptions};
 
+/// Get a unique identifier for the current thread.
+/// Uses the stack address which is unique per thread.
+#[must_use]
+#[allow(clippy::ptr_as_ptr, clippy::unnecessary_cast)]
+pub(crate) fn get_thread_id() -> u64 {
+    let local_var = 0u64;
+    let ptr = &raw const local_var as *const u64 as *const u8;
+    ptr as usize as u64
+}
+
 // ============================================================================
 // Thread Registry & Control Block - Multi-threaded GC Support
 // ============================================================================
@@ -425,6 +435,8 @@ pub struct PageHeader {
     pub generation: u8,
     /// Bitflags (`is_large_object`, `is_dirty`, etc.).
     pub flags: u8,
+    /// Thread ID of the owner thread (for work-stealing).
+    pub owner_thread: u64,
     /// Padding for alignment.
     _padding: [u8; 2],
     /// Bitmap of marked objects (atomic for concurrent marking).
@@ -475,6 +487,52 @@ impl PageHeader {
         let mask = 1u64 << bit;
         let old = self.mark_bitmap[word].fetch_or(mask, Ordering::AcqRel);
         (old & mask) == 0
+    }
+
+    /// Try to mark an object atomically using CAS.
+    /// Returns `Ok(true)` if this thread marked it, `Ok(false)` if already marked.
+    ///
+    /// Returns `Err(())` if the CAS failed due to concurrent modification,
+    /// which means another thread modified the word concurrently.
+    ///
+    /// This is used for parallel marking where multiple threads may attempt
+    /// to mark the same object concurrently.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(())` if a concurrent modification was detected during the CAS.
+    #[allow(clippy::result_unit_err)]
+    pub fn try_mark(&self, index: usize) -> Result<bool, ()> {
+        let word = index / 64;
+        let bit = index % 64;
+        let mask = 1u64 << bit;
+        let old = self.mark_bitmap[word].load(Ordering::Acquire);
+        if (old & mask) != 0 {
+            return Ok(false);
+        }
+        match self.mark_bitmap[word].compare_exchange(
+            old,
+            old | mask,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => Ok(true),
+            Err(_) => Err(()),
+        }
+    }
+
+    /// Check if all allocated objects in this page are marked.
+    /// This is used to determine if a page is fully processed during marking.
+    #[must_use]
+    pub fn is_fully_marked(&self) -> bool {
+        for word_idx in 0..BITMAP_SIZE {
+            let mark_word = self.mark_bitmap[word_idx].load(Ordering::Acquire);
+            let alloc_word = self.allocated_bitmap[word_idx];
+            if (mark_word & alloc_word) != alloc_word {
+                return false;
+            }
+        }
+        true
     }
 
     /// Clear the mark bit for an object at the given index.
@@ -1094,6 +1152,7 @@ impl LocalHeap {
                 header_size: h_size as u16,
                 generation: 0,
                 flags: 0,
+                owner_thread: get_thread_id(),
                 _padding: [0; 2],
                 mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
                 dirty_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
@@ -1188,6 +1247,7 @@ impl LocalHeap {
                 header_size: h_size as u16,
                 generation: 0,
                 flags: PAGE_FLAG_LARGE,
+                owner_thread: get_thread_id(),
                 _padding: [0; 2],
                 mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
                 dirty_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),

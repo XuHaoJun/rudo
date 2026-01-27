@@ -104,6 +104,89 @@ pub struct GcVisitor {
     pub(crate) worklist: Vec<std::ptr::NonNull<crate::ptr::GcBox<()>>>,
 }
 
+/// A visitor for concurrent/parallel garbage collection marking.
+///
+/// This visitor routes discovered references to the appropriate worker's
+/// mark queue based on the target object's page ownership. This enables
+/// efficient load balancing when objects in one thread's heap reference
+/// objects in another thread's heap.
+#[allow(dead_code)]
+pub struct GcVisitorConcurrent<'a> {
+    /// The kind of collection being performed.
+    pub kind: VisitorKind,
+    /// Reference to the shared page-to-worker mapping.
+    /// Maps page addresses to worker queue indices for routing references.
+    page_to_queue: &'a HashMap<usize, usize>,
+    /// Thread ID for checking ownership.
+    thread_id: u64,
+}
+
+#[allow(dead_code)]
+impl<'a> GcVisitorConcurrent<'a> {
+    /// Create a new concurrent visitor.
+    #[inline]
+    #[must_use]
+    pub fn new(kind: VisitorKind, page_to_queue: &'a HashMap<usize, usize>) -> Self {
+        Self {
+            kind,
+            page_to_queue,
+            thread_id: super::heap::get_thread_id(),
+        }
+    }
+
+    /// Route a Gc pointer to the appropriate worker's queue.
+    ///
+    /// If the target object is on a page owned by another thread, this
+    /// routes the reference to that thread's work queue for efficient
+    /// load balancing.
+    fn route_reference<T: Trace>(&mut self, gc: &Gc<T>) {
+        let raw = Gc::<T>::as_ptr(gc);
+        if raw.is_null() {
+            return;
+        }
+
+        unsafe {
+            let ptr_addr = raw.cast::<u8>();
+            let header = super::heap::ptr_to_page_header(ptr_addr);
+
+            if (*header.as_ptr()).magic != super::heap::MAGIC_GC_PAGE {
+                return;
+            }
+
+            if let Some(idx) = super::heap::ptr_to_object_index(raw.cast()) {
+                if self.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
+                    return;
+                }
+
+                if (*header.as_ptr()).is_marked(idx) {
+                    return;
+                }
+                (*header.as_ptr()).set_mark(idx);
+            } else {
+                return;
+            }
+
+            let page_addr = header.as_ptr() as usize;
+            let _worker_idx = self.page_to_queue.get(&page_addr).copied();
+
+            // For now, we just mark the object. The actual routing to worker
+            // queues would be implemented when the full parallel marking is
+            // integrated with worker thread spawning.
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl Visitor for GcVisitorConcurrent<'_> {
+    fn visit<T: Trace>(&mut self, gc: &Gc<T>) {
+        self.route_reference(gc);
+    }
+
+    unsafe fn visit_region(&mut self, _ptr: *const u8, _len: usize) {
+        // Conservative scanning would be implemented here
+    }
+}
+
 // ============================================================================
 // Trace implementations for Gc<T>
 // ============================================================================

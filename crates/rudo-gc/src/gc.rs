@@ -3,11 +3,15 @@
 //! This module implements the core garbage collection logic using
 //! a mark-sweep algorithm with the `BiBOP` memory layout.
 
+mod marker;
+mod worklist;
+
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
+use crate::gc::marker::ParallelMarkConfig;
 use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
 use crate::trace::{GcVisitor, Trace, Visitor, VisitorKind};
@@ -707,6 +711,87 @@ fn mark_major_roots_multi(
     });
 
     visitor.process_worklist();
+}
+
+/// Mark roots using parallel marking with work stealing.
+///
+/// This function sets up parallel marking infrastructure and distributes
+/// root objects across worker queues. Workers process their queues in parallel,
+/// with work stealing to balance load.
+#[allow(dead_code)]
+#[allow(clippy::unnecessary_cast, clippy::ptr_cast_constness)]
+fn mark_major_roots_parallel(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+    config: ParallelMarkConfig,
+) {
+    if config.num_workers < 2 || !config.parallel_major_gc {
+        mark_major_roots_multi(heap, stack_roots);
+        return;
+    }
+
+    let num_workers = config
+        .num_workers
+        .min(crate::gc::marker::available_parallelism());
+
+    let (coordinator, worker_queues) = crate::gc::marker::init_parallel_marking(num_workers);
+
+    let root_pages: Vec<*const PageHeader> = heap
+        .all_pages()
+        .filter_map(|p| unsafe {
+            let header = p.as_ptr();
+            if (*header).generation == 1 {
+                Some(header.cast_const())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    coordinator.start_marking(&worker_queues, &root_pages);
+
+    let mut visitor = GcVisitor::new(VisitorKind::Major);
+
+    for &(ptr, _) in stack_roots.iter().take(root_pages.len().min(num_workers)) {
+        unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                let worker_idx = ptr as usize % num_workers;
+                worker_queues[worker_idx].push(gc_box.as_ptr());
+            }
+        }
+    }
+
+    unsafe {
+        crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                let worker_idx = ptr as usize % num_workers;
+                worker_queues[worker_idx].push(gc_box.as_ptr());
+            }
+        });
+    }
+
+    TEST_ROOTS.with(|roots| {
+        for &ptr in roots.borrow().iter() {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    let worker_idx = ptr as usize % num_workers;
+                    worker_queues[worker_idx].push(gc_box.as_ptr());
+                }
+            }
+        }
+    });
+
+    for queue in &worker_queues {
+        while let Some(obj) = queue.pop() {
+            let gc_box_ptr = obj as *mut GcBox<()>;
+
+            unsafe {
+                ((*obj).trace_fn)(gc_box_ptr.cast(), &mut visitor);
+            }
+        }
+    }
+
+    coordinator.wait_for_completion();
 }
 
 /// Minor Collection: Collect Young Generation only.
