@@ -9,6 +9,7 @@ use std::hash::BuildHasher;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::ptr::GcBox;
 use crate::Gc;
 
 // ============================================================================
@@ -119,6 +120,8 @@ pub struct GcVisitorConcurrent<'a> {
     page_to_queue: &'a HashMap<usize, usize>,
     /// Thread ID for checking ownership.
     thread_id: u64,
+    /// Callback for routing discovered references to work queues.
+    route_fn: &'a mut dyn FnMut(*const GcBox<()>),
 }
 
 #[allow(dead_code)]
@@ -126,11 +129,16 @@ impl<'a> GcVisitorConcurrent<'a> {
     /// Create a new concurrent visitor.
     #[inline]
     #[must_use]
-    pub fn new(kind: VisitorKind, page_to_queue: &'a HashMap<usize, usize>) -> Self {
+    pub fn new(
+        kind: VisitorKind,
+        page_to_queue: &'a HashMap<usize, usize>,
+        route_fn: &'a mut dyn FnMut(*const GcBox<()>),
+    ) -> Self {
         Self {
             kind,
             page_to_queue,
             thread_id: super::heap::get_thread_id(),
+            route_fn,
         }
     }
 
@@ -158,6 +166,8 @@ impl<'a> GcVisitorConcurrent<'a> {
                 return;
             }
 
+            let page_addr = header.as_ptr() as usize;
+
             if let Some(idx) = super::heap::ptr_to_object_index(raw.cast()) {
                 if self.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
                     return;
@@ -171,12 +181,11 @@ impl<'a> GcVisitorConcurrent<'a> {
                 return;
             }
 
-            let page_addr = header.as_ptr() as usize;
-            let _worker_idx = self.page_to_queue.get(&page_addr).copied();
+            let worker_idx = self.page_to_queue.get(&page_addr).copied();
 
-            // For now, we just mark the object. The actual routing to worker
-            // queues would be implemented when the full parallel marking is
-            // integrated with worker thread spawning.
+            if let Some(_idx) = worker_idx {
+                (self.route_fn)(raw.cast());
+            }
         }
     }
 }

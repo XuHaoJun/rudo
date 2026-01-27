@@ -427,11 +427,14 @@ fn perform_single_threaded_collect_with_wake() {
     {
         let registry = crate::heap::thread_registry().lock().unwrap();
 
-        // Wake any threads already at safepoints and clear their flags
+        // Clear gc_requested for ALL threads to prevent deadlock
+        // Threads that haven't reached safepoint yet will see gc_requested = false
+        // and skip rendezvous entirely (safe since GC already completed)
         let mut woken_count = 0;
         for tcb in &registry.threads {
+            tcb.gc_requested.store(false, Ordering::SeqCst);
+
             if tcb.state.load(Ordering::Acquire) == crate::heap::THREAD_STATE_SAFEPOINT {
-                tcb.gc_requested.store(false, Ordering::SeqCst);
                 tcb.park_cond.notify_all();
                 tcb.state
                     .store(crate::heap::THREAD_STATE_EXECUTING, Ordering::Release);

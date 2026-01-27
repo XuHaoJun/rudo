@@ -10,79 +10,81 @@
 
 use std::cell::Cell;
 use std::num::NonZeroUsize;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::Barrier;
 
 use super::worklist::StealQueue;
 use crate::heap::PageHeader;
 use crate::ptr::GcBox;
-use crate::trace::{Trace, Visitor};
-use crate::Gc;
-
-/// A visitor that pushes discovered objects to a mark queue.
-struct MarkQueueVisitor<'a> {
-    queue: &'a PerThreadMarkQueue,
-}
-
-impl<'a> MarkQueueVisitor<'a> {
-    #[must_use]
-    const fn new(queue: &'a PerThreadMarkQueue) -> Self {
-        Self { queue }
-    }
-}
-
-impl Visitor for MarkQueueVisitor<'_> {
-    fn visit<T: Trace>(&mut self, gc: &Gc<T>) {
-        #[allow(clippy::ptr_as_ptr)]
-        let ptr = Gc::<T>::as_ptr(gc) as *const GcBox<()>;
-        self.queue.push(ptr);
-    }
-
-    unsafe fn visit_region(&mut self, _ptr: *const u8, _len: usize) {
-        // Conservative scanning would go here for native stacks/globals
-    }
-}
+use crate::trace::{GcVisitor, VisitorKind};
 
 /// A per-thread mark queue that holds objects to be traced.
 /// Objects are pushed to the local end (LIFO) for cache efficiency,
 /// and can be stolen from the remote end (FIFO) by other threads.
 pub struct PerThreadMarkQueue {
     /// The work-stealing queue for this thread's mark work.
+    /// Uses usize to ensure Send + Sync (raw pointers aren't automatically Send).
     #[allow(clippy::arc_with_non_send_sync)]
-    queue: Arc<StealQueue<*const GcBox<()>, MARK_QUEUE_SIZE>>,
+    queue: Arc<StealQueue<usize, MARK_QUEUE_SIZE>>,
     /// The bottom index for local push/pop operations.
     bottom: Cell<usize>,
+    /// Worker index for this queue.
+    worker_idx: usize,
+    /// Pages owned by this worker for processing.
+    owned_pages: Vec<NonNull<PageHeader>>,
+    /// Count of objects marked by this worker.
+    marked_count: AtomicUsize,
 }
 
 const MARK_QUEUE_SIZE: usize = 1024;
 
 impl PerThreadMarkQueue {
-    /// Create a new per-thread mark queue.
+    /// Create a new per-thread mark queue with the given worker index.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new_with_index(worker_idx: usize) -> Self {
         Self {
             queue: Arc::new(StealQueue::new()),
             bottom: Cell::new(0),
+            worker_idx,
+            owned_pages: Vec::new(),
+            marked_count: AtomicUsize::new(0),
         }
+    }
+
+    /// Create a new per-thread mark queue.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::new_with_index(0)
     }
 
     /// Push an object onto this thread's mark queue.
     /// Returns true if successful, false if the queue is full.
     pub fn push(&self, obj: *const GcBox<()>) -> bool {
-        self.queue.push(&self.bottom, obj)
+        self.queue.push(&self.bottom, obj as usize)
+    }
+
+    /// Push from a NonNull pointer.
+    pub fn push_non_null(&self, obj: NonNull<GcBox<()>>) -> bool {
+        self.push(obj.as_ptr())
     }
 
     /// Pop an object from the local end (LIFO).
     /// Returns None if the queue is empty.
     pub fn pop(&self) -> Option<*const GcBox<()>> {
-        self.queue.pop(&self.bottom)
+        self.queue
+            .pop(&self.bottom)
+            .map(|ptr| ptr as *const GcBox<()>)
     }
 
     /// Steal an object from the remote end (FIFO).
     /// Called by other threads to steal work.
     /// Returns None if the queue is empty.
     pub fn steal(&self) -> Option<*const GcBox<()>> {
-        self.queue.steal(&self.bottom)
+        self.queue
+            .steal(&self.bottom)
+            .map(|ptr| ptr as *const GcBox<()>)
     }
 
     /// Get the current length of the queue.
@@ -119,8 +121,59 @@ impl PerThreadMarkQueue {
 
     /// Get a reference to the underlying queue for sharing with other threads.
     #[must_use]
-    pub const fn queue(&self) -> &Arc<StealQueue<*const GcBox<()>, MARK_QUEUE_SIZE>> {
+    pub const fn queue(&self) -> &Arc<StealQueue<usize, MARK_QUEUE_SIZE>> {
         &self.queue
+    }
+
+    /// Get the worker index for this queue.
+    #[must_use]
+    pub const fn worker_idx(&self) -> usize {
+        self.worker_idx
+    }
+
+    /// Register a page as owned by this worker.
+    pub fn add_owned_page(&mut self, page: NonNull<PageHeader>) {
+        self.owned_pages.push(page);
+    }
+
+    /// Get the number of objects marked by this worker.
+    #[must_use]
+    pub fn marked_count(&self) -> usize {
+        self.marked_count.load(Ordering::Relaxed)
+    }
+
+    /// Process all objects on an owned page.
+    /// Returns the number of objects marked on this page.
+    unsafe fn process_owned_page(&self, page: NonNull<PageHeader>, kind: VisitorKind) -> usize {
+        let header = page.as_ptr();
+        let mut marked = 0;
+        let block_size = (*header).block_size as usize;
+        let header_size = PageHeader::header_size(block_size);
+        let obj_count = (*header).obj_count as usize;
+
+        for i in 0..obj_count {
+            if (*header).is_allocated(i) && !(*header).is_marked(i) {
+                if kind == VisitorKind::Minor && (*header).generation > 0 {
+                    continue;
+                }
+
+                let obj_ptr = page.cast::<u8>().add(header_size + i * block_size);
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+                (*header).set_mark(i);
+                marked += 1;
+
+                self.push(gc_box_ptr.as_ptr());
+            }
+        }
+
+        marked
+    }
+
+    /// Increment the marked count.
+    pub fn inc_marked_count(&self, count: usize) {
+        self.marked_count.fetch_add(count, Ordering::Relaxed);
     }
 }
 
@@ -210,11 +263,13 @@ pub struct ParallelMarkCoordinator {
     /// The number of worker threads participating in marking.
     num_workers: usize,
     /// Barrier for synchronizing workers at the end of marking.
-    barrier: Arc<AtomicUsize>,
+    barrier: Arc<Barrier>,
     /// Shared counter for pages that need processing.
     pages_remaining: AtomicUsize,
     /// Flag indicating marking is complete.
     marking_complete: AtomicUsize,
+    /// Total marked count.
+    total_marked: AtomicUsize,
 }
 
 impl ParallelMarkCoordinator {
@@ -223,9 +278,10 @@ impl ParallelMarkCoordinator {
     pub fn new(num_workers: usize) -> Self {
         Self {
             num_workers: num_workers.max(1),
-            barrier: Arc::new(AtomicUsize::new(0)),
+            barrier: Arc::new(Barrier::new(num_workers.max(1))),
             pages_remaining: AtomicUsize::new(0),
             marking_complete: AtomicUsize::new(0),
+            total_marked: AtomicUsize::new(0),
         }
     }
 
@@ -305,19 +361,97 @@ impl ParallelMarkCoordinator {
     pub fn pages_remaining(&self) -> usize {
         self.pages_remaining.load(Ordering::Acquire)
     }
+
+    /// Get the total number of objects marked.
+    #[must_use]
+    pub fn total_marked(&self) -> usize {
+        self.total_marked.load(Ordering::Acquire)
+    }
+
+    /// Record marked objects from a worker.
+    pub fn record_marked(&self, count: usize) {
+        self.total_marked.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// Wait at the barrier for all workers to synchronize.
+    pub fn wait_at_barrier(&self) {
+        self.barrier.wait();
+    }
+
+    /// Mark that this worker has completed.
+    pub fn worker_completed(&self) {
+        self.marking_complete.fetch_add(1, Ordering::Release);
+    }
 }
 
 /// Execute the mark phase of garbage collection on a work queue.
 /// This function is run by each worker thread.
 ///
-/// NOTE: This is a placeholder for the actual implementation.
-/// The current GC uses `GcVisitor` with its own worklist. For parallel marking,
-/// we'll need to either:
-/// 1. Modify `GcVisitor` to use our mark queue, or
-/// 2. Create a custom tracing approach for parallel marking
-#[allow(dead_code)]
-const fn worker_mark_loop(_queue: &PerThreadMarkQueue, _coordinator: &ParallelMarkCoordinator) {
-    // Implementation deferred until integration with gc.rs
+/// Algorithm (from spec section 4.1):
+/// 1. Process owned pages
+/// 2. Process local queue (LIFO)
+/// 3. Steal from other queues (FIFO) when local queue empty
+pub fn worker_mark_loop(
+    queue: &PerThreadMarkQueue,
+    all_queues: &[PerThreadMarkQueue],
+    kind: VisitorKind,
+) -> usize {
+    let mut marked = 0;
+    let mut visitor = GcVisitor::new(kind);
+
+    loop {
+        while let Some(obj) = queue.pop() {
+            marked += 1;
+
+            unsafe {
+                let ptr_addr = obj as *const GcBox<()> as *const u8;
+                let header = crate::heap::ptr_to_page_header(ptr_addr);
+
+                if header.as_ref().magic != crate::heap::MAGIC_GC_PAGE {
+                    continue;
+                }
+
+                let gc_box_ptr = obj as *mut GcBox<()>;
+
+                ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
+            }
+        }
+
+        if !try_steal_work(queue, all_queues) {
+            break;
+        }
+    }
+
+    marked
+}
+
+/// Try to steal work from other queues.
+/// Returns true if work was stolen, false if all queues are empty.
+fn try_steal_work(queue: &PerThreadMarkQueue, all_queues: &[PerThreadMarkQueue]) -> bool {
+    for other in all_queues {
+        if other.worker_idx() == queue.worker_idx() {
+            continue;
+        }
+
+        if let Some(obj) = other.steal() {
+            queue.push(obj);
+            return true;
+        }
+    }
+
+    false
+}
+
+impl Clone for PerThreadMarkQueue {
+    fn clone(&self) -> Self {
+        Self {
+            queue: Arc::clone(&self.queue),
+            bottom: Cell::new(self.bottom.get()),
+            worker_idx: self.worker_idx,
+            owned_pages: Vec::new(),
+            marked_count: AtomicUsize::new(0),
+        }
+    }
 }
 
 /// Get the number of CPUs available for parallel marking.
@@ -329,7 +463,9 @@ pub fn available_parallelism() -> usize {
 /// Create worker queues for parallel marking.
 #[must_use]
 pub fn create_worker_queues(count: usize) -> Vec<PerThreadMarkQueue> {
-    (0..count).map(|_| PerThreadMarkQueue::new()).collect()
+    (0..count)
+        .map(|i| PerThreadMarkQueue::new_with_index(i))
+        .collect()
 }
 
 /// Initialize parallel marking infrastructure.
