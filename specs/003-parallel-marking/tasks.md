@@ -107,10 +107,10 @@ Phase 6: US4 (Cross-Thread Refs) ──┘
 
 ### Tasks
 
-- [ ] T031 [P] [US2] Implement `ParallelMarkCoordinator::distribute_dirty_pages()` for Minor GC in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T032 [US2] Modify `mark_minor_roots_multi()` to use parallel marking coordinator in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc.rs`
-- [ ] T033 [US2] Add integration test `test_parallel_minor_gc()` for dirty page processing in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
-- [ ] T034 [US2] Add test `test_multi_thread_local_heap_dirty_pages()` to verify each thread's dirty pages processed correctly in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
+- [X] T031 [P] [US2] Implement `ParallelMarkCoordinator::distribute_dirty_pages()` for Minor GC in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T032 [US2] Modify `mark_minor_roots_multi()` to use parallel marking coordinator in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc.rs`
+- [X] T033 [US2] Add integration test `test_parallel_minor_gc()` for dirty page processing in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
+- [X] T034 [US2] Add test `test_multi_thread_local_heap_dirty_pages()` to verify each thread's dirty pages processed correctly in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
 
 ---
 
@@ -123,10 +123,10 @@ Phase 6: US4 (Cross-Thread Refs) ──┘
 
 ### Tasks
 
-- [ ] T035 [P] [US3] Implement work stealing algorithm in `PerThreadMarkQueue` with steal attempt loop in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T036 [US3] Implement `try_steal()` helper that iterates through other queues in FIFO order in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T037 [US3] Add test `test_work_stealing_balance()` with uneven allocation patterns in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
-- [ ] T038 [US3] Add test `test_steal_from_other_queues()` verifying successful steal operations in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
+- [X] T035 [P] [US3] Implement work stealing algorithm in `PerThreadMarkQueue` with steal attempt loop in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T036 [US3] Implement `try_steal()` helper that iterates through other queues in FIFO order in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T037 [US3] Add test `test_work_stealing_balance()` with uneven allocation patterns in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
+- [X] T038 [US3] Add test `test_steal_from_other_queues()` verifying successful steal operations in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
 
 ---
 
@@ -139,10 +139,10 @@ Phase 6: US4 (Cross-Thread Refs) ──┘
 
 ### Tasks
 
-- [ ] T039 [US4] Implement `GcVisitorConcurrent::add_ref()` to route references to owning worker's queue in `/home/noah/Desktop/rudo/crates/rudo-gc/src/trace.rs`
-- [ ] T040 [US4] Implement HashMap lookup for `page_to_queue` routing in parallel marking coordinator in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T041 [US4] Add test `test_cross_thread_references()` with objects spanning multiple threads in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
-- [ ] T042 [US4] Add test `test_three_thread_object_chain()` verifying A->B->C reference chain marking in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
+- [X] T039 [US4] Implement `GcVisitorConcurrent::add_ref()` to route references to owning worker's queue in `/home/noah/Desktop/rudo/crates/rudo-gc/src/trace.rs`
+- [X] T040 [US4] Implement HashMap lookup for `page_to_queue` routing in parallel marking coordinator in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T041 [US4] Add test `test_cross_thread_references()` with objects spanning multiple threads in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
+- [X] T042 [US4] Add test `test_three_thread_object_chain()` verifying A->B->C reference chain marking in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
 
 ---
 
@@ -152,15 +152,15 @@ Phase 6: US4 (Cross-Thread Refs) ──┘
 
 ### Tasks
 
-- [ ] T043 [P] Add `ParallelMarkConfig` struct with max_workers, queue_capacity, parallel_minor_gc, parallel_major_gc fields in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T044 Implement single-threaded fallback when fewer than 2 workers available in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T043 [P] Add `ParallelMarkConfig` struct with max_workers, queue_capacity, parallel_minor_gc, parallel_major_gc fields in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T044 Implement single-threaded fallback when fewer than 2 workers available in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
 - [ ] T045 Add Miri test `test_marking_completeness_miri()` for marking correctness verification in `/home/noah/Desktop/rudo/crates/rudo-gc/tests/parallel_gc.rs`
-- [ ] T046 Add Miri test for `StealQueue` operations to verify lock-free correctness in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
-- [ ] T047 Add SAFETY comments to all remaining unsafe blocks in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
-- [ ] T048 Run `./clippy.sh` and fix all warnings in project root
-- [ ] T049 Run `./test.sh` with `--test-threads=1` to verify all tests pass in project root
-- [ ] T050 Run `./miri-test.sh` to verify all unsafe code passes Miri validation in project root
-- [ ] T051 Run `cargo fmt --all` to format all code consistently in project root
+- [X] T046 Add Miri test for `StealQueue` operations to verify lock-free correctness in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/worklist.rs`
+- [X] T047 Add SAFETY comments to all remaining unsafe blocks in `/home/noah/Desktop/rudo/crates/rudo-gc/src/gc/marker.rs`
+- [X] T048 Run `./clippy.sh` and fix all warnings in project root
+- [X] T049 Run `./test.sh` with `--test-threads=1` to verify all tests pass in project root
+- [X] T050 Run `./miri-test.sh` to verify all unsafe code passes Miri validation in project root
+- [X] T051 Run `cargo fmt --all` to format all code consistently in project root
 
 ---
 

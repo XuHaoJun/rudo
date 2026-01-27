@@ -278,4 +278,99 @@ mod tests {
 
         assert_eq!(queue.len(&bottom), 16);
     }
+
+    #[cfg(miri)]
+    #[test]
+    fn test_steal_queue_push_pop_miri() {
+        use std::thread;
+        let queue: StealQueue<i32, 64> = StealQueue::new();
+        let bottom = Cell::new(0);
+
+        for i in 0..32 {
+            assert!(queue.push(&bottom, i), "push failed at index {}", i);
+        }
+
+        for i in (0..32).rev() {
+            assert_eq!(queue.pop(&bottom), Some(i), "pop mismatch at index {}", i);
+        }
+
+        assert!(queue.is_empty(&bottom));
+    }
+
+    #[cfg(miri)]
+    #[test]
+    fn test_steal_queue_steal_miri() {
+        let queue: StealQueue<i32, 64> = StealQueue::new();
+        let bottom = Cell::new(0);
+
+        for i in 0..16 {
+            assert!(queue.push(&bottom, i));
+        }
+
+        for i in 0..16 {
+            assert_eq!(
+                queue.steal(&bottom),
+                Some(i),
+                "steal mismatch at index {}",
+                i
+            );
+        }
+
+        assert!(queue.is_empty(&bottom));
+    }
+
+    #[cfg(miri)]
+    #[test]
+    fn test_steal_queue_wrap_around_miri() {
+        let queue: StealQueue<i32, 8> = StealQueue::new();
+        let bottom = Cell::new(0);
+
+        for i in 0..8 {
+            assert!(queue.push(&bottom, i));
+        }
+
+        for _ in 0..4 {
+            assert_eq!(queue.pop(&bottom), Some(7));
+            assert!(queue.pop(&bottom).is_some());
+            assert!(queue.pop(&bottom).is_some());
+            assert!(queue.pop(&bottom).is_some());
+        }
+
+        for i in 0..8 {
+            assert!(
+                queue.push(&bottom, i + 100),
+                "push failed at wrap index {}",
+                i
+            );
+        }
+
+        for _ in 0..4 {
+            for _ in 0..2 {
+                assert!(queue.pop(&bottom).is_some());
+            }
+        }
+    }
+
+    #[cfg(miri)]
+    #[test]
+    fn test_steal_queue_single_threaded_race_miri() {
+        let queue: StealQueue<i32, 32> = StealQueue::new();
+        let bottom = Cell::new(0);
+
+        let mut values = Vec::new();
+        for i in 0..16 {
+            assert!(queue.push(&bottom, i));
+            if i % 4 == 0 {
+                if let Some(v) = queue.pop(&bottom) {
+                    values.push(v);
+                }
+            }
+        }
+
+        while let Some(v) = queue.pop(&bottom) {
+            values.push(v);
+        }
+
+        assert_eq!(values.len(), 16);
+    }
 }

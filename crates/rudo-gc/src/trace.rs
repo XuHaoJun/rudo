@@ -145,6 +145,11 @@ impl<'a> GcVisitorConcurrent<'a> {
             return;
         }
 
+        // SAFETY: We verified raw is non-null above. The ptr_to_page_header
+        // returns a valid NonNull<PageHeader> for any valid GC pointer.
+        // We verify the magic number before accessing the header fields.
+        // The object index is validated before marking to ensure we don't
+        // access out-of-bounds bitmap bits.
         unsafe {
             let ptr_addr = raw.cast::<u8>();
             let header = super::heap::ptr_to_page_header(ptr_addr);

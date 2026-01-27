@@ -676,6 +676,116 @@ fn mark_minor_roots_multi(
 
     visitor.process_worklist();
 }
+/// Mark roots using parallel marking for Minor GC.
+///
+/// This function processes dirty pages in parallel, distributing them
+/// across worker queues based on page ownership.
+#[allow(dead_code)]
+#[allow(clippy::unnecessary_cast, clippy::ptr_cast_constness)]
+fn mark_minor_roots_parallel(
+    heap: &mut LocalHeap,
+    stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
+    config: ParallelMarkConfig,
+) {
+    if config.max_workers < 2 || !config.parallel_minor_gc {
+        mark_minor_roots_multi(heap, stack_roots);
+        return;
+    }
+
+    let num_workers = config
+        .max_workers
+        .min(crate::gc::marker::available_parallelism());
+
+    let (coordinator, worker_queues) = crate::gc::marker::init_parallel_marking(num_workers);
+
+    let mut visitor = GcVisitor::new(VisitorKind::Minor);
+
+    for &(ptr, _) in stack_roots.iter().take(num_workers) {
+        unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                let worker_idx = ptr as usize % num_workers;
+                worker_queues[worker_idx].push(gc_box.as_ptr());
+            }
+        }
+    }
+
+    unsafe {
+        crate::stack::spill_registers_and_scan(|potential_ptr, _addr, _is_reg| {
+            if let Some(gc_box_ptr) =
+                crate::heap::find_gc_box_from_ptr(heap, potential_ptr as *const u8)
+            {
+                let worker_idx = potential_ptr as usize % num_workers;
+                worker_queues[worker_idx].push(gc_box_ptr.as_ptr());
+            }
+        });
+    }
+
+    TEST_ROOTS.with(|roots| {
+        for &ptr in roots.borrow().iter() {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                    let worker_idx = ptr as usize % num_workers;
+                    worker_queues[worker_idx].push(gc_box.as_ptr());
+                }
+            }
+        }
+    });
+
+    let mut dirty_pages: Vec<*const PageHeader> = Vec::new();
+    for page_ptr in heap.all_pages() {
+        unsafe {
+            let header = page_ptr.as_ptr();
+            if (*header).generation == 0 {
+                continue;
+            }
+            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+                continue;
+            }
+            dirty_pages.push(header);
+        }
+    }
+
+    let distribution = coordinator.distribute_dirty_pages(&dirty_pages, &worker_queues);
+
+    for (idx, page) in dirty_pages.iter().enumerate() {
+        let worker_idx = distribution[idx];
+        unsafe {
+            let header = *page;
+            let obj_count = (*header).obj_count as usize;
+            for i in 0..obj_count {
+                if (*header).is_dirty(i) {
+                    let block_size = (*header).block_size as usize;
+                    let header_size = PageHeader::header_size(block_size);
+                    let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                    worker_queues[worker_idx].push(gc_box_ptr);
+                }
+            }
+        }
+    }
+
+    for queue in &worker_queues {
+        while let Some(obj) = queue.pop() {
+            let gc_box_ptr = obj as *mut GcBox<()>;
+
+            unsafe {
+                ((*obj).trace_fn)(gc_box_ptr.cast(), &mut visitor);
+            }
+        }
+    }
+
+    coordinator.wait_for_completion();
+
+    for page in &dirty_pages {
+        unsafe {
+            (*page as *mut PageHeader)
+                .as_mut()
+                .unwrap()
+                .clear_all_dirty();
+        }
+    }
+}
 
 /// Mark roots from all threads' stacks for Major GC.
 fn mark_major_roots_multi(
@@ -725,13 +835,13 @@ fn mark_major_roots_parallel(
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
     config: ParallelMarkConfig,
 ) {
-    if config.num_workers < 2 || !config.parallel_major_gc {
+    if config.max_workers < 2 || !config.parallel_major_gc {
         mark_major_roots_multi(heap, stack_roots);
         return;
     }
 
     let num_workers = config
-        .num_workers
+        .max_workers
         .min(crate::gc::marker::available_parallelism());
 
     let (coordinator, worker_queues) = crate::gc::marker::init_parallel_marking(num_workers);

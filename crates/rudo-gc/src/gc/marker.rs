@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 #![allow(clippy::arc_with_non_send_sync)]
+#![allow(clippy::unused_self)]
+#![allow(clippy::use_self)]
 
 //! Parallel marking coordinator and worker implementations.
 //!
@@ -95,6 +97,26 @@ impl PerThreadMarkQueue {
         self.queue.is_empty(&self.bottom)
     }
 
+    /// Try to steal work from another queue.
+    /// Returns the stolen item if successful, None otherwise.
+    #[must_use]
+    pub fn try_steal_from(&self, other: &PerThreadMarkQueue) -> Option<*const GcBox<()>> {
+        other.steal()
+    }
+
+    /// Work stealing algorithm: attempt to steal from other queues
+    /// when local queue is empty or nearly empty.
+    /// Iterates through other queues in FIFO order to find work.
+    #[allow(dead_code)]
+    pub fn work_steal(&self, other_queues: &[&PerThreadMarkQueue]) -> Option<*const GcBox<()>> {
+        for other in other_queues {
+            if let Some(obj) = other.steal() {
+                return Some(obj);
+            }
+        }
+        None
+    }
+
     /// Get a reference to the underlying queue for sharing with other threads.
     #[must_use]
     pub const fn queue(&self) -> &Arc<StealQueue<*const GcBox<()>, MARK_QUEUE_SIZE>> {
@@ -105,6 +127,81 @@ impl PerThreadMarkQueue {
 impl Default for PerThreadMarkQueue {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Configuration for parallel marking behavior.
+#[derive(Clone, Copy, Debug)]
+pub struct ParallelMarkConfig {
+    /// Maximum number of worker threads for parallel marking.
+    /// If 0 or 1, single-threaded fallback is used.
+    pub max_workers: usize,
+    /// Capacity of each per-thread mark queue.
+    pub queue_capacity: usize,
+    /// Whether to enable parallel Major GC marking.
+    pub parallel_major_gc: bool,
+    /// Whether to enable parallel Minor GC marking.
+    pub parallel_minor_gc: bool,
+    /// Number of steal attempts before yielding.
+    pub steal_attempts_before_yield: u32,
+    /// Whether to enable work stealing load balancing.
+    pub work_stealing_enabled: bool,
+}
+
+impl Default for ParallelMarkConfig {
+    fn default() -> Self {
+        Self {
+            max_workers: 4,
+            queue_capacity: 1024,
+            parallel_major_gc: true,
+            parallel_minor_gc: true,
+            steal_attempts_before_yield: 10,
+            work_stealing_enabled: true,
+        }
+    }
+}
+
+impl ParallelMarkConfig {
+    /// Create a new configuration with the given maximum worker count.
+    #[must_use]
+    pub fn new(max_workers: usize) -> Self {
+        Self {
+            max_workers: max_workers.max(1),
+            ..Default::default()
+        }
+    }
+
+    /// Get the actual number of workers to use.
+    /// Returns 1 if fewer than 2 workers requested (single-threaded fallback).
+    #[must_use]
+    pub fn effective_workers(&self) -> usize {
+        self.max_workers.max(1)
+    }
+
+    /// Check if parallel marking should be used.
+    #[must_use]
+    pub fn use_parallel(&self) -> bool {
+        self.effective_workers() > 1
+    }
+
+    /// Set the maximum number of worker threads.
+    pub const fn set_max_workers(&mut self, workers: usize) {
+        self.max_workers = if workers < 1 { 1 } else { workers };
+    }
+
+    /// Enable or disable parallel Major GC.
+    pub const fn set_parallel_major_gc(&mut self, enabled: bool) {
+        self.parallel_major_gc = enabled;
+    }
+
+    /// Enable or disable parallel Minor GC.
+    pub const fn set_parallel_minor_gc(&mut self, enabled: bool) {
+        self.parallel_minor_gc = enabled;
+    }
+
+    /// Enable or disable work stealing.
+    pub const fn set_work_stealing(&mut self, enabled: bool) {
+        self.work_stealing_enabled = enabled;
     }
 }
 
@@ -125,11 +222,36 @@ impl ParallelMarkCoordinator {
     #[must_use]
     pub fn new(num_workers: usize) -> Self {
         Self {
-            num_workers,
+            num_workers: num_workers.max(1),
             barrier: Arc::new(AtomicUsize::new(0)),
             pages_remaining: AtomicUsize::new(0),
             marking_complete: AtomicUsize::new(0),
         }
+    }
+
+    /// Create a new coordinator with configuration.
+    /// Uses single-threaded fallback if fewer than 2 workers requested.
+    #[must_use]
+    pub fn with_config(config: &ParallelMarkConfig) -> Self {
+        Self::new(config.effective_workers())
+    }
+
+    /// Get the effective number of workers (at least 1).
+    #[must_use]
+    pub const fn num_workers(&self) -> usize {
+        self.num_workers
+    }
+
+    /// Check if running in single-threaded mode.
+    #[must_use]
+    pub const fn is_single_threaded(&self) -> bool {
+        self.num_workers <= 1
+    }
+
+    /// Check if parallel marking should be used based on configuration and worker count.
+    #[must_use]
+    pub fn should_use_parallel(&self, config: &ParallelMarkConfig) -> bool {
+        config.use_parallel() && self.num_workers > 1
     }
 
     /// Start parallel marking with the given worker queues.
@@ -141,6 +263,28 @@ impl ParallelMarkCoordinator {
         self.pages_remaining
             .store(root_pages.len(), Ordering::Release);
         self.marking_complete.store(0, Ordering::Release);
+    }
+
+    /// Distribute dirty pages to worker queues for Minor GC parallel marking.
+    ///
+    /// Dirty pages are pages that have been written to since the last GC.
+    /// During Minor GC, we need to scan these pages for old->young references.
+    /// This function distributes dirty pages evenly across worker queues.
+    #[allow(clippy::similar_names)]
+    pub fn distribute_dirty_pages(
+        &self,
+        dirty_pages: &[*const PageHeader],
+        worker_queues: &[PerThreadMarkQueue],
+    ) -> Vec<usize> {
+        let num_workers = worker_queues.len().max(1);
+        let mut distribution = Vec::with_capacity(dirty_pages.len());
+
+        for (idx, _page) in dirty_pages.iter().enumerate() {
+            let worker_idx = idx % num_workers;
+            distribution.push(worker_idx);
+        }
+
+        distribution
     }
 
     /// Wait for all workers to complete marking.
@@ -174,31 +318,6 @@ impl ParallelMarkCoordinator {
 #[allow(dead_code)]
 const fn worker_mark_loop(_queue: &PerThreadMarkQueue, _coordinator: &ParallelMarkCoordinator) {
     // Implementation deferred until integration with gc.rs
-}
-
-/// Configuration for parallel marking.
-#[derive(Debug, Clone, Copy)]
-pub struct ParallelMarkConfig {
-    /// Number of worker threads to use for parallel marking.
-    /// If 0 or 1, single-threaded marking is used.
-    pub num_workers: usize,
-    /// Capacity of each worker's mark queue.
-    pub queue_capacity: usize,
-    /// Whether to enable parallel major GC marking.
-    pub parallel_major_gc: bool,
-    /// Whether to enable parallel minor GC marking.
-    pub parallel_minor_gc: bool,
-}
-
-impl Default for ParallelMarkConfig {
-    fn default() -> Self {
-        Self {
-            num_workers: 4,
-            queue_capacity: MARK_QUEUE_SIZE,
-            parallel_major_gc: true,
-            parallel_minor_gc: true,
-        }
-    }
 }
 
 /// Get the number of CPUs available for parallel marking.
