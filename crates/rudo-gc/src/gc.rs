@@ -1224,19 +1224,20 @@ impl GcVisitor {
 }
 
 impl Visitor for GcVisitor {
-    fn visit<T: Trace + ?Sized>(&mut self, gc: &crate::Gc<T>) {
-        if let Some(ptr) = gc.raw_ptr().as_option() {
-            let ptr = ptr.cast::<crate::ptr::GcBox<()>>();
+    fn visit<T: Trace>(&mut self, gc: &crate::Gc<T>) {
+        let raw = gc.raw_ptr();
+        if !raw.is_null() {
+            let ptr = raw.cast::<crate::ptr::GcBox<()>>();
 
             unsafe {
-                let ptr_addr = ptr.as_ptr() as *const u8;
+                let ptr_addr = ptr as *const u8;
                 let header = crate::heap::ptr_to_page_header(ptr_addr);
 
                 if (*header.as_ptr()).magic != crate::heap::MAGIC_GC_PAGE {
                     return;
                 }
 
-                if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+                if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
                     if self.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
                         return;
                     }
@@ -1249,7 +1250,7 @@ impl Visitor for GcVisitor {
                     return;
                 }
 
-                self.worklist.push(ptr);
+                self.worklist.push(std::ptr::NonNull::new_unchecked(ptr));
             }
         }
     }
