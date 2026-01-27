@@ -405,8 +405,6 @@ pub fn worker_mark_loop(
 
     loop {
         while let Some(obj) = queue.pop() {
-            marked += 1;
-
             unsafe {
                 let ptr_addr = obj.cast::<GcBox<()>>().cast::<u8>();
                 let header = crate::heap::ptr_to_page_header(ptr_addr);
@@ -415,8 +413,18 @@ pub fn worker_mark_loop(
                     continue;
                 }
 
-                let gc_box_ptr = obj.cast_mut();
+                let Some(idx) = crate::heap::ptr_to_object_index(obj.cast()) else {
+                    continue;
+                };
 
+                if (*header.as_ptr()).is_marked(idx) {
+                    continue;
+                }
+
+                (*header.as_ptr()).set_mark(idx);
+                marked += 1;
+
+                let gc_box_ptr = obj.cast_mut();
                 ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
             }
         }
@@ -438,8 +446,17 @@ fn try_steal_work(queue: &PerThreadMarkQueue, all_queues: &[PerThreadMarkQueue])
         }
 
         if let Some(obj) = other.steal() {
-            queue.push(obj);
-            return true;
+            if queue.push(obj) {
+                return true;
+            }
+            for other2 in all_queues {
+                if other2.worker_idx() == queue.worker_idx() {
+                    continue;
+                }
+                if other2.push(obj) {
+                    return true;
+                }
+            }
         }
     }
 

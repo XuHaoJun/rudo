@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
-use crate::gc::marker::{worker_mark_loop, ParallelMarkConfig};
+use crate::gc::marker::{worker_mark_loop, ParallelMarkConfig, PerThreadMarkQueue};
 use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
 use crate::trace::{GcVisitor, Trace, Visitor, VisitorKind};
@@ -679,6 +679,29 @@ fn mark_minor_roots_multi(
 
     visitor.process_worklist();
 }
+
+#[inline]
+unsafe fn mark_and_push_to_worker_queue(
+    ptr: *const u8,
+    gc_box: NonNull<GcBox<()>>,
+    worker_queues: &[PerThreadMarkQueue],
+    num_workers: usize,
+) {
+    unsafe {
+        let ptr_addr = gc_box.as_ptr() as *const u8;
+        let header = crate::heap::ptr_to_page_header(ptr_addr);
+        if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box.as_ptr().cast()) {
+                if !(*header.as_ptr()).is_marked(idx) {
+                    (*header.as_ptr()).set_mark(idx);
+                }
+            }
+        }
+        let worker_idx = ptr as usize % num_workers;
+        worker_queues[worker_idx].push(gc_box.as_ptr());
+    }
+}
+
 /// Mark roots using parallel marking for Minor GC.
 ///
 /// This function processes dirty pages in parallel, distributing them
@@ -706,8 +729,7 @@ fn mark_minor_roots_parallel(
     for &(ptr, _) in stack_roots.iter().take(num_workers) {
         unsafe {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
-                let worker_idx = ptr as usize % num_workers;
-                worker_queues[worker_idx].push(gc_box.as_ptr());
+                mark_and_push_to_worker_queue(ptr, gc_box, &worker_queues, num_workers);
             }
         }
     }
@@ -717,8 +739,12 @@ fn mark_minor_roots_parallel(
             if let Some(gc_box_ptr) =
                 crate::heap::find_gc_box_from_ptr(heap, potential_ptr as *const u8)
             {
-                let worker_idx = potential_ptr as usize % num_workers;
-                worker_queues[worker_idx].push(gc_box_ptr.as_ptr());
+                mark_and_push_to_worker_queue(
+                    potential_ptr as *const u8,
+                    gc_box_ptr,
+                    &worker_queues,
+                    num_workers,
+                );
             }
         });
     }
@@ -727,8 +753,7 @@ fn mark_minor_roots_parallel(
         for &ptr in roots.borrow().iter() {
             unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
-                    let worker_idx = ptr as usize % num_workers;
-                    worker_queues[worker_idx].push(gc_box.as_ptr());
+                    mark_and_push_to_worker_queue(ptr, gc_box, &worker_queues, num_workers);
                 }
             }
         }
@@ -871,8 +896,7 @@ fn mark_major_roots_parallel(
     for &(ptr, _) in stack_roots.iter().take(root_pages.len().min(num_workers)) {
         unsafe {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
-                let worker_idx = ptr as usize % num_workers;
-                worker_queues[worker_idx].push(gc_box.as_ptr());
+                mark_and_push_to_worker_queue(ptr, gc_box, &worker_queues, num_workers);
             }
         }
     }
@@ -880,8 +904,12 @@ fn mark_major_roots_parallel(
     unsafe {
         crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
-                let worker_idx = ptr as usize % num_workers;
-                worker_queues[worker_idx].push(gc_box.as_ptr());
+                mark_and_push_to_worker_queue(
+                    ptr as *const u8,
+                    gc_box,
+                    &worker_queues,
+                    num_workers,
+                );
             }
         });
     }
@@ -890,8 +918,7 @@ fn mark_major_roots_parallel(
         for &ptr in roots.borrow().iter() {
             unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
-                    let worker_idx = ptr as usize % num_workers;
-                    worker_queues[worker_idx].push(gc_box.as_ptr());
+                    mark_and_push_to_worker_queue(ptr, gc_box, &worker_queues, num_workers);
                 }
             }
         }
