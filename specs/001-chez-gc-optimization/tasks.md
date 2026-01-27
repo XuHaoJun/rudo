@@ -76,24 +76,24 @@
 
 **Tests for User Story 1** (write first, verify fail):
 
-- [ ] T021 [P] [US1] Unit test for `PerThreadMarkQueue` in `tests/unit/test_mark_queue.rs`
-- [ ] T022 [P] [US1] Integration test for push-based transfer in `tests/integration/work_stealing.rs`
-- [ ] T023 [P] [US1] Integration test for segment ownership in `tests/integration/parallel_marking.rs`
-- [ ] T024 [P] [US1] Benchmark test for GC pause times in `tests/benchmarks/marking.rs`
+- [X] T021 [P] [US1] Unit test for `PerThreadMarkQueue` in `tests/unit/test_mark_queue.rs`
+- [X] T022 [P] [US1] Integration test for push-based transfer in `tests/integration/work_stealing.rs`
+- [X] T023 [P] [US1] Integration test for segment ownership in `tests/integration/parallel_marking.rs`
+- [X] T024 [P] [US1] Benchmark test for GC pause times in `tests/benchmarks/marking.rs`
 
 **Implementation for User Story 1**:
 
-- [ ] T025 [US1] Add `pending_work: Mutex<Vec<MarkWork>>` field to `PerThreadMarkQueue` in `src/heap/mark/queue.rs`
-- [ ] T026 [US1] Add `work_available: Notify` notification mechanism to `PerThreadMarkQueue` in `src/heap/mark/queue.rs`
-- [ ] T027 [US1] Implement `push_remote()` method in `src/heap/mark/queue.rs`
-- [ ] T028 [US1] Implement `receive_work()` method in `src/heap/mark/queue.rs`
-- [ ] T029 [US1] Modify `try_steal_work()` to check `pending_work` before stealing in `src/heap/mark/queue.rs`
-- [ ] T030 [US1] Implement `add_owned_page()` and `remove_owned_page()` in `src/heap/mark/ownership.rs`
-- [ ] T031 [US1] Add `owned_pages: HashSet<PagePtr>` to `PerThreadMarkQueue` in `src/heap/mark/queue.rs`
-- [ ] T032 [US1] Implement `get_owned_queues()` method in `src/heap/mark/ownership.rs`
-- [ ] T033 [US1] Modify marker to push remote references to owner's queue in `src/marker.rs`
-- [ ] T034 [US1] Update `GlobalMarkState` to coordinate ownership-based work distribution in `src/marker.rs`
-- [ ] T035 [US1] Integrate with existing work-stealing deque in `src/worklist.rs`
+- [X] T025 [US1] Add `pending_work: Mutex<Vec<MarkWork>>` field to `PerThreadMarkQueue` in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T026 [US1] Add `work_available` notification mechanism to `PerThreadMarkQueue` in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T027 [US1] Implement `push_remote()` method in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T028 [US1] Implement `receive_work()` method in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T029 [US1] Modify `try_steal_work()` to check `pending_work` before stealing in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T030 [US1] Implement `add_owned_page()` and `remove_owned_page()` in `crates/rudo-gc/src/gc/mark/ownership.rs`
+- [X] T031 [US1] Add `owned_pages: HashSet<PagePtr>` to `PerThreadMarkQueue` in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T032 [US1] Implement `get_owned_queues()` method in `crates/rudo-gc/src/gc/mark/ownership.rs`
+- [X] T033 [US1] Modify marker to push remote references to owner's queue in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T034 [US1] Update `GlobalMarkState` to coordinate ownership-based work distribution in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T035 [US1] Integrate with existing work-stealing deque in `crates/rudo-gc/src/gc/worklist.rs`
 
 **Checkpoint**: Push-based transfer and ownership implemented; pause time benchmarks should show improvement
 

@@ -7,6 +7,15 @@
 //!
 //! This module provides the core infrastructure for parallel garbage collection marking,
 //! including work distribution, synchronization, and coordination across multiple threads.
+//!
+//! # Lock Ordering
+//!
+//! `PerThreadMarkQueue` operations must follow the lock ordering discipline:
+//! - `LocalHeap` (order 1) - Per-thread allocation
+//! - `GlobalMarkState` (order 2) - Mark phase coordination
+//! - `GC Request` (order 3) - GC trigger
+//!
+//! Workers should never hold `PerThreadMarkQueue` references while acquiring higher-order locks.
 
 use std::cell::Cell;
 use std::num::NonZeroUsize;
@@ -14,6 +23,8 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Barrier;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
 
 use super::worklist::StealQueue;
 use crate::heap::PageHeader;
@@ -23,6 +34,18 @@ use crate::trace::{GcVisitor, VisitorKind};
 /// A per-thread mark queue that holds objects to be traced.
 /// Objects are pushed to the local end (LIFO) for cache efficiency,
 /// and can be stolen from the remote end (FIFO) by other threads.
+///
+/// # Push-Based Work Transfer
+///
+/// This queue supports push-based work transfer to reduce steal contention.
+/// When a worker encounters a remote reference, it can push work directly
+/// to the owner's `pending_work` queue. The owner checks pending work
+/// before attempting to steal.
+///
+/// # Ownership Tracking
+///
+/// The queue tracks pages owned by this worker for ownership-based load
+/// distribution. Workers prioritize marking their owned pages for cache locality.
 pub struct PerThreadMarkQueue {
     /// The work-stealing queue for this thread's mark work.
     /// Uses usize to ensure Send + Sync (raw pointers aren't automatically Send).
@@ -36,9 +59,16 @@ pub struct PerThreadMarkQueue {
     owned_pages: Vec<NonNull<PageHeader>>,
     /// Count of objects marked by this worker.
     marked_count: AtomicUsize,
+    /// Pending work received from other threads (push-based transfer).
+    /// Uses Mutex for safe concurrent access from multiple pushers.
+    pending_work: Mutex<Vec<*const GcBox<()>>>,
 }
 
 const MARK_QUEUE_SIZE: usize = 1024;
+
+/// Buffer size for pending work received via push-based transfer.
+/// Fixed small buffer to minimize memory overhead (8-16 items).
+const PENDING_WORK_BUFFER_SIZE: usize = 16;
 
 impl PerThreadMarkQueue {
     /// Create a new per-thread mark queue with the given worker index.
@@ -50,6 +80,7 @@ impl PerThreadMarkQueue {
             worker_idx,
             owned_pages: Vec::new(),
             marked_count: AtomicUsize::new(0),
+            pending_work: Mutex::new(Vec::with_capacity(PENDING_WORK_BUFFER_SIZE)),
         }
     }
 
@@ -111,12 +142,176 @@ impl PerThreadMarkQueue {
     /// Iterates through other queues in FIFO order to find work.
     #[allow(dead_code)]
     pub fn work_steal(&self, other_queues: &[&PerThreadMarkQueue]) -> Option<*const GcBox<()>> {
+        // First check pending work from push-based transfer
+        if let Some(obj) = self.receive_pending_work() {
+            return Some(obj);
+        }
+        // Then try stealing
         for other in other_queues {
+            if other.worker_idx() == self.worker_idx {
+                continue;
+            }
             if let Some(obj) = other.steal() {
                 return Some(obj);
             }
         }
         None
+    }
+
+    // ============================================================================
+    // Push-Based Work Transfer
+    // ============================================================================
+
+    /// Push work to another worker's pending queue.
+    ///
+    /// This is the push-based transfer: instead of all workers polling,
+    /// when a worker encounters a remote reference, it pushes the work
+    /// directly to the owner's pending queue.
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - The queue to push work to (owner's queue)
+    /// * `work` - The work item to push
+    ///
+    /// # Lock Ordering
+    ///
+    /// Acquires `owner.pending_work` lock. This is a per-queue lock with
+    /// order equivalent to `LocalHeap` (order 1).
+    pub fn push_remote(owner: &Arc<PerThreadMarkQueue>, work: *const GcBox<()>) {
+        let mut pending = owner.pending_work.lock().unwrap();
+        pending.push(work);
+        // Note: In a more sophisticated implementation, we would notify
+        // the owner here. For simplicity, workers poll their pending_work
+        // when their local queue is empty.
+    }
+
+    /// Receive all pending work from other workers.
+    ///
+    /// Called when the local queue is empty. Drains the pending work buffer
+    /// and returns all items for processing.
+    ///
+    /// # Returns
+    ///
+    /// Some(work) if pending work exists, None otherwise
+    ///
+    /// # Lock Ordering
+    ///
+    /// Acquires `self.pending_work` lock. This is a per-queue lock with
+    /// order equivalent to `LocalHeap` (order 1).
+    pub fn receive_pending_work(&self) -> Option<*const GcBox<()>> {
+        let mut pending = self.pending_work.lock().unwrap();
+        pending.pop()
+    }
+
+    /// Drain all pending work at once.
+    ///
+    /// More efficient than repeated calls to `receive_pending_work()`.
+    ///
+    /// # Lock Ordering
+    ///
+    /// Acquires `self.pending_work` lock.
+    pub fn drain_pending_work(&self) -> Vec<*const GcBox<()>> {
+        let mut pending = self.pending_work.lock().unwrap();
+        std::mem::take(&mut pending)
+    }
+
+    /// Wait for work to become available.
+    ///
+    /// Called when a worker has no work in either the local queue
+    /// or pending work buffer. Waits for notification from a pusher.
+    ///
+    /// Note: This implementation uses a simple polling loop with exponential
+    /// backoff to avoid blocking indefinitely. In a production system, this
+    /// could be replaced with proper async/await or a condvar-based approach.
+    ///
+    /// # Lock Ordering
+    ///
+    /// Uses `self.pending_work` for condition synchronization.
+    #[allow(dead_code)]
+    pub fn wait_for_work(&self, timeout_ms: u64) -> bool {
+        let mut backoff = 1;
+        let max_backoff = 1024;
+        let start = std::time::Instant::now();
+
+        while start.elapsed().as_millis() < u128::from(timeout_ms) {
+            if self.has_pending_work() || !self.queue.is_empty(&self.bottom) {
+                return true;
+            }
+            // Exponential backoff to reduce CPU usage
+            std::thread::sleep(std::time::Duration::from_millis(backoff));
+            backoff = (backoff * 2).min(max_backoff);
+        }
+        false
+    }
+
+    /// Check if pending work is available.
+    #[must_use]
+    pub fn has_pending_work(&self) -> bool {
+        let pending = self.pending_work.lock().unwrap();
+        !pending.is_empty()
+    }
+
+    /// Get the number of pending work items.
+    #[must_use]
+    pub fn pending_work_len(&self) -> usize {
+        let pending = self.pending_work.lock().unwrap();
+        pending.len()
+    }
+
+    // ============================================================================
+    // Ownership-Based Load Distribution
+    // ============================================================================
+
+    /// Try to steal from queues of page owners first.
+    ///
+    /// Prioritizes stealing from workers who own pages, improving cache locality
+    /// by keeping work near the thread that allocated the data.
+    ///
+    /// # Arguments
+    ///
+    /// * `all_queues` - All worker queues
+    /// * `page_owners` - Map of page pointers to owner worker indices
+    ///
+    /// # Returns
+    ///
+    /// Stolen work item if successful
+    pub fn try_steal_owned_work(
+        &self,
+        all_queues: &[PerThreadMarkQueue],
+    ) -> Option<*const GcBox<()>> {
+        // First check pending work
+        if let Some(obj) = self.receive_pending_work() {
+            return Some(obj);
+        }
+        // Then try stealing from owners' queues
+        for other in all_queues {
+            if other.worker_idx() == self.worker_idx {
+                continue;
+            }
+            // Skip if we don't own any of the same pages
+            if !self.has_overlapping_ownership(other) {
+                continue;
+            }
+            if let Some(obj) = other.steal() {
+                return Some(obj);
+            }
+        }
+        // Fall back to regular stealing - convert to references
+        let queue_refs: Vec<&PerThreadMarkQueue> = all_queues.iter().collect();
+        self.work_steal(&queue_refs)
+    }
+
+    /// Check if two workers have overlapping page ownership.
+    fn has_overlapping_ownership(&self, other: &PerThreadMarkQueue) -> bool {
+        // Simplified: assume overlap if either has owned pages
+        // A more sophisticated implementation would track shared pages
+        !self.owned_pages.is_empty() || !other.owned_pages.is_empty()
+    }
+
+    /// Get the number of owned pages.
+    #[must_use]
+    pub fn owned_page_count(&self) -> usize {
+        self.owned_pages.len()
     }
 
     /// Get a reference to the underlying queue for sharing with other threads.
@@ -481,6 +676,7 @@ impl Clone for PerThreadMarkQueue {
             worker_idx: self.worker_idx,
             owned_pages: Vec::new(),
             marked_count: AtomicUsize::new(0),
+            pending_work: Mutex::new(Vec::with_capacity(PENDING_WORK_BUFFER_SIZE)),
         }
     }
 }
