@@ -28,9 +28,9 @@ description: "Task list template for feature implementation"
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Review existing ptr.rs structure in `crates/rudo-gc/src/ptr.rs` to understand current GcBox, Gc, Weak implementations
-- [ ] T002 [P] Create test file structure at `tests/sync/mod.rs` for parallel test organization
-- [ ] T003 [P] Review heap.rs mark_bitmap operations in `crates/rudo-gc/src/heap.rs` for memory ordering review
+- [X] T001 Review existing ptr.rs structure in `crates/rudo-gc/src/ptr.rs` to understand current GcBox, Gc, Weak implementations
+- [X] T002 [P] Create test file structure at `tests/sync/mod.rs` for parallel test organization
+- [X] T003 [P] Review heap.rs mark_bitmap operations in `crates/rudo-gc/src/heap.rs` for memory ordering review
 
 **Checkpoint**: Setup complete - foundational implementation can now begin
 
@@ -42,12 +42,12 @@ description: "Task list template for feature implementation"
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T010 Modify GcBox ref_count field from `Cell<NonZeroUsize>` to `AtomicUsize` in `crates/rudo-gc/src/ptr.rs:24`
-- [ ] T011 [P] Modify GcBox weak_count field from `Cell<usize>` to `AtomicUsize` in `crates/rudo-gc/src/ptr.rs:26`
-- [ ] T012 [P] Implement atomic inc_ref() method with Relaxed ordering in `GcBox` impl block at `crates/rudo-gc/src/ptr.rs`
-- [ ] T013 Implement atomic dec_ref() method with AcqRel ordering and saturating overflow handling in `GcBox` at `crates/rudo-gc/src/ptr.rs`
-- [ ] T014 [P] Implement atomic inc_weak() method with Relaxed ordering in `GcBox` at `crates/rudo-gc/src/ptr.rs`
-- [ ] T015 Implement atomic dec_weak() method with AcqRel ordering in `GcBox` at `crates/rudo-gc/src/ptr.rs`
+- [X] T010 Modify GcBox ref_count field from `Cell<NonZeroUsize>` to `AtomicUsize` in `crates/rudo-gc/src/ptr.rs:24`
+- [X] T011 [P] Modify GcBox weak_count field from `Cell<usize>` to `AtomicUsize` in `crates/rudo-gc/src/ptr.rs:26`
+- [X] T012 [P] Implement atomic inc_ref() method with Relaxed ordering in `GcBox` impl block at `crates/rudo-gc/src/ptr.rs`
+- [X] T013 Implement atomic dec_ref() method with AcqRel ordering and saturating overflow handling in `GcBox` at `crates/rudo-gc/src/ptr.rs`
+- [X] T014 [P] Implement atomic inc_weak() method with Relaxed ordering in `GcBox` at `crates/rudo-gc/src/ptr.rs`
+- [X] T015 Implement atomic dec_weak() method with AcqRel ordering in `GcBox` at `crates/rudo-gc/src/ptr.rs`
 
 **Checkpoint**: Foundational ready - user story implementation can now begin
 
@@ -61,21 +61,21 @@ description: "Task list template for feature implementation"
 
 ### Implementation for User Story 1
 
-- [ ] T020 [P] [US1] Modify Gc ptr field from `Cell<Nullable<GcBox<T>>>` to `AtomicPtr<GcBox<T>>` in `crates/rudo-gc/src/ptr.rs:268`
-- [ ] T021 [US1] Update Gc::new() to use AtomicPtr store with Release ordering in `crates/rudo-gc/src/ptr.rs:292-323`
-- [ ] T022 [US1] Update Gc::clone() to use AtomicPtr load with Acquire ordering in `crates/rudo-gc/src/ptr.rs:682-703`
-- [ ] T023 [US1] Update Gc::deref() to use AtomicPtr load with Acquire ordering in `crates/rudo-gc/src/ptr.rs:672-680`
-- [ ] T024 [US1] Add SAFETY comments to all unsafe blocks in Gc<T> methods per constitution at `crates/rudo-gc/src/ptr.rs`
-- [ ] T025 [US1] Implement unsafe impl Send for Gc<T> where T: Trace + Send + Sync + ?Sized at end of `crates/rudo-gc/src/ptr.rs`
-- [ ] T026 [US1] Implement unsafe impl Sync for Gc<T> where T: Trace + Send + Sync + ?Sized at end of `crates/rudo-gc/src/ptr.rs`
+- [X] T020 [P] [US1] Modify Gc ptr field from `Cell<Nullable<GcBox<T>>>` to `AtomicPtr<GcBox<T>>` in `crates/rudo-gc/src/ptr.rs:268`
+- [X] T021 [US1] Update Gc::new() to use AtomicPtr store with Release ordering in `crates/rudo-gc/src/ptr.rs:292-323`
+- [X] T022 [US1] Update Gc::clone() to use AtomicPtr load with Acquire ordering in `crates/rudo-gc/src/ptr.rs:682-703`
+- [X] T023 [US1] Update Gc::deref() to use AtomicPtr load with Acquire ordering in `crates/rudo-gc/src/ptr.rs:672-680`
+- [X] T024 [US1] Add SAFETY comments to all unsafe blocks in Gc<T> methods per constitution at `crates/rudo-gc/src/ptr.rs`
+- [X] T025 [US1] Implement unsafe impl Send for Gc<T> where T: Trace + Send + Sync + ?Sized at end of `crates/rudo-gc/src/ptr.rs`
+- [X] T026 [US1] Implement unsafe impl Sync for Gc<T> where T: Trace + Send + Sync + ?Sized at end of `crates/rudo-gc/src/ptr.rs`
 
 ### Tests for User Story 1 (OPTIONAL - only if tests requested) ⚠️
 
 > **NOTE: Write these tests to verify the implementation**
 
-- [ ] T030 [P] [US1] Add compile-time Send/Sync assertion test at top of `tests/sync/mod.rs`
-- [ ] T031 [US1] Add unit test for atomic inc_ref/dec_ref operations in `crates/rudo-gc/src/ptr.rs` #[cfg(test)] module
-- [ ] T032 [P] [US1] Add integration test for cross-thread Gc clone/drop in `tests/sync/mod.rs`
+- [X] T030 [P] [US1] Add compile-time Send/Sync assertion test at top of `tests/sync/mod.rs`
+- [X] T031 [US1] Add unit test for atomic inc_ref/dec_ref operations in `crates/rudo-gc/src/ptr.rs` #[cfg(test)] module
+- [X] T032 [P] [US1] Add integration test for cross-thread Gc clone/drop in `tests/sync/mod.rs`
 
 **Checkpoint**: User Story 1 complete - Gc<T> can be shared across threads
 
@@ -89,18 +89,18 @@ description: "Task list template for feature implementation"
 
 ### Implementation for User Story 2
 
-- [ ] T040 [P] [US2] Modify Weak ptr field from `Cell<Nullable<GcBox<T>>>` to `AtomicPtr<GcBox<T>>` in `crates/rudo-gc/src/ptr.rs:845`
-- [ ] T041 [US2] Update Weak::upgrade() to use AtomicPtr load with Acquire ordering in `crates/rudo-gc/src/ptr.rs:884-913`
-- [ ] T042 [US2] Update Weak::clone() to use AtomicPtr operations in `crates/rudo-gc/src/ptr.rs:985-998`
-- [ ] T043 [US2] Update Weak::is_alive() to use AtomicPtr load in `crates/rudo-gc/src/ptr.rs:935-942`
-- [ ] T044 [US2] Add SAFETY comments to all unsafe blocks in Weak<T> methods at `crates/rudo-gc/src/ptr.rs`
-- [ ] T045 [US2] Implement unsafe impl Send for Weak<T> where T: Trace + Send + Sync + ?Sized at end of `crates/rudo-gc/src/ptr.rs`
-- [ ] T046 [US2] Implement unsafe impl Sync for Weak<T> where T: Trace + Send + Sync + ?Sized at end of `crates/rudo-gc/src/ptr.rs`
+- [X] T040 [P] [US2] Modify Weak ptr field from `Cell<Nullable<GcBox<T>>>` to `AtomicPtr<GcBox<T>>` in `crates/rudo-gc/src/ptr.rs:845`
+- [X] T041 [US2] Update Weak::upgrade() to use AtomicPtr load with Acquire ordering in `crates/rudo-gc/src/ptr.rs:884-913`
+- [X] T042 [US2] Update Weak::clone() to use AtomicPtr operations in `crates/rudo-gc/src/ptr.rs:985-998`
+- [X] T043 [US2] Update Weak::is_alive() to use AtomicPtr load in `crates/rudo-gc/src/ptr.rs:935-942`
+- [X] T044 [US2] Add SAFETY comments to all unsafe blocks in Weak<T> methods at `crates/rudo-gc/src/ptr.rs`
+- [X] T045 [US2] Implement unsafe impl Send for Weak<T> where T: Trace + Send + Sync + ?Sized at end of `crates/rudo-gc/src/ptr.rs`
+- [X] T046 [US2] Implement unsafe impl Sync for Weak<T> where T: Trace + Send + Sync + ?Sized at end of `crates/rudo-gc/src/ptr.rs`
 
 ### Tests for User Story 2 (OPTIONAL - only if tests requested) ⚠️
 
-- [ ] T050 [P] [US2] Add unit test for Weak upgrade/downgrade across threads in `tests/sync/mod.rs`
-- [ ] T051 [US2] Add integration test for Weak::is_alive() thread safety in `tests/sync/mod.rs`
+- [X] T050 [P] [US2] Add unit test for Weak upgrade/downgrade across threads in `tests/sync/mod.rs`
+- [X] T051 [US2] Add integration test for Weak::is_alive() thread safety in `tests/sync/mod.rs`
 
 **Checkpoint**: User Story 2 complete - Weak<T> can be used across threads
 
@@ -114,14 +114,14 @@ description: "Task list template for feature implementation"
 
 ### Implementation for User Story 3
 
-- [ ] T060 [P] [US3] Review and update PageHeader::set_mark memory ordering in `crates/rudo-gc/src/heap.rs` for future parallel marking compatibility
-- [ ] T061 [US3] Verify Gc::drop() works correctly with atomic ref counting during concurrent access in `crates/rudo-gc/src/ptr.rs:705-734`
-- [ ] T062 [US3] Add documentation comments for thread-safety guarantees at relevant method docs in `crates/rudo-gc/src/ptr.rs`
+- [X] T060 [P] [US3] Review and update PageHeader::set_mark memory ordering in `crates/rudo-gc/src/heap.rs` for future parallel marking compatibility
+- [X] T061 [US3] Verify Gc::drop() works correctly with atomic ref counting during concurrent access in `crates/rudo-gc/src/ptr.rs:705-734`
+- [X] T062 [US3] Add documentation comments for thread-safety guarantees at relevant method docs in `crates/rudo-gc/src/ptr.rs`
 
 ### Tests for User Story 3 (OPTIONAL - only if tests requested) ⚠️
 
-- [ ] T070 [P] [US3] Add integration test for GC collection during concurrent access in `tests/sync/mod.rs`
-- [ ] T071 [US3] Add stress test for concurrent clone/drop/collect operations in `tests/sync/mod.rs`
+- [X] T070 [P] [US3] Add integration test for GC collection during concurrent access in `tests/sync/mod.rs`
+- [X] T071 [US3] Add stress test for concurrent clone/drop/collect operations in `tests/sync/mod.rs`
 
 **Checkpoint**: User Story 3 complete - GC correctness under concurrent access verified
 
@@ -131,11 +131,11 @@ description: "Task list template for feature implementation"
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T080 [P] Run `./clippy.sh` and fix all warnings in modified files
-- [ ] T081 [P] Run `cargo fmt --all` to format all modified code
-- [ ] T082 Run `./test.sh` and ensure all tests pass (including new tests)
+- [X] T080 [P] Run `./clippy.sh` and fix all warnings in modified files
+- [X] T081 [P] Run `cargo fmt --all` to format all modified code
+- [X] T082 Run `./test.sh` and ensure all tests pass (including new tests)
 - [ ] T083 Run `./miri-test.sh` and verify all Miri tests pass for atomic operations
-- [ ] T084 [P] Update documentation in `crates/rudo-gc/src/lib.rs` if public API changes are exposed
+- [X] T084 [P] Update documentation in `crates/rudo-gc/src/lib.rs` if public API changes are exposed
 - [ ] T085 Run ThreadSanitizer test to verify zero data races: `RUSTFLAGS="-Z sanitizer=thread" cargo test`
 
 ---
