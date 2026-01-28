@@ -7,6 +7,7 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use crate::gc::marker::{worker_mark_loop, ParallelMarkConfig, PerThreadMarkQueue};
 use crate::heap::{LocalHeap, PageHeader};
@@ -802,12 +803,15 @@ fn mark_minor_roots_parallel(
         }
     }
 
-    let all_queues = worker_queues.clone();
+    let all_queues: Vec<Arc<PerThreadMarkQueue>> =
+        worker_queues.into_iter().map(Arc::new).collect();
+    let num_queues = all_queues.len();
     let mut handles = Vec::new();
-    for queue in worker_queues {
+    for i in 0..num_queues {
         let queues = all_queues.clone();
+        let queue = all_queues[i].clone();
         let handle =
-            std::thread::spawn(move || worker_mark_loop(&queue, &queues, VisitorKind::Minor));
+            std::thread::spawn(move || worker_mark_loop(queue, &queues, VisitorKind::Minor));
         handles.push(handle);
     }
 
@@ -933,12 +937,15 @@ fn mark_major_roots_parallel(
         }
     });
 
-    let all_queues = worker_queues.clone();
+    let all_queues: Vec<Arc<PerThreadMarkQueue>> =
+        worker_queues.into_iter().map(Arc::new).collect();
+    let num_queues = all_queues.len();
     let mut handles = Vec::new();
-    for queue in worker_queues {
+    for i in 0..num_queues {
         let queues = all_queues.clone();
+        let queue = all_queues[i].clone();
         let handle =
-            std::thread::spawn(move || worker_mark_loop(&queue, &queues, VisitorKind::Major));
+            std::thread::spawn(move || worker_mark_loop(queue, &queues, VisitorKind::Major));
         handles.push(handle);
     }
 

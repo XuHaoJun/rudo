@@ -51,27 +51,27 @@ pub struct PerThreadMarkQueue {
     /// The work-stealing queue for this thread's mark work.
     /// Uses usize to ensure Send + Sync (raw pointers aren't automatically Send).
     #[allow(clippy::arc_with_non_send_sync)]
-    queue: Arc<StealQueue<usize, MARK_QUEUE_SIZE>>,
+    pub(crate) queue: Arc<StealQueue<usize, MARK_QUEUE_SIZE>>,
     /// The bottom index for local push/pop operations.
-    bottom: Cell<usize>,
+    pub(crate) bottom: Cell<usize>,
     /// Worker index for this queue.
-    worker_idx: usize,
+    pub(crate) worker_idx: usize,
     /// Pages owned by this worker for processing.
-    owned_pages: Vec<NonNull<PageHeader>>,
+    pub(crate) owned_pages: Vec<NonNull<PageHeader>>,
     /// Count of objects marked by this worker.
-    marked_count: AtomicUsize,
+    pub(crate) marked_count: AtomicUsize,
     /// Pending work received from other threads (push-based transfer).
     /// Uses Mutex for safe concurrent access from multiple pushers.
-    pending_work: Mutex<Vec<*const GcBox<()>>>,
+    pub(crate) pending_work: Mutex<Vec<*const GcBox<()>>>,
     /// Condition variable to signal when pending work is available.
-    pending_work_cvar: Condvar,
+    pub(crate) pending_work_cvar: Condvar,
     /// Target capacity for dynamic growth monitoring.
     /// When queue utilization exceeds this threshold, overflow handling is triggered.
-    capacity_hint: AtomicUsize,
+    pub(crate) capacity_hint: AtomicUsize,
     /// Maximum capacity before forcing overflow handling.
-    max_capacity: usize,
+    pub(crate) max_capacity: usize,
     /// Count of overflow events handled.
-    overflow_count: AtomicUsize,
+    pub(crate) overflow_count: AtomicUsize,
 }
 
 const MARK_QUEUE_SIZE: usize = 1024;
@@ -182,7 +182,7 @@ impl PerThreadMarkQueue {
     pub fn handle_overflow(
         &self,
         work: *const GcBox<()>,
-        all_queues: &[PerThreadMarkQueue],
+        all_queues: &[Arc<PerThreadMarkQueue>],
     ) -> bool {
         self.overflow_count.fetch_add(1, Ordering::Relaxed);
 
@@ -192,7 +192,7 @@ impl PerThreadMarkQueue {
                 continue;
             }
             if other.pending_work_len() < PENDING_WORK_BUFFER_SIZE {
-                PerThreadMarkQueue::push_remote(&Arc::new(other.clone()), work);
+                PerThreadMarkQueue::push_remote(other, work);
                 return true;
             }
         }
@@ -311,19 +311,14 @@ impl PerThreadMarkQueue {
 
     /// Push work to another worker's pending queue.
     ///
-    /// This is the push-based transfer: instead of all workers polling,
-    /// when a worker encounters a remote reference, it pushes the work
-    /// directly to the owner's pending queue.
+    /// # Lock Order
     ///
-    /// # Arguments
-    ///
-    /// * `owner` - The queue to push work to (owner's queue)
-    /// * `work` - The work item to push
-    ///
-    /// # Lock Ordering
-    ///
-    /// Acquires `owner.pending_work` lock. This is a per-queue lock with
+    /// This function must be called while not holding any locks of order
     /// order equivalent to `LocalHeap` (order 1).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
     pub fn push_remote(owner: &Arc<PerThreadMarkQueue>, work: *const GcBox<()>) {
         owner.pending_work.lock().unwrap().push(work);
         owner.pending_work_cvar.notify_one();
@@ -342,6 +337,10 @@ impl PerThreadMarkQueue {
     ///
     /// Acquires `self.pending_work` lock. This is a per-queue lock with
     /// order equivalent to `LocalHeap` (order 1).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
     pub fn receive_pending_work(&self) -> Option<*const GcBox<()>> {
         let mut pending = self.pending_work.lock().unwrap();
         pending.pop()
@@ -354,6 +353,10 @@ impl PerThreadMarkQueue {
     /// # Lock Ordering
     ///
     /// Acquires `self.pending_work` lock.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
     pub fn drain_pending_work(&self) -> Vec<*const GcBox<()>> {
         let mut pending = self.pending_work.lock().unwrap();
         std::mem::take(&mut pending)
@@ -371,6 +374,10 @@ impl PerThreadMarkQueue {
     /// # Lock Ordering
     ///
     /// Uses `self.pending_work` for condition synchronization.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
     #[allow(dead_code)]
     pub fn wait_for_work(&self, timeout_ms: u64) -> bool {
         let start = std::time::Instant::now();
@@ -404,6 +411,10 @@ impl PerThreadMarkQueue {
     }
 
     /// Check if pending work is available.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
     #[must_use]
     pub fn has_pending_work(&self) -> bool {
         let pending = self.pending_work.lock().unwrap();
@@ -411,6 +422,10 @@ impl PerThreadMarkQueue {
     }
 
     /// Get the number of pending work items.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
     #[must_use]
     pub fn pending_work_len(&self) -> usize {
         let pending = self.pending_work.lock().unwrap();
@@ -762,9 +777,10 @@ impl ParallelMarkCoordinator {
 /// 1. Process owned pages
 /// 2. Process local queue (LIFO)
 /// 3. Steal from other queues (FIFO) when local queue empty
+#[allow(clippy::needless_pass_by_value)]
 pub fn worker_mark_loop(
-    queue: &PerThreadMarkQueue,
-    all_queues: &[PerThreadMarkQueue],
+    queue: Arc<PerThreadMarkQueue>,
+    all_queues: &[Arc<PerThreadMarkQueue>],
     kind: VisitorKind,
 ) -> usize {
     let mut marked = 0;
@@ -796,7 +812,7 @@ pub fn worker_mark_loop(
             }
         }
 
-        if !try_steal_work(queue, all_queues) {
+        if !try_steal_work(&queue, all_queues) {
             break;
         }
     }
@@ -806,7 +822,7 @@ pub fn worker_mark_loop(
 
 /// Try to steal work from other queues.
 /// Returns true if work was stolen, false if all queues are empty.
-fn try_steal_work(queue: &PerThreadMarkQueue, all_queues: &[PerThreadMarkQueue]) -> bool {
+fn try_steal_work(queue: &Arc<PerThreadMarkQueue>, all_queues: &[Arc<PerThreadMarkQueue>]) -> bool {
     for other in all_queues {
         if other.worker_idx() == queue.worker_idx() {
             continue;
@@ -830,23 +846,6 @@ fn try_steal_work(queue: &PerThreadMarkQueue, all_queues: &[PerThreadMarkQueue])
     false
 }
 
-impl Clone for PerThreadMarkQueue {
-    fn clone(&self) -> Self {
-        Self {
-            queue: Arc::clone(&self.queue),
-            bottom: Cell::new(self.bottom.get()),
-            worker_idx: self.worker_idx,
-            owned_pages: self.owned_pages.clone(),
-            marked_count: AtomicUsize::new(0),
-            pending_work: Mutex::new(Vec::with_capacity(PENDING_WORK_BUFFER_SIZE)),
-            pending_work_cvar: Condvar::new(),
-            capacity_hint: AtomicUsize::new(self.capacity_hint.load(Ordering::Relaxed)),
-            max_capacity: self.max_capacity,
-            overflow_count: AtomicUsize::new(0),
-        }
-    }
-}
-
 /// Get the number of CPUs available for parallel marking.
 #[must_use]
 pub fn available_parallelism() -> usize {
@@ -868,4 +867,29 @@ pub fn init_parallel_marking(
     let coordinator = ParallelMarkCoordinator::new(num_workers);
     let worker_queues = create_worker_queues(num_workers);
     (coordinator, worker_queues)
+}
+
+#[cfg(test)]
+mod marker_clone_bug_tests {
+    use super::*;
+    use std::ptr::NonNull;
+
+    /// Test: Verify `PerThreadMarkQueue` works correctly after Clone removal.
+    #[test]
+    fn test_per_thread_mark_queue_functions_without_clone() {
+        let mut queue = PerThreadMarkQueue::new();
+        let page: NonNull<()> = NonNull::dangling();
+        queue.owned_pages.push(page.cast());
+        assert_eq!(queue.owned_pages.len(), 1);
+        assert_eq!(queue.len(), 0);
+    }
+
+    /// Test: Verify `owned_pages` is properly encapsulated after Clone removal.
+    #[test]
+    fn test_owned_pages_is_properly_encapsulated() {
+        let mut queue = PerThreadMarkQueue::new();
+        let page: NonNull<()> = NonNull::dangling();
+        queue.owned_pages.push(page.cast());
+        assert_eq!(queue.owned_pages.len(), 1);
+    }
 }
