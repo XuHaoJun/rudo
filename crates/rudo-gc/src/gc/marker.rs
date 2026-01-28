@@ -70,7 +70,8 @@ fn pop_overflow_work() -> Option<*const GcBox<()>> {
         if current.is_null() {
             return None;
         }
-        let node = unsafe { &*current.cast::<OverflowNode>() };
+        let node_ptr = current.cast::<OverflowNode>();
+        let node = unsafe { &*node_ptr };
         let next = node.next.load(Ordering::Acquire);
         if OVERFLOW_QUEUE
             .compare_exchange(
@@ -81,7 +82,7 @@ fn pop_overflow_work() -> Option<*const GcBox<()>> {
             )
             .is_ok()
         {
-            let owned_node = unsafe { Box::from_raw(current.cast::<OverflowNode>()) };
+            let owned_node = unsafe { Box::from_raw(node_ptr) };
             return Some(owned_node.work);
         }
     }
