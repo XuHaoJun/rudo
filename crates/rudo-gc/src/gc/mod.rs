@@ -8,6 +8,7 @@
 //! - Lock ordering discipline for deadlock prevention
 //! - Mark phase optimizations (bitmap, ownership, push-based transfer)
 
+#[allow(clippy::module_inception)]
 mod gc;
 
 pub mod mark;
