@@ -378,27 +378,19 @@ impl PerThreadMarkQueue {
 
     /// Push work to another worker's pending queue.
     ///
-    /// Uses atomic operations for lock-free push. The `pending_work` buffer
-    /// is bounded (capacity 16) to limit memory overhead.
+    /// Uses a bounded buffer (capacity 16) to reduce steal contention.
+    /// If the buffer is full, falls back to the shared overflow queue
+    /// to prevent work loss.
     ///
     /// # Lock Order
     ///
     /// This function must be called while not holding any locks of order
-    /// order equivalent to `LocalHeap` (order 1).
+    /// equivalent to `LocalHeap` (order 1).
     ///
     /// # Returns
     ///
-    /// `true` if work was successfully pushed, `false` if buffer is full
-    /// and work was dropped.
-    /// Push work to be processed by the owning worker.
-    ///
-    /// Uses a bounded buffer (16 items) to reduce steal contention.
-    /// If the buffer is full, falls back to the shared overflow queue
-    /// to prevent work loss.
-    ///
-    /// # Returns
-    ///
-    /// true if work was queued, false if all queues are full
+    /// `true` if work was queued (either in local buffer or overflow queue),
+    /// `false` if all queues are full.
     ///
     /// # Panics
     ///
@@ -1142,7 +1134,7 @@ mod overflow_queue_verification_tests {
 
         assert!(
             result,
-            "FIXED: try_steal_work should return true when overflow queue has work"
+            "try_steal_work should return true when overflow queue has work"
         );
 
         let recovered = pop_overflow_work();
