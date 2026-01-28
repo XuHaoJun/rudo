@@ -1,9 +1,15 @@
-//! Tests for deep tree structure corruption in GcCell<Vec<Gc<T>>>.
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::borrow_as_ptr,
+    clippy::borrow_deref_ref
+)] // Test file style preferences
+
+//! Tests for deep tree structure corruption in `GcCell`<Vec<Gc<T>>>.
 //!
 //! This test module reproduces the bug where deeply nested component trees
 //! suffer memory corruption when garbage collection runs.
 //!
-//! Issue: GcCell<Vec<Gc<T>>> structures cause memory corruption during GC
+//! Issue: `GcCell`<Vec<Gc<T>>> structures cause memory corruption during GC
 //! when the tree structure is deeply nested (6+ levels).
 
 use rudo_gc::test_util::register_test_root;
@@ -13,8 +19,8 @@ use std::sync::atomic::AtomicBool;
 #[derive(Trace)]
 struct Component {
     id: u64,
-    children: GcCell<Vec<Gc<Component>>>,
-    parent: GcCell<Option<Gc<Component>>>,
+    children: GcCell<Vec<Gc<Self>>>,
+    parent: GcCell<Option<Gc<Self>>>,
     is_updating: AtomicBool,
 }
 
@@ -124,7 +130,7 @@ fn test_deep_tree_update_corruption() {
 fn test_gccell_vec_gc_trace() {
     #[derive(Trace)]
     struct Node {
-        children: GcCell<Vec<Gc<Node>>>,
+        children: GcCell<Vec<Gc<Self>>>,
     }
 
     let parent = Gc::new(Node {
@@ -138,7 +144,7 @@ fn test_gccell_vec_gc_trace() {
         parent.children.borrow_mut().push(Gc::clone(&child));
 
         if i < 10 {
-            for j in 0..5 {
+            for _j in 0..5 {
                 let grandchild = Gc::new(Node {
                     children: GcCell::new(Vec::new()),
                 });

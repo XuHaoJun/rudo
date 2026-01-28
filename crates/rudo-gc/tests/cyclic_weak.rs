@@ -1,7 +1,15 @@
 //! Tests for `Gc::new_cyclic_weak` self-referential GC support.
 
 #![allow(deprecated)] // For testing deprecated new_cyclic (should migrate to new_cyclic_weak)
-#![allow(clippy::doc_markdown, clippy::use_self)] // Test file style preferences
+#![allow(
+    clippy::doc_markdown,
+    clippy::use_self,
+    clippy::needless_pass_by_value,
+    clippy::borrow_as_ptr,
+    clippy::borrow_deref_ref,
+    clippy::ptr_as_ptr,
+    unused_variables
+)] // Test file style preferences
 
 use rudo_gc::{cell::GcCell, collect, Gc, Trace, Weak};
 
@@ -246,7 +254,7 @@ fn test_deep_tree_with_gccell_vec_gc() {
     child3.add_child(Gc::clone(&leaf));
     root.add_child(Gc::clone(&child3));
 
-    register_test_root(Gc::as_ptr(&root) as *const u8);
+    register_test_root(Gc::as_ptr(&root).cast::<u8>());
 
     assert_eq!(root.children.borrow().len(), 3);
 
@@ -292,7 +300,7 @@ fn test_gccell_vec_many_children_survives_gc() {
         parent.children.borrow_mut().push(Gc::clone(&child));
 
         if i < 10 {
-            for j in 0..5 {
+            for _j in 0..5 {
                 let grandchild = Gc::new(Node {
                     children: GcCell::new(Vec::new()),
                 });
