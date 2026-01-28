@@ -1,100 +1,101 @@
-use rudo_gc::{Gc, Trace, Visitor};
-use std::cell::Cell;
+use rudo_gc::{Gc, Trace, Weak};
+use std::panic;
 
-// A tracer object to track if it's alive
-#[derive(Trace)]
-struct Data {
-    dropped: Gc<Cell<bool>>,
-}
+#[test]
+#[allow(clippy::redundant_clone)]
+fn test_reproduce_zst_cache_uaf() {
+    // 1. Create a ZST Gc.
+    let unit = Gc::new(());
 
-impl Drop for Data {
-    fn drop(&mut self) {
-        self.dropped.set(true);
-    }
-}
+    // 2. Drop it to trigger collection.
+    drop(unit);
 
-pub struct PseudoEffect {
-    // Closure captures something, but we cannot see it
-    closure: Box<dyn Fn() + 'static>,
-}
+    // 3. Collect. This should sweep the ZST/() allocation because it's unreachable.
+    // The thread-local ZST_BOX still holds a pointer to it, but ZST_BOX is not a root.
+    rudo_gc::collect_full();
 
-unsafe impl Trace for PseudoEffect {
-    fn trace(&self, visitor: &mut impl Visitor) {
-        // Now we fix the bug by conservatively scanning the closure!
-        // Safety: Box<dyn Fn()> points to heap memory.
-        // We scan the memory region used by the closure.
-        let ptr = std::ptr::from_ref::<dyn Fn()>(&*self.closure).cast::<u8>();
-        // Correctly calculate the size of the closure struct on the heap.
-        let layout = std::alloc::Layout::for_value(&*self.closure);
-        let size = layout.size();
+    // 4. Create a new ZST Gc.
+    // This will hit the ZST_BOX cache, which points to the swept memory.
+    // Tlab allocator might have reused that memory for something else (e.g. a different small object).
+    // Or it's just plain UAF.
+    let unit2 = Gc::new(());
 
-        unsafe {
-            visitor.visit_region(ptr, size);
-        }
-    }
-}
-
-#[inline(never)]
-fn spawn_effect(dropped: Gc<Cell<bool>>) -> Gc<PseudoEffect> {
-    let data = Gc::new(Data { dropped });
-
-    let data_clone = Gc::clone(&data);
-
-    // For Miri, the conservative scanner needs pointers to be "exposed"
-    // to work when read as raw bytes (usize).
-    #[cfg(miri)]
-    {
-        let ptr = rudo_gc::test_util::internal_ptr(&data_clone);
-        let _ = ptr as usize; // Expose the pointer address
-    }
-
-    // This Effect lives on the heap (Gc<PseudoEffect>)
-    // Its closure captures `data_clone`.
-    Gc::new(PseudoEffect {
-        closure: Box::new(move || {
-            let _ = &data_clone;
-        }),
-    })
-}
-
-#[inline(never)]
-fn waste_stack(n: usize) -> u64 {
-    if n == 0 {
-        return 0;
-    }
-    let mut arr = [0u64; 64];
-    arr.fill(n as u64);
-    waste_stack(n - 1) + arr[0]
+    // 5. Accessing unit2 might crash or read garbage if memory was reused.
+    // Since it's (), deref is a no-op, but 'inc_ref' inside clone would write to freed memory.
+    let _ = unit2.clone();
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
-fn test_reproduce_closure_trace_hole() {
-    let dropped = Gc::new(Cell::new(false));
+#[allow(dead_code, unreachable_code, dependency_on_unit_never_type_fallback)]
+fn test_reproduce_panic_safety_failure() {
+    // 1. Define a type that panics on trace or construction if we want,
+    // but here we want to panic inside new_cyclic_weak's closure.
 
-    let effect = spawn_effect(Gc::clone(&dropped));
+    #[derive(Trace)]
+    #[allow(dead_code)]
+    struct Bomb;
 
-    // For Miri, we must explicitly register roots because stack scanning is disabled.
-    #[cfg(miri)]
-    rudo_gc::test_util::register_test_root(rudo_gc::test_util::internal_ptr(&effect));
+    // 2. Use catch_unwind to survive the panic.
+    // Note: Gc assumes single threaded, so this is fine.
 
-    // Clear potential leftovers on the stack
-    waste_stack(10);
+    let result = panic::catch_unwind(|| {
+        Gc::new_cyclic_weak(|_weak| {
+            // Leak the weak pointer to the outside world
+            // In a real exploit, this could be a thread-local or global.
+            // Here we can just demonstrate logic.
+            // But we need to access it AFTER the panic.
+            // Since we can't easily stash it in a local variable outside the closure
+            // (borrow checker), we use a RefCell or similar if we could.
+            // But 'weak' is owned. We can clone it if we had a place to put it.
 
-    // Trigger GC - Use collect_full to be sure
-    rudo_gc::collect_full();
+            // For repro, let's just panic.
+            // The DropGuard checks 'completed'. It will be false.
+            // destructors run.
+            panic!("Boom");
+        })
+    });
 
-    // Check if it's alive.
-    // Since `PseudoEffect` NOW traces its closure, the GC should NOT have collected `data`.
-    assert!(
-        !dropped.get(),
-        "Data should NOT have been dropped because closure was traced"
-    );
+    assert!(result.is_err());
 
-    // Clean up roots for Miri
-    #[cfg(miri)]
-    rudo_gc::test_util::clear_test_roots();
+    // If we had managed to exfiltrate the Weak, we could show UAF.
+    // But since `new_cyclic_weak` API passes an owned `Weak`,
+    // the user code inside the closure *owns* it.
+    // If the closure panics, the `Weak` is dropped as stack unwinds.
+    // So the `Weak` inside the closure is destroyed.
+    // UNLESS the user moved it to a long-lived location (RefCell, global).
+}
 
-    // Use effect to keep it alive until here
-    drop(effect);
+#[derive(Trace)]
+#[allow(clippy::use_self)]
+struct Stash {
+    w: std::cell::RefCell<Option<Weak<Self>>>,
+}
+
+thread_local! {
+    static STASH: std::cell::RefCell<Option<Weak<Stash>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[test]
+fn test_reproduce_panic_uaf() {
+    let result = panic::catch_unwind(|| {
+        Gc::new_cyclic_weak(|weak| {
+            // Stash the weak pointer globally
+            STASH.with(|stash| *stash.borrow_mut() = Some(weak.clone()));
+
+            panic!("Boom"); // Trigger cleanup
+        })
+    });
+
+    assert!(result.is_err());
+
+    // Now access the stashed weak. logic suggests it points to deallocated memory.
+    STASH.with(|stash| {
+        if let Some(weak) = &*stash.borrow() {
+            // upgrade() accesses the ref count in the allocation.
+            // If allocation is freed, this is UAF.
+            // Miri should catch this.
+            // In normal execution, it might segfault or read garbage.
+            let _ = weak.upgrade();
+        }
+    });
 }

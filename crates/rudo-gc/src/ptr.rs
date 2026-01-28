@@ -3,12 +3,11 @@
 //! This module provides the primary user-facing type for garbage-collected
 //! memory management.
 
-use std::cell::Cell;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use crate::gc::{is_collecting, notify_dropped_gc};
 use crate::heap::{ptr_to_object_index, ptr_to_page_header, with_heap, LocalHeap};
@@ -31,6 +30,8 @@ pub struct GcBox<T: Trace + ?Sized> {
     pub(crate) drop_fn: unsafe fn(*mut u8),
     /// Type-erased trace function for the value.
     pub(crate) trace_fn: unsafe fn(*const u8, &mut GcVisitor),
+    /// Flag indicating the object is being dropped (prevents `weak::upgrade` race).
+    is_dropping: AtomicUsize,
     /// The user's data.
     value: T,
 }
@@ -66,6 +67,21 @@ impl<T: Trace + ?Sized> GcBox<T> {
         }
     }
 
+    /// Check if the value is currently being dropped (prevents `weak::upgrade` race).
+    #[inline]
+    fn is_dropping(&self) -> bool {
+        self.is_dropping.load(Ordering::Relaxed) != 0
+    }
+
+    /// Try to mark the value as dropping. Returns true if successful.
+    /// Uses CAS to prevent races with concurrent upgrade.
+    #[inline]
+    fn try_mark_dropping(&self) -> bool {
+        self.is_dropping
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+    }
+
     /// Increment the reference count.
     /// Uses Relaxed ordering since this is just a counter increment.
     pub fn inc_ref(&self) {
@@ -94,14 +110,20 @@ impl<T: Trace + ?Sized> GcBox<T> {
                 // Return true to prevent further issues
                 return true;
             }
-            if count == 1 {
-                // Last reference - drop the value
-                // SAFETY: We're the last reference, safe to drop
-                // The drop function handles value dropping
-                unsafe {
-                    (this.drop_fn)(self_ptr.cast::<u8>());
+            if count == 1 && !this.is_dropping() {
+                // Last reference and not already marked as dropping
+                // Must mark as dropping BEFORE dropping to prevent
+                // race with concurrent Weak::upgrade
+                if this.try_mark_dropping() {
+                    // SAFETY: We're the last reference and marked as dropping,
+                    // safe to drop. The drop function handles value dropping.
+                    unsafe {
+                        (this.drop_fn)(self_ptr.cast::<u8>());
+                    }
+                    return true;
                 }
-                return true;
+                // CAS failed - another thread beat us to marking
+                // Fall through to retry loop
             }
             // Attempt to decrement
             if this
@@ -125,6 +147,11 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// Get the weak reference count.
     pub fn weak_count(&self) -> usize {
         self.weak_count.load(Ordering::Relaxed) & !Self::FLAGS_MASK
+    }
+
+    /// Get the raw weak count value (including flags).
+    pub fn weak_count_raw(&self) -> usize {
+        self.weak_count.load(Ordering::Relaxed)
     }
 
     /// Increment the weak reference count.
@@ -183,6 +210,15 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// Mark the value as dropped.
     pub(crate) fn set_dead(&self) {
         self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Relaxed);
+    }
+
+    /// Mark the value as dead during panic cleanup.
+    /// Clears `UNDER_CONSTRUCTION_FLAG` and sets `DEAD_FLAG`.
+    /// Used when weak references exist and we can't deallocate.
+    pub(crate) fn mark_dead(&self) {
+        self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Relaxed);
+        self.weak_count
+            .fetch_and(!Self::UNDER_CONSTRUCTION_FLAG, Ordering::Relaxed);
     }
 }
 
@@ -429,6 +465,7 @@ impl<T: Trace> Gc<T> {
                 weak_count: AtomicUsize::new(0),
                 drop_fn: GcBox::<T>::drop_fn_for,
                 trace_fn: GcBox::<T>::trace_fn_for,
+                is_dropping: AtomicUsize::new(0),
                 value,
             });
         }
@@ -447,7 +484,8 @@ impl<T: Trace> Gc<T> {
     /// Create a Gc for a zero-sized type.
     ///
     /// ZSTs don't need heap allocation - we use a sentinel address.
-    fn new_zst(value: T) -> Self {
+    #[allow(clippy::items_after_statements, clippy::cast_ptr_alignment)]
+    fn new_zst(_value: T) -> Self {
         debug_assert!(std::mem::size_of::<T>() == 0);
 
         // For ZSTs, we use a special sentinel address that's:
@@ -458,45 +496,62 @@ impl<T: Trace> Gc<T> {
         // We allocate a minimal GcBox to hold the ZST ref count.
         // Since the value is zero-sized, this is just the ref_count field.
 
-        // Use thread-local singleton for ZST
-        thread_local! {
-            static ZST_BOX: Cell<Option<NonNull<u8>>> = const { Cell::new(None) };
+        // Use AtomicPtr for thread-safe lazy initialization of ZST singleton.
+        // The singleton is allocated once in static memory and never collected,
+        // preventing UAF when GC runs while ZST_BOX still holds a pointer.
+        static ZST_SINGLETON: AtomicPtr<GcBox<()>> = AtomicPtr::new(std::ptr::null_mut());
+
+        let gc_box_ptr: *mut GcBox<()> = {
+            let ptr = ZST_SINGLETON.load(Ordering::Acquire);
+
+            if ptr.is_null() {
+                let alloc_ptr = with_heap(LocalHeap::alloc::<GcBox<()>>);
+                let gc_box = alloc_ptr.as_ptr().cast::<GcBox<()>>();
+
+                // SAFETY: We just allocated this memory. The value is a ZST (unit type).
+                unsafe {
+                    gc_box.write(GcBox {
+                        ref_count: AtomicUsize::new(1),
+                        weak_count: AtomicUsize::new(0),
+                        drop_fn: GcBox::<()>::drop_fn_for,
+                        trace_fn: GcBox::<()>::trace_fn_for,
+                        is_dropping: AtomicUsize::new(0),
+                        value: (),
+                    });
+                }
+
+                // Try to CAS our allocation into the singleton slot
+                let null_ptr: *mut GcBox<()> = std::ptr::null_mut();
+                if ZST_SINGLETON
+                    .compare_exchange_weak(null_ptr, gc_box, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    // Another thread initialized first - use theirs and drop ours
+                    // SAFETY: We're dropping the allocation we just wrote, which is safe
+                    // since no one else has a reference to it yet
+                    unsafe {
+                        gc_box.read();
+                        with_heap(|heap| heap.dealloc(alloc_ptr));
+                    }
+                    ZST_SINGLETON.load(Ordering::Acquire)
+                } else {
+                    gc_box
+                }
+            } else {
+                ptr
+            }
+        };
+
+        // SAFETY: We know this is a valid GcBox<()> for ZST
+        // Increment ref count for the new Gc handle
+        unsafe {
+            (*gc_box_ptr).inc_ref();
         }
 
-        let gc_box_ptr = ZST_BOX.with(|cell| {
-            cell.get().map_or_else(
-                || {
-                    // First ZST allocation - create the singleton
-                    let ptr = with_heap(LocalHeap::alloc::<GcBox<T>>);
-                    let gc_box = ptr.as_ptr().cast::<GcBox<T>>();
-
-                    // SAFETY: We just allocated this memory
-                    unsafe {
-                        gc_box.write(GcBox {
-                            ref_count: AtomicUsize::new(1),
-                            weak_count: AtomicUsize::new(0),
-                            drop_fn: GcBox::<T>::drop_fn_for,
-                            trace_fn: GcBox::<T>::trace_fn_for,
-                            value,
-                        });
-                    }
-
-                    cell.set(Some(ptr));
-
-                    unsafe { NonNull::new_unchecked(gc_box) }
-                },
-                |ptr| {
-                    // Reuse existing ZST allocation
-                    // Increment ref count
-                    let gc_box = ptr.as_ptr().cast::<GcBox<T>>();
-                    // SAFETY: We know this is a valid GcBox<T> for ZST
-                    unsafe {
-                        (*gc_box).inc_ref();
-                    }
-                    unsafe { NonNull::new_unchecked(gc_box) }
-                },
-            )
-        });
+        let gc_box_ptr = unsafe {
+            // Cast from *mut GcBox<()> to NonNull<GcBox<T>> for the return type
+            NonNull::new_unchecked(gc_box_ptr.cast::<GcBox<T>>())
+        };
 
         // Notify that we created a Gc
         crate::gc::notify_created_gc();
@@ -531,6 +586,7 @@ impl<T: Trace> Gc<T> {
                 weak_count: AtomicUsize::new(0),
                 drop_fn: GcBox::<T>::drop_fn_for,
                 trace_fn: GcBox::<T>::trace_fn_for,
+                is_dropping: AtomicUsize::new(0),
                 value,
             });
         }
@@ -593,17 +649,29 @@ impl<T: Trace> Gc<T> {
             "Gc::new_cyclic_weak does not support zero-sized types"
         );
 
-        struct DropGuard {
+        struct DropGuard<T: Trace + ?Sized> {
             ptr: NonNull<u8>,
             completed: bool,
+            gc_box_ptr: NonNull<GcBox<T>>,
         }
 
-        impl Drop for DropGuard {
+        impl<T: Trace + ?Sized> Drop for DropGuard<T> {
             fn drop(&mut self) {
-                if !self.completed {
-                    with_heap(|heap| unsafe {
-                        heap.dealloc(self.ptr);
-                    });
+                if self.completed {
+                    return;
+                }
+                unsafe {
+                    let raw_weak_count = (*self.gc_box_ptr.as_ptr()).weak_count_raw();
+                    let actual_count = raw_weak_count & !GcBox::<T>::FLAGS_MASK;
+                    if actual_count > 0
+                        || (raw_weak_count & GcBox::<T>::UNDER_CONSTRUCTION_FLAG) != 0
+                    {
+                        (*self.gc_box_ptr.as_ptr()).mark_dead();
+                    } else {
+                        with_heap(|heap| {
+                            heap.dealloc(self.ptr);
+                        });
+                    }
                 }
             }
         }
@@ -613,9 +681,10 @@ impl<T: Trace> Gc<T> {
 
         let gc_box_ptr = unsafe { NonNull::new_unchecked(gc_box) };
 
-        let mut guard = DropGuard {
+        let mut guard = DropGuard::<T> {
             ptr: raw_ptr,
             completed: false,
+            gc_box_ptr,
         };
 
         unsafe {
@@ -634,6 +703,10 @@ impl<T: Trace> Gc<T> {
             std::ptr::write(
                 std::ptr::addr_of_mut!((*gc_box).trace_fn),
                 GcBox::<T>::trace_fn_for,
+            );
+            std::ptr::write(
+                std::ptr::addr_of_mut!((*gc_box).is_dropping),
+                AtomicUsize::new(0),
             );
         }
 
@@ -1028,6 +1101,11 @@ impl<T: Trace> Weak<T> {
 
             // Check if the value is still alive
             if (*ptr.as_ptr()).is_value_dead() {
+                return None;
+            }
+
+            // Check if value is being dropped (prevents race with dec_ref)
+            if (*ptr.as_ptr()).is_dropping() {
                 return None;
             }
 

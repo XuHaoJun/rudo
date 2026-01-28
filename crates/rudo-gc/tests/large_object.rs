@@ -77,8 +77,8 @@ fn test_large_struct_interior_pointer() {
 
     // head_ptr is the pointer to the value (T) inside GcBox<T>.
     // find_gc_box_from_ptr returns the pointer to GcBox<T>.
-    // On 64-bit, the GcBox header is 32 bytes (ref_count, weak_count, drop_fn, trace_fn).
-    let expected_gc_box_ptr = head_ptr - 32;
+    // On 64-bit, the GcBox header is 40 bytes (ref_count, weak_count, drop_fn, trace_fn, is_dropping).
+    let expected_gc_box_ptr = head_ptr - 40;
 
     // Now verify find_gc_box_from_ptr finds it
     rudo_gc::heap::with_heap(|heap| unsafe {
