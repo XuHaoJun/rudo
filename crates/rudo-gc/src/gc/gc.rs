@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::PoisonError;
 
 use crate::gc::marker::{worker_mark_loop, ParallelMarkConfig, PerThreadMarkQueue};
 use crate::heap::{LocalHeap, PageHeader};
@@ -1428,7 +1429,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
             {
                 let mut manager = crate::heap::segment_manager()
                     .lock()
-                    .expect("segment manager lock poisoned");
+                    .unwrap_or_else(PoisonError::into_inner);
                 for p in 0..pages_needed {
                     let page_addr = header_addr + (p * crate::heap::page_size());
                     manager.large_object_map.remove(&page_addr);

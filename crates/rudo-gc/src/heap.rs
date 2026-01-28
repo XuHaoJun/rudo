@@ -1155,7 +1155,7 @@ impl LocalHeap {
 
         let (ptr, _) = segment_manager()
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .allocate_page(crate::heap::page_size(), boundary);
 
         // 2. Initialize Page Header
@@ -1252,7 +1252,7 @@ impl LocalHeap {
         let boundary = std::ptr::addr_of!(marker) as usize;
         let (ptr, _) = segment_manager()
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .allocate_page(alloc_size, boundary);
 
         // ptr is NonNull<u8> already check for null logic inside allocate_safe_page
@@ -1316,7 +1316,7 @@ impl LocalHeap {
             // Register in global manager too?
             segment_manager()
                 .lock()
-                .unwrap()
+                .unwrap_or_else(PoisonError::into_inner)
                 .large_object_map
                 .insert(page_addr, (header_addr, size, h_size));
         }
@@ -1470,7 +1470,7 @@ impl LocalHeap {
                 self.large_object_map.remove(&page);
                 segment_manager()
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(PoisonError::into_inner)
                     .large_object_map
                     .remove(&page);
             }
