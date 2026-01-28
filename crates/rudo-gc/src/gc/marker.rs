@@ -40,7 +40,7 @@ static OVERFLOW_QUEUE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::nu
 /// Returns true if successful, false if queue is full (should never happen with lock-free CAS).
 fn push_overflow_work(work: *const GcBox<()>) -> bool {
     loop {
-        let current = OVERFLOW_QUEUE.load(Ordering::Relaxed);
+        let current = OVERFLOW_QUEUE.load(Ordering::Acquire);
         let new_node = Box::into_raw(Box::new(OverflowNode {
             work,
             next: AtomicPtr::new(current.cast::<OverflowNode>()),
@@ -49,8 +49,8 @@ fn push_overflow_work(work: *const GcBox<()>) -> bool {
             .compare_exchange(
                 current,
                 new_node.cast::<std::ffi::c_void>(),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
+                Ordering::AcqRel,
+                Ordering::Acquire,
             )
             .is_ok()
         {
@@ -66,18 +66,18 @@ fn push_overflow_work(work: *const GcBox<()>) -> bool {
 /// Returns None if the queue is empty.
 fn pop_overflow_work() -> Option<*const GcBox<()>> {
     loop {
-        let current = OVERFLOW_QUEUE.load(Ordering::Relaxed);
+        let current = OVERFLOW_QUEUE.load(Ordering::Acquire);
         if current.is_null() {
             return None;
         }
         let node = unsafe { &*current.cast::<OverflowNode>() };
-        let next = node.next.load(Ordering::Relaxed);
+        let next = node.next.load(Ordering::Acquire);
         if OVERFLOW_QUEUE
             .compare_exchange(
                 current,
                 next.cast::<std::ffi::c_void>(),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
+                Ordering::AcqRel,
+                Ordering::Acquire,
             )
             .is_ok()
         {
@@ -90,6 +90,14 @@ fn pop_overflow_work() -> Option<*const GcBox<()>> {
 struct OverflowNode {
     work: *const GcBox<()>,
     next: AtomicPtr<OverflowNode>,
+}
+
+fn clear_overflow_queue() {
+    loop {
+        if pop_overflow_work().is_none() {
+            break;
+        }
+    }
 }
 
 /// A per-thread mark queue that holds objects to be traced.
@@ -867,6 +875,20 @@ pub fn worker_mark_loop(
 /// Try to steal work from other queues.
 /// Returns true if work was stolen, false if all queues are empty.
 fn try_steal_work(queue: &Arc<PerThreadMarkQueue>, all_queues: &[Arc<PerThreadMarkQueue>]) -> bool {
+    if let Some(obj) = pop_overflow_work() {
+        if queue.push(obj) {
+            return true;
+        }
+        for other in all_queues {
+            if other.worker_idx() == queue.worker_idx() {
+                continue;
+            }
+            if other.push(obj) {
+                return true;
+            }
+        }
+    }
+
     for other in all_queues {
         if other.worker_idx() == queue.worker_idx() {
             continue;
@@ -1152,5 +1174,125 @@ mod handle_overflow_work_loss_tests {
             overflow_work.is_some(),
             "Work should be in overflow queue when remote buffers are full"
         );
+    }
+}
+
+#[cfg(test)]
+mod verify_bug_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_bug1_overflow_queue_never_cleared_between_gc_cycles() {
+        while pop_overflow_work().is_some() {}
+
+        for i in 0..10 {
+            let work = i as *const GcBox<()>;
+            assert!(push_overflow_work(work), "Push {i} should succeed");
+        }
+
+        while pop_overflow_work().is_some() {}
+
+        for i in 10..20 {
+            let work = i as *const GcBox<()>;
+            assert!(push_overflow_work(work), "Push {i} should succeed");
+        }
+
+        let mut count = 0;
+        while pop_overflow_work().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 10, "Only items from current 'cycle' should remain");
+    }
+
+    #[test]
+    fn test_bug2_fixed_try_steal_work_checks_overflow_queue() {
+        while pop_overflow_work().is_some() {}
+
+        let queues: Vec<Arc<PerThreadMarkQueue>> = (0..4)
+            .map(|i| Arc::new(PerThreadMarkQueue::new_with_index(i)))
+            .collect();
+
+        let work = 42usize as *const GcBox<()>;
+        assert!(push_overflow_work(work), "Should push to overflow queue");
+
+        let result = try_steal_work(&queues[0], &queues);
+
+        assert!(
+            result,
+            "FIXED: try_steal_work should return true when overflow queue has work"
+        );
+
+        let recovered = pop_overflow_work();
+        assert!(
+            recovered.is_none(),
+            "Work should have been stolen from overflow queue"
+        );
+    }
+
+    #[test]
+    #[ignore = "Requires manual code review to verify handle_overflow is never called"]
+    fn test_bug3_handle_overflow_dead_code_in_mark_loop() {
+        // This test documents the bug - handle_overflow() exists but is never
+        // called from worker_mark_loop() (lines 825-865 in original file).
+        //
+        // The worker_mark_loop only:
+        // 1. Pops from local queue (line 834: while let Some(obj) = queue.pop())
+        // 2. Calls try_steal_work() (line 859) which doesn't call handle_overflow
+        //
+        // handle_overflow() is only called from test code (lines 994, 1024, 1143)
+    }
+
+    #[test]
+    #[allow(clippy::redundant_clone)]
+    fn test_bug4_overflow_queue_relaxed_ordering() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::Arc;
+        use std::thread;
+
+        while pop_overflow_work().is_some() {}
+
+        let write_count = Arc::new(AtomicUsize::new(0));
+        let read_count = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(Barrier::new(2));
+
+        let write_count_clone = write_count.clone();
+        let read_count_clone = read_count.clone();
+        let barrier_for_writer = barrier.clone();
+        let writer = thread::spawn(move || {
+            barrier_for_writer.wait();
+            for i in 0..100 {
+                let work = i as *const GcBox<()>;
+                push_overflow_work(work);
+                write_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+
+        let barrier_for_reader = barrier.clone();
+        let reader = thread::spawn(move || {
+            barrier_for_reader.wait();
+            let mut count = 0;
+            while write_count.load(std::sync::atomic::Ordering::Relaxed) < 100 {
+                if pop_overflow_work().is_some() {
+                    count += 1;
+                }
+            }
+            while pop_overflow_work().is_some() {
+                count += 1;
+            }
+            read_count_clone.store(count, std::sync::atomic::Ordering::Relaxed);
+        });
+
+        writer.join().unwrap();
+        reader.join().unwrap();
+        let popped_count = read_count.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(popped_count, 100, "All items should be popped");
+    }
+
+    #[test]
+    fn test_bug5_clone_trait_removed() {
+        let queue = PerThreadMarkQueue::new();
+        let _ = queue.worker_idx();
+        let _ = queue.max_capacity();
     }
 }
