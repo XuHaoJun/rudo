@@ -20,7 +20,7 @@
 use std::cell::Cell;
 use std::num::NonZeroUsize;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Barrier;
 use std::sync::Mutex;
@@ -43,7 +43,7 @@ fn push_overflow_work(work: *const GcBox<()>) -> bool {
         let current = OVERFLOW_QUEUE.load(Ordering::Relaxed);
         let new_node = Box::into_raw(Box::new(OverflowNode {
             work,
-            next: current.cast::<OverflowNode>(),
+            next: AtomicPtr::new(current.cast::<OverflowNode>()),
         }));
         if OVERFLOW_QUEUE
             .compare_exchange(
@@ -70,9 +70,8 @@ fn pop_overflow_work() -> Option<*const GcBox<()>> {
         if current.is_null() {
             return None;
         }
-        let node = unsafe { Box::from_raw(current.cast::<OverflowNode>()) };
-        let work = node.work;
-        let next = node.next;
+        let node = unsafe { &*current.cast::<OverflowNode>() };
+        let next = node.next.load(Ordering::Relaxed);
         if OVERFLOW_QUEUE
             .compare_exchange(
                 current,
@@ -82,14 +81,15 @@ fn pop_overflow_work() -> Option<*const GcBox<()>> {
             )
             .is_ok()
         {
-            return Some(work);
+            let owned_node = unsafe { Box::from_raw(current.cast::<OverflowNode>()) };
+            return Some(owned_node.work);
         }
     }
 }
 
 struct OverflowNode {
     work: *const GcBox<()>,
-    next: *mut OverflowNode,
+    next: AtomicPtr<OverflowNode>,
 }
 
 /// A per-thread mark queue that holds objects to be traced.
@@ -244,7 +244,6 @@ impl PerThreadMarkQueue {
     ) -> bool {
         self.overflow_count.fetch_add(1, Ordering::Relaxed);
 
-        // Strategy 1: Push to remote workers' pending_work
         for other in all_queues {
             if other.worker_idx() == self.worker_idx {
                 continue;
@@ -256,7 +255,6 @@ impl PerThreadMarkQueue {
             }
         }
 
-        // Strategy 2: Grow capacity hint if we're consistently near capacity
         let current_hint = self.capacity_hint.load(Ordering::Relaxed);
         #[allow(
             clippy::cast_possible_truncation,
@@ -267,11 +265,8 @@ impl PerThreadMarkQueue {
         if new_hint < self.max_capacity {
             self.capacity_hint
                 .store(new_hint.min(self.max_capacity), Ordering::Relaxed);
-            return true;
         }
 
-        // Strategy 3: Push to shared overflow queue as fallback
-        // This prevents work loss when all per-thread buffers are full
         push_overflow_work(work)
     }
 
@@ -975,7 +970,7 @@ mod push_remote_overflow_tests {
     }
 
     #[test]
-    fn test_handle_overflow_grows_hint_but_work_still_dropped() {
+    fn test_handle_overflow_grows_hint_and_uses_overflow_queue() {
         let num_queues = 4;
         let queues: Vec<Arc<PerThreadMarkQueue>> = (0..num_queues)
             .map(|_| Arc::new(PerThreadMarkQueue::new()))
@@ -989,27 +984,27 @@ mod push_remote_overflow_tests {
             }
         }
 
+        assert_eq!(
+            queues[0].pending_work_len(),
+            PENDING_WORK_BUFFER_SIZE,
+            "Buffer should be full before overflow"
+        );
+
         let sender = queues[0].clone();
         let result = sender.handle_overflow(work, &queues);
 
-        assert!(
-            result,
-            "handle_overflow returns true by growing capacity hint"
-        );
+        assert!(result, "handle_overflow should push work to overflow queue");
 
         for queue in &queues {
             assert_eq!(
                 queue.pending_work_len(),
                 PENDING_WORK_BUFFER_SIZE,
-                "All buffers should still be full - work was NOT received"
+                "Remote buffers should still be full"
             );
         }
 
-        assert_eq!(
-            sender.overflow_count(),
-            1,
-            "Overflow count should be incremented"
-        );
+        let overflow_work = pop_overflow_work();
+        assert!(overflow_work.is_some(), "Work should be in overflow queue");
     }
 
     #[test]
@@ -1032,6 +1027,125 @@ mod push_remote_overflow_tests {
             owner.pending_work_len(),
             PENDING_WORK_BUFFER_SIZE,
             "BUG: Work was dropped because buffer was full"
+        );
+    }
+}
+
+#[cfg(test)]
+mod overflow_queue_use_after_free_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn test_overflow_queue_basic_push_pop() {
+        while pop_overflow_work().is_some() {}
+
+        let work1 = std::ptr::dangling::<GcBox<()>>();
+        let work2 = std::ptr::dangling::<GcBox<()>>();
+
+        assert!(push_overflow_work(work1));
+        assert!(push_overflow_work(work2));
+
+        let popped1 = pop_overflow_work();
+        assert!(popped1.is_some());
+        assert_eq!(popped1.unwrap(), work2);
+
+        let popped2 = pop_overflow_work();
+        assert!(popped2.is_some());
+        assert_eq!(popped2.unwrap(), work1);
+
+        assert!(pop_overflow_work().is_none());
+    }
+
+    #[test]
+    fn test_overflow_queue_empty_returns_none() {
+        while pop_overflow_work().is_some() {}
+        assert!(pop_overflow_work().is_none());
+    }
+
+    #[test]
+    #[ignore = "Concurrent test - too strict for Miri, passes with regular threading"]
+    fn test_overflow_queue_push_pop_multiple_threads() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::Arc;
+        use std::sync::Barrier;
+
+        const NUM_ITEMS: usize = 100;
+
+        while pop_overflow_work().is_some() {}
+
+        let pushed_count = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(Barrier::new(3));
+
+        let pushed_count_clone = pushed_count.clone();
+        let push_barrier = barrier.clone();
+        let push_handle = thread::spawn(move || {
+            push_barrier.wait();
+            for i in 0..NUM_ITEMS {
+                let work = i as *const GcBox<()>;
+                push_overflow_work(work);
+                pushed_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+
+        let pop_barrier = barrier.clone();
+        let pop_handle = thread::spawn(move || {
+            pop_barrier.wait();
+            let mut count = 0;
+            loop {
+                if pop_overflow_work().is_some() {
+                    count += 1;
+                } else if pushed_count.load(std::sync::atomic::Ordering::Relaxed) >= NUM_ITEMS {
+                    break;
+                }
+            }
+            count
+        });
+
+        barrier.wait();
+
+        let _ = push_handle.join();
+        let popped_count = pop_handle.join().unwrap();
+
+        assert_eq!(
+            popped_count, NUM_ITEMS,
+            "All {NUM_ITEMS} items should be popped"
+        );
+        assert!(pop_overflow_work().is_none(), "Queue should be empty");
+    }
+}
+
+#[cfg(test)]
+mod handle_overflow_work_loss_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_handle_overflow_uses_overflow_queue_when_remote_full() {
+        let owner = Arc::new(PerThreadMarkQueue::new());
+        let sender = Arc::new(PerThreadMarkQueue::new());
+        let all_queues = vec![owner.clone(), sender.clone()];
+
+        let work = 42usize as *const GcBox<()>;
+
+        for _ in 0..PENDING_WORK_BUFFER_SIZE {
+            assert!(PerThreadMarkQueue::push_remote(&owner, work));
+        }
+
+        assert_eq!(owner.pending_work_len(), PENDING_WORK_BUFFER_SIZE);
+
+        let result = sender.handle_overflow(work, &all_queues);
+
+        assert!(
+            result,
+            "handle_overflow should return true when work is pushed to overflow queue"
+        );
+
+        let overflow_work = pop_overflow_work();
+        assert!(
+            overflow_work.is_some(),
+            "Work should be in overflow queue when remote buffers are full"
         );
     }
 }
