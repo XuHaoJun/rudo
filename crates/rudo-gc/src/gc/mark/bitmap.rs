@@ -3,7 +3,7 @@
 //! This module provides a mark bitmap that records object liveness using one bit
 //! per pointer-sized unit, replacing per-object forwarding pointers.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// A page-level bitmap for marking objects during garbage collection.
 ///
@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[derive(Debug)]
 pub struct MarkBitmap {
     /// Bitmap storage, one bit per pointer-sized unit.
-    bitmap: Vec<u64>,
+    bitmap: Vec<AtomicU64>,
     /// Number of pointer slots in the page.
     capacity: usize,
     /// Number of marked slots (atomic for parallel access).
@@ -46,8 +46,12 @@ impl MarkBitmap {
             "MarkBitmap capacity must be aligned to 64"
         );
         let bits = (capacity + 63).div_ceil(64);
+        let mut bitmap = Vec::with_capacity(bits);
+        for _ in 0..bits {
+            bitmap.push(AtomicU64::new(0));
+        }
         Self {
-            bitmap: vec![0u64; bits],
+            bitmap,
             capacity,
             marked_count: AtomicUsize::new(0),
         }
@@ -71,12 +75,11 @@ impl MarkBitmap {
     /// # Safety
     ///
     /// The caller must ensure that `slot_index` is within bounds.
-    pub unsafe fn mark(&mut self, slot_index: usize) {
+    pub unsafe fn mark(&self, slot_index: usize) {
         let word = slot_index / 64;
         let bit = slot_index % 64;
         let mask = 1u64 << bit;
-        let prev = self.bitmap[word];
-        self.bitmap[word] |= mask;
+        let prev = self.bitmap[word].fetch_or(mask, Ordering::Relaxed);
         // Only increment if bit was not already set (idempotent marking)
         if prev & mask == 0 {
             self.marked_count.fetch_add(1, Ordering::Relaxed);
@@ -92,13 +95,13 @@ impl MarkBitmap {
     pub unsafe fn is_marked(&self, slot_index: usize) -> bool {
         let word = slot_index / 64;
         let bit = slot_index % 64;
-        (self.bitmap[word] >> bit) & 1 != 0
+        (self.bitmap[word].load(Ordering::Relaxed) >> bit) & 1 != 0
     }
 
     /// Clear all marks for reuse.
-    pub fn clear(&mut self) {
-        for word in &mut self.bitmap {
-            *word = 0;
+    pub fn clear(&self) {
+        for word in &self.bitmap {
+            word.store(0, Ordering::Relaxed);
         }
         self.marked_count.store(0, Ordering::Relaxed);
     }
@@ -107,6 +110,30 @@ impl MarkBitmap {
 #[cfg(test)]
 mod tests {
     use super::MarkBitmap;
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn test_mark_bitmap_concurrent_mark() {
+        let bitmap = Arc::new(MarkBitmap::new(512));
+        let mut handles = Vec::new();
+
+        for i in 0..4 {
+            let bitmap = Arc::clone(&bitmap);
+            let handle = thread::spawn(move || {
+                for j in 0..128 {
+                    unsafe { bitmap.mark(i * 128 + j) };
+                }
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(bitmap.marked_count(), 512);
+    }
 
     #[test]
     fn test_mark_bitmap_new() {

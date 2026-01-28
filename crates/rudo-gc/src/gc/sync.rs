@@ -213,7 +213,7 @@ pub fn get_min_lock_order() -> LockOrder {
 
 #[cfg(test)]
 mod tests {
-    use super::LockOrder;
+    use super::{LockGuard, LockOrder};
 
     #[test]
     fn test_lock_order_values() {
@@ -226,5 +226,32 @@ mod tests {
     fn test_lock_order_comparison() {
         assert!(LockOrder::LocalHeap.order_value() < LockOrder::GlobalMarkState.order_value());
         assert!(LockOrder::GlobalMarkState.order_value() < LockOrder::GcRequest.order_value());
+    }
+
+    #[test]
+    fn test_lock_guard_valid_order() {
+        let _guard1 = LockGuard::new(LockOrder::LocalHeap);
+        let _guard2 = LockGuard::new(LockOrder::GlobalMarkState);
+        let _guard3 = LockGuard::new(LockOrder::GcRequest);
+    }
+
+    #[test]
+    #[should_panic(expected = "Lock ordering violation")]
+    fn test_lock_guard_invalid_order_should_panic() {
+        let _guard1 = LockGuard::new(LockOrder::GlobalMarkState);
+        let _guard2 = LockGuard::new(LockOrder::LocalHeap);
+    }
+
+    #[test]
+    fn test_lock_guard_same_order_should_succeed() {
+        let _guard1 = LockGuard::new(LockOrder::GlobalMarkState);
+        let _guard2 = LockGuard::new(LockOrder::GlobalMarkState);
+    }
+
+    #[test]
+    fn test_lock_guard_acquire_in_order() {
+        let _guard1 = LockGuard::new(LockOrder::LocalHeap);
+        let _guard2 = LockGuard::new(LockOrder::GlobalMarkState);
+        let _guard3 = LockGuard::new(LockOrder::GcRequest);
     }
 }
