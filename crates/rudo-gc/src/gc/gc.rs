@@ -1292,6 +1292,7 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
                         (*header).clear_allocated(i);
                         reclaimed += 1;
                         is_alloc = false;
+                        continue;
                     }
                 }
 

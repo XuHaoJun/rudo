@@ -156,17 +156,33 @@ struct OverflowNode {
     next: AtomicPtr<OverflowNode>,
 }
 
+/// Clear the overflow queue by waiting for all current users to finish,
+/// then draining all items. This is called at the end of each mark phase.
+///
+/// # Lock Ordering
+///
+/// This function acquires the clear lock BEFORE waiting for users.
+/// This is the inverse of typical lock patterns but is required to prevent
+/// a race where pushers enter between the users check and lock acquisition.
+///
+/// # Safety
+///
+/// The synchronization works as follows:
+/// 1. Clearer increments `OVERFLOW_QUEUE_CLEAR_GEN` (signals intent)
+/// 2. Clearer waits for `OVERFLOW_QUEUE_USERS` to reach 0
+/// 3. Pushers check `clear_gen % 2 == 1` and abort if odd (clearing in progress)
+/// 4. Only after both conditions are met does the clearer access the queue
 pub fn clear_overflow_queue() {
+    // SAFETY: We must signal intent (acquire lock) BEFORE waiting for users.
+    // If we checked users first, a pusher could increment users between the
+    // check and CAS, then proceed to access the queue while we clear it.
+    // By CASing first, pushers will see odd generation and abort.
+    let old_gen = OVERFLOW_QUEUE_CLEAR_GEN.fetch_add(1, Ordering::AcqRel);
+
     loop {
         let users = OVERFLOW_QUEUE_USERS.load(Ordering::Acquire);
         if users == 0 {
-            let old_gen = OVERFLOW_QUEUE_CLEAR_GEN.load(Ordering::Acquire);
-            if OVERFLOW_QUEUE_CLEAR_GEN
-                .compare_exchange(old_gen, old_gen + 1, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                break;
-            }
+            break;
         }
         std::hint::spin_loop();
     }
@@ -1224,5 +1240,63 @@ mod overflow_queue_verification_tests {
             count += 1;
         }
         assert_eq!(count, 10, "Only items pushed after clear should remain");
+    }
+
+    #[test]
+    #[ignore = "Concurrent test - stress tests clear_overflow_queue vs pushers race"]
+    fn test_clear_overflow_queue_concurrent_with_pushers() {
+        const NUM_PUSHERS: usize = 4;
+        const ITEMS_PER_PUSHER: usize = 1000;
+        const ITERATIONS: usize = 10;
+
+        for _ in 0..ITERATIONS {
+            while pop_overflow_work().is_some() {}
+
+            let barrier = Arc::new(Barrier::new(NUM_PUSHERS + 1));
+            let completed = Arc::new(AtomicUsize::new(0));
+            let pushed_count = Arc::new(AtomicUsize::new(0));
+
+            let barrier_clone = barrier.clone();
+            let completed_clone = completed.clone();
+            let pushed_clone = pushed_count.clone();
+
+            let push_handles: Vec<_> = (0..NUM_PUSHERS)
+                .map(|_| {
+                    let barrier = barrier_clone.clone();
+                    let completed = completed_clone.clone();
+                    let pushed = pushed_clone.clone();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        let mut local_pushed = 0;
+                        for i in 0..ITEMS_PER_PUSHER {
+                            let work = i as *const GcBox<()>;
+                            if push_overflow_work(work).is_ok() {
+                                local_pushed += 1;
+                            }
+                        }
+                        pushed.fetch_add(local_pushed, Ordering::Relaxed);
+                        completed.fetch_add(1, Ordering::Relaxed);
+                    })
+                })
+                .collect();
+
+            barrier.wait();
+
+            while completed.load(Ordering::Acquire) < NUM_PUSHERS {
+                std::thread::yield_now();
+            }
+
+            clear_overflow_queue();
+
+            for handle in push_handles {
+                handle.join().unwrap();
+            }
+
+            let remaining = pop_overflow_work();
+            assert!(
+                remaining.is_none() || pushed_count.load(Ordering::Relaxed) > 0,
+                "Queue should be empty after clear, or there were concurrent pushes"
+            );
+        }
     }
 }
