@@ -3,13 +3,11 @@
 //! This module implements the core garbage collection logic using
 //! a mark-sweep algorithm with the `BiBOP` memory layout.
 
-mod marker;
-mod worklist;
-
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use crate::gc::marker::{worker_mark_loop, ParallelMarkConfig, PerThreadMarkQueue};
 use crate::heap::{LocalHeap, PageHeader};
@@ -232,6 +230,8 @@ pub fn collect() {
 
 /// Perform collection as the collector thread.
 fn perform_multi_threaded_collect() {
+    crate::gc::marker::clear_overflow_queue();
+
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
@@ -375,6 +375,18 @@ pub fn collect_full() {
 /// CRITICAL: We must clear `gc_requested` for ALL threads, not just those at safepoint.
 /// Otherwise, threads that haven't reached safepoint yet will have their flag stuck at true,
 /// causing them to hang in future GC cycles when they enter rendezvous.
+///
+/// # Lock Ordering
+///
+/// Acquires `thread_registry()` lock (order 2). This function is called during
+/// GC cleanup and must not be called while holding locks with order > 2.
+///
+/// # Safety
+///
+/// This function safely accesses the thread registry to wake threads that are
+/// waiting at safepoints. The lock protects access to the thread list and their
+/// state. After waking threads, it updates the `active_count` to reflect the
+/// number of threads that have been resumed.
 fn wake_waiting_threads() {
     let registry = crate::heap::thread_registry().lock().unwrap();
     let mut woken_count = 0;
@@ -793,12 +805,15 @@ fn mark_minor_roots_parallel(
         }
     }
 
-    let all_queues = worker_queues.clone();
+    let all_queues: Vec<Arc<PerThreadMarkQueue>> =
+        worker_queues.into_iter().map(Arc::new).collect();
+    let num_queues = all_queues.len();
     let mut handles = Vec::new();
-    for queue in worker_queues {
+    for i in 0..num_queues {
         let queues = all_queues.clone();
+        let queue = all_queues[i].clone();
         let handle =
-            std::thread::spawn(move || worker_mark_loop(&queue, &queues, VisitorKind::Minor));
+            std::thread::spawn(move || worker_mark_loop(queue, &queues, VisitorKind::Minor));
         handles.push(handle);
     }
 
@@ -816,6 +831,8 @@ fn mark_minor_roots_parallel(
                 .clear_all_dirty();
         }
     }
+
+    crate::gc::marker::clear_overflow_queue();
 }
 
 /// Mark roots from all threads' stacks for Major GC.
@@ -924,12 +941,15 @@ fn mark_major_roots_parallel(
         }
     });
 
-    let all_queues = worker_queues.clone();
+    let all_queues: Vec<Arc<PerThreadMarkQueue>> =
+        worker_queues.into_iter().map(Arc::new).collect();
+    let num_queues = all_queues.len();
     let mut handles = Vec::new();
-    for queue in worker_queues {
+    for i in 0..num_queues {
         let queues = all_queues.clone();
+        let queue = all_queues[i].clone();
         let handle =
-            std::thread::spawn(move || worker_mark_loop(&queue, &queues, VisitorKind::Major));
+            std::thread::spawn(move || worker_mark_loop(queue, &queues, VisitorKind::Major));
         handles.push(handle);
     }
 
@@ -938,6 +958,8 @@ fn mark_major_roots_parallel(
         coordinator.record_marked(marked);
         coordinator.worker_completed();
     }
+
+    crate::gc::marker::clear_overflow_queue();
 }
 
 /// Minor Collection: Collect Young Generation only.

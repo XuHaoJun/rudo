@@ -107,6 +107,46 @@ This project uses `.cursor/commands/` for custom speckit workflows:
 - Rust 1.75+ + `std::sync::atomic` (Rust stdlib), no external crates (002-send-sync-trait)
 - N/A (in-memory garbage collector, heap managed internally) (002-send-sync-trait)
 - Rust 1.75+ (stable, with `std::sync::atomic` features) + `std::sync::atomic`, `std::thread`, `std::sync::Barrier`, `std::sync::Mutex` (003-parallel-marking)
+- Rust 1.75+ (as specified in AGENTS.md) + `std::sync::atomic`, `std::sync::Mutex`, `std::thread`, `std::sync::Barrier` (Rust stdlib only) (001-chez-gc-optimization)
+- In-memory heap (N/A for external storage) (001-chez-gc-optimization)
 
 ## Recent Changes
 - 002-send-sync-trait: Added Rust 1.75+ + `std::sync::atomic` (Rust stdlib), no external crates
+
+## Concurrency Patterns (001-chez-gc-optimization)
+
+### Lock Ordering Discipline
+All locks must be acquired in a fixed global order to prevent deadlocks:
+1. `LocalHeap` lock (per-thread heap)
+2. `GlobalMarkState` lock (global marking state)
+3. `GcRequest` lock (GC request)
+
+Example:
+```rust
+let _heap_guard = self.heap.lock();
+let _state_guard = GlobalMarkState::get().lock();
+// Cannot acquire heap lock after state lock - violates order
+```
+
+### Push-Based Work Transfer
+Workers push completed work to owner's queue instead of all workers polling:
+- Each worker has `pending_work: Vec<GcPtr<T>>` (capacity 16)
+- On buffer full, worker pushes to owner's `PerThreadMarkQueue::remote_work`
+- Remote work is checked during steal attempts
+
+### Mark Bitmap
+Per-page mark bitmap replaces per-object overhead:
+- `PageHeader::mark_bitmap: [AtomicU64; BITMAP_SIZE]`
+- Each bit marks one object in the page
+- 98% reduction in per-object overhead
+
+### Segment Ownership
+Track page ownership for better cache locality:
+- `OwnedPagesTracker` maps page range to owner thread ID
+- Workers mark pages they allocate into
+- Helps prioritize marking local pages first
+
+### Dynamic Stack Growth
+Monitor work queue capacity to prevent stalls:
+- Track `local_capacity` and `remote_capacity`
+- Grow worklist when capacity threshold is reached

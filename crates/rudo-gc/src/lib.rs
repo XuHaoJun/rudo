@@ -81,7 +81,8 @@ pub mod heap;
 // Re-export public API
 pub use cell::GcCell;
 pub use gc::{
-    collect, collect_full, default_collect_condition, safepoint, set_collect_condition, CollectInfo,
+    collect, collect_full, default_collect_condition, safepoint, set_collect_condition,
+    CollectInfo, PerThreadMarkQueue,
 };
 pub use metrics::{last_gc_metrics, CollectionType, GcMetrics};
 pub use ptr::{Gc, Weak};
