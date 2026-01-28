@@ -671,6 +671,10 @@ fn mark_minor_roots_multi(
                 continue;
             }
             if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+                let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
                 continue;
             }
 
@@ -1073,6 +1077,10 @@ fn mark_minor_roots(heap: &LocalHeap) {
                 continue;
             }
             if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+                let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
                 continue;
             }
 

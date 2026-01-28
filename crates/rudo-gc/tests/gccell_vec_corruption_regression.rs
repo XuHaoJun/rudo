@@ -9,7 +9,7 @@
 use rudo_gc::{collect, Gc, GcCell, Trace};
 
 #[derive(Trace)]
-struct Component {
+pub struct Component {
     id: u64,
     children: GcCell<Vec<Gc<Self>>>,
 }
@@ -125,4 +125,57 @@ fn test_nested_gccell_vec() {
     assert_eq!(root.children.borrow().len(), 2);
     assert_eq!(child1.children.borrow().len(), 2);
     assert_eq!(child2.children.borrow().len(), 1);
+}
+
+#[derive(Trace)]
+pub struct TestAppState {
+    pub scene: GcCell<Vec<Gc<Component>>>,
+}
+
+impl TestAppState {
+    #[must_use]
+    pub fn new() -> Gc<Self> {
+        Gc::new(Self {
+            scene: GcCell::new(Vec::new()),
+        })
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn add_scene_root(&self, component: Gc<Component>) {
+        self.scene.borrow_mut().push(Gc::clone(&component));
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn test_multiple_gc_roots() {
+    // Build two separate trees
+    let root1 = build_tree();
+    let root1_children_count = root1.children.borrow().len();
+    println!("DEBUG: root1 children: {root1_children_count}");
+
+    let root2 = build_tree();
+    let root2_children_count = root2.children.borrow().len();
+    println!("DEBUG: root2 children: {root2_children_count}");
+
+    // Check counts immediately
+    println!("DEBUG: After build - root1: {root1_children_count}, root2: {root2_children_count}");
+
+    // Create app state with multiple roots
+    let app_state = TestAppState::new();
+    app_state.add_scene_root(Gc::clone(&root1));
+    app_state.add_scene_root(Gc::clone(&root2));
+
+    // Collect - both trees should be preserved
+    println!("DEBUG: Before collect - root1: {root1_children_count}");
+    collect();
+    let root1_after_gc = root1.children.borrow().len();
+    println!("DEBUG: After collect - root1: {root1_after_gc}");
+
+    // Both roots should still have all children
+    assert_eq!(root1.children.borrow().len(), 3, "root1 after GC");
+    assert_eq!(root2.children.borrow().len(), 3, "root2 after GC");
+
+    drop(app_state);
+    collect();
 }
