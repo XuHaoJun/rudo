@@ -1008,7 +1008,7 @@ mod push_remote_overflow_tests {
     }
 
     #[test]
-    fn test_work_lost_when_pending_buffer_full() {
+    fn test_handle_overflow_uses_overflow_when_pending_buffer_full() {
         let owner = Arc::new(PerThreadMarkQueue::new());
         let sender = Arc::new(PerThreadMarkQueue::new());
         let all_queues = vec![owner.clone(), sender.clone()];
@@ -1023,10 +1023,15 @@ mod push_remote_overflow_tests {
 
         let result = sender.handle_overflow(work, &all_queues);
 
-        assert_eq!(
-            owner.pending_work_len(),
-            PENDING_WORK_BUFFER_SIZE,
-            "BUG: Work was dropped because buffer was full"
+        assert!(
+            result,
+            "handle_overflow should return true when work is pushed to overflow queue"
+        );
+
+        let overflow_work = pop_overflow_work();
+        assert!(
+            overflow_work.is_some(),
+            "Work should be saved to overflow queue when pending buffer is full"
         );
     }
 }
