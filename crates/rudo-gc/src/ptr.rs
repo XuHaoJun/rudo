@@ -1150,18 +1150,37 @@ impl<T: Trace> Drop for Weak<T> {
         unsafe {
             let weak_count_ptr = std::ptr::addr_of!((*ptr.as_ptr()).weak_count);
 
-            // Load current value atomically for proper synchronization
-            let current = (*weak_count_ptr).load(Ordering::Relaxed);
-            let flags = current & GcBox::<T>::FLAGS_MASK;
-            let count = current & !GcBox::<T>::FLAGS_MASK;
+            let mut current = (*weak_count_ptr).load(Ordering::Relaxed);
+            loop {
+                let flags = current & GcBox::<T>::FLAGS_MASK;
+                let count = current & !GcBox::<T>::FLAGS_MASK;
 
-            // Decrement the weak count, preserving flags
-            if count > 1 {
-                (*weak_count_ptr).store(flags | (count - 1), Ordering::Relaxed);
-            } else if count == 1 {
-                (*weak_count_ptr).store(flags, Ordering::Relaxed);
+                match count.cmp(&1) {
+                    std::cmp::Ordering::Equal => {
+                        match (*weak_count_ptr).compare_exchange_weak(
+                            current,
+                            flags,
+                            Ordering::AcqRel,
+                            Ordering::Relaxed,
+                        ) {
+                            Ok(_) => break,
+                            Err(actual) => current = actual,
+                        }
+                    }
+                    std::cmp::Ordering::Greater => {
+                        match (*weak_count_ptr).compare_exchange_weak(
+                            current,
+                            flags | (count - 1),
+                            Ordering::AcqRel,
+                            Ordering::Relaxed,
+                        ) {
+                            Ok(_) => break,
+                            Err(actual) => current = actual,
+                        }
+                    }
+                    std::cmp::Ordering::Less => break,
+                }
             }
-            // If count == 0, nothing to do (already at zero)
         }
     }
 }

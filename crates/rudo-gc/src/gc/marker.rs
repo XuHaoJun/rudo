@@ -215,7 +215,7 @@ pub struct PerThreadMarkQueue {
     #[allow(clippy::arc_with_non_send_sync)]
     pub(crate) queue: Arc<StealQueue<usize, MARK_QUEUE_SIZE>>,
     /// The bottom index for local push/pop operations.
-    pub(crate) bottom: Cell<usize>,
+    pub(crate) bottom: AtomicUsize,
     /// Worker index for this queue.
     pub(crate) worker_idx: usize,
     /// Pages owned by this worker for processing.
@@ -255,7 +255,7 @@ impl PerThreadMarkQueue {
         let max_capacity = MARK_QUEUE_SIZE;
         Self {
             queue: Arc::new(StealQueue::new()),
-            bottom: Cell::new(0),
+            bottom: AtomicUsize::new(0),
             worker_idx,
             owned_pages: Vec::new(),
             marked_count: AtomicUsize::new(0),

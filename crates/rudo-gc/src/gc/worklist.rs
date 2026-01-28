@@ -3,7 +3,6 @@
 //! This module provides lock-free work-stealing deques based on the Chase-Lev algorithm
 //! for efficient parallel garbage collection marking.
 
-use std::cell::Cell;
 use std::cell::UnsafeCell;
 use std::marker::Copy;
 use std::mem::MaybeUninit;
@@ -29,7 +28,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[allow(dead_code)]
 pub struct StealQueue<T: Copy, const N: usize> {
     buffer: UnsafeCell<[MaybeUninit<T>; N]>,
-    bottom: Cell<usize>,
+    bottom: AtomicUsize,
     top: AtomicUsize,
     mask: usize,
 }
@@ -50,7 +49,7 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
 
         Self {
             buffer: UnsafeCell::new([const { MaybeUninit::uninit() }; N]),
-            bottom: Cell::new(0),
+            bottom: AtomicUsize::new(0),
             top: AtomicUsize::new(0),
             mask: N - 1,
         }
@@ -70,8 +69,8 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
     /// The slot is exclusively owned by the pusher when push succeeds,
     /// and the write is made visible with a release store.
     #[allow(dead_code)]
-    pub fn push(&self, bottom: &Cell<usize>, item: T) -> bool {
-        let b = bottom.get();
+    pub fn push(&self, bottom: &AtomicUsize, item: T) -> bool {
+        let b = bottom.load(Ordering::Relaxed);
         let t = self.top.load(Ordering::Acquire);
 
         if b.wrapping_sub(t) >= N {
@@ -84,7 +83,7 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
             (*self.buffer.get())[index].write(item);
         }
 
-        bottom.set(b.wrapping_add(1));
+        bottom.store(b.wrapping_add(1), Ordering::Relaxed);
 
         true
     }
@@ -103,8 +102,8 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
     /// We have exclusive access to read from this slot. If this is the last
     /// item, we synchronize with stealers using CAS on top.
     #[allow(dead_code)]
-    pub fn pop(&self, bottom: &Cell<usize>) -> Option<T> {
-        let b = bottom.get();
+    pub fn pop(&self, bottom: &AtomicUsize) -> Option<T> {
+        let b = bottom.load(Ordering::Relaxed);
         let t = self.top.load(Ordering::Acquire);
 
         if b == t {
@@ -112,7 +111,7 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
         }
 
         let new_b = b.wrapping_sub(1);
-        bottom.set(new_b);
+        bottom.store(new_b, Ordering::Relaxed);
 
         let index = new_b & self.mask;
 
@@ -132,11 +131,11 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
             .is_err()
         {
             // Another thread stole the item - put it back
-            bottom.set(b);
+            bottom.store(b, Ordering::Relaxed);
             return None;
         }
 
-        bottom.set(t.wrapping_add(1));
+        bottom.store(t.wrapping_add(1), Ordering::Relaxed);
         Some(item)
     }
 
@@ -152,9 +151,9 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
     /// We use CAS on top to ensure only one stealer succeeds. The CAS
     /// prevents the ABA problem and ensures at-most-once semantics.
     #[allow(dead_code)]
-    pub fn steal(&self, bottom: &Cell<usize>) -> Option<T> {
+    pub fn steal(&self, bottom: &AtomicUsize) -> Option<T> {
         let t = self.top.load(Ordering::Acquire);
-        let b = bottom.get();
+        let b = bottom.load(Ordering::Relaxed);
 
         if t == b {
             return None;
@@ -178,23 +177,21 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
     /// Get the current size of the queue.
     #[must_use]
     #[allow(dead_code)]
-    pub fn len(&self, bottom: &Cell<usize>) -> usize {
-        let b = bottom.get();
+    pub fn len(&self, bottom: &AtomicUsize) -> usize {
+        let b = bottom.load(Ordering::Relaxed);
         let t = self.top.load(Ordering::Acquire);
         b.wrapping_sub(t)
     }
 
-    /// Check if the queue is empty.
     #[must_use]
     #[allow(dead_code)]
-    pub fn is_empty(&self, bottom: &Cell<usize>) -> bool {
+    pub fn is_empty(&self, bottom: &AtomicUsize) -> bool {
         self.len(bottom) == 0
     }
 
-    /// Check if the queue is full.
     #[must_use]
     #[allow(dead_code)]
-    pub fn is_full(&self, bottom: &Cell<usize>) -> bool {
+    pub fn is_full(&self, bottom: &AtomicUsize) -> bool {
         self.len(bottom) >= N
     }
 }
@@ -207,9 +204,12 @@ impl<T: Copy, const N: usize> Default for StealQueue<T, N> {
 
 // SAFETY: StealQueue is safe to share between threads because:
 // - The buffer uses UnsafeCell for interior mutability
-// - All operations use atomic synchronization (CAS on top, Cell on bottom)
+// - bottom is an AtomicUsize providing thread-safe synchronization
+// - top is an AtomicUsize with CAS operations preventing concurrent access
 // - Push/pop only access unique slots based on bottom/top values
-// - Steal uses CAS to prevent concurrent access to same slot
+// - Steal uses CAS on top to prevent concurrent access to same slot
+// - Memory ordering (Relaxed for bottom, Acquire/Release for top) ensures
+//   proper synchronization for the work-stealing protocol
 unsafe impl<T: Copy + Send, const N: usize> Send for StealQueue<T, N> {}
 
 // SAFETY: See Send impl
@@ -218,12 +218,12 @@ unsafe impl<T: Copy + Send, const N: usize> Sync for StealQueue<T, N> {}
 #[cfg(test)]
 mod tests {
     use super::StealQueue;
-    use std::cell::Cell;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn test_steal_queue_basic() {
         let queue: StealQueue<i32, 1024> = StealQueue::new();
-        let bottom = Cell::new(0);
+        let bottom = AtomicUsize::new(0);
 
         assert!(queue.is_empty(&bottom));
 
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn test_steal_queue_fifo() {
         let queue: StealQueue<i32, 1024> = StealQueue::new();
-        let bottom = Cell::new(0);
+        let bottom = AtomicUsize::new(0);
 
         queue.push(&bottom, 1);
         queue.push(&bottom, 2);
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn test_steal_queue_lifo() {
         let queue: StealQueue<i32, 1024> = StealQueue::new();
-        let bottom = Cell::new(0);
+        let bottom = AtomicUsize::new(0);
 
         queue.push(&bottom, 1);
         queue.push(&bottom, 2);
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn test_steal_queue_bounds() {
         let queue: StealQueue<i32, 16> = StealQueue::new();
-        let bottom = Cell::new(0);
+        let bottom = AtomicUsize::new(0);
 
         for i in 0..16 {
             assert!(queue.push(&bottom, i));
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn test_steal_queue_push_pop_miri() {
         let queue: StealQueue<i32, 64> = StealQueue::new();
-        let bottom = Cell::new(0);
+        let bottom = AtomicUsize::new(0);
 
         for i in 0..32 {
             assert!(queue.push(&bottom, i), "push failed at index {}", i);
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn test_steal_queue_steal_miri() {
         let queue: StealQueue<i32, 64> = StealQueue::new();
-        let bottom = Cell::new(0);
+        let bottom = AtomicUsize::new(0);
 
         for i in 0..16 {
             assert!(queue.push(&bottom, i));
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn test_steal_queue_wrap_around_miri() {
         let queue: StealQueue<i32, 8> = StealQueue::new();
-        let bottom = Cell::new(0);
+        let bottom = AtomicUsize::new(0);
 
         for i in 0..8 {
             assert!(queue.push(&bottom, i), "push {} failed", i);
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn test_steal_queue_single_threaded_race_miri() {
         let queue: StealQueue<i32, 32> = StealQueue::new();
-        let bottom = Cell::new(0);
+        let bottom = AtomicUsize::new(0);
 
         let mut values = Vec::new();
         for i in 0..16 {
