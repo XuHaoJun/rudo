@@ -69,7 +69,7 @@ struct MarkBitmap {
 ```
 
 **Files added**: `crates/rudo-gc/src/gc/mark/bitmap.rs`
-**Files modified**: `crates/rudo-gc/src/heap.rs`, `crates/rudo-gc/src/gc/collector.rs`
+**Files modified**: `crates/rudo-gc/src/heap.rs`, `crates/rudo-gc/src/gc/gc.rs`
 
 ---
 
@@ -93,7 +93,7 @@ fn acquire_lock(tag: LockTag) {
 }
 ```
 
-**Files modified**: `crates/rudo-gc/src/gc/sync.rs`, `crates/rudo-gc/src/heap.rs`, `crates/rudo-gc/src/gc/collector.rs`
+**Files modified**: `crates/rudo-gc/src/gc/sync.rs`, `crates/rudo-gc/src/heap.rs`, `crates/rudo-gc/src/gc/gc.rs`
 
 ---
 

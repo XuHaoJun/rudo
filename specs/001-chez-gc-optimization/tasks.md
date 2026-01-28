@@ -60,7 +60,7 @@
 
 - [X] T016 [US2] Update `LocalHeap` lock acquisition to use `LOCK_ORDER_LOCAL_HEAP` in `crates/rudo-gc/src/heap.rs`
 - [X] T017 [US2] Update `GlobalMarkState` lock acquisition to use `LOCK_ORDER_GLOBAL_MARK` in `crates/rudo-gc/src/gc/marker.rs`
-- [X] T018 [US2] Update `GCRequest` lock acquisition to use `LOCK_ORDER_GC_REQUEST` in `crates/rudo-gc/src/gc/collector.rs`
+- [X] T018 [US2] Update `GCRequest` lock acquisition to use `LOCK_ORDER_GC_REQUEST` in `crates/rudo-gc/src/gc/gc.rs`
 - [X] T019 [US2] Add SAFETY comments to all lock acquisition points documenting the ordering contract
 - [X] T020 [US2] Add `#[cfg(debug_assertions)]` runtime validation for lock order in `crates/rudo-gc/src/gc/sync.rs`
 
@@ -123,7 +123,7 @@
 - [X] T046 [US3] Add `bitmap: Option<MarkBitmap>` field to `PageHeader` in `crates/rudo-gc/src/heap.rs` (already has mark_bitmap field)
 - [X] T047 [US3] Remove `forwarding: GcHeader` field from `GcBox<T>` in `crates/rudo-gc/src/ptr.rs` (no forwarding pointer exists)
 - [X] T048 [US3] Update mark phase to set bitmap bits instead of forwarding pointers in `crates/rudo-gc/src/gc/marker.rs`
-- [X] T049 [US3] Update sweep phase to read bitmap for liveness in `crates/rudo-gc/src/gc/collector.rs`
+- [X] T049 [US3] Update sweep phase to read bitmap for liveness in `crates/rudo-gc/src/gc/gc.rs`
 - [X] T050 [US3] Add SAFETY comments to all unsafe bitmap operations in `crates/rudo-gc/src/gc/mark/bitmap.rs`
 
 **Checkpoint**: Mark bitmap implemented; memory overhead benchmarks should show 50% reduction
@@ -211,7 +211,7 @@ crates/rudo-gc/src/gc/
 ├── marker.rs           # PerThreadMarkQueue with push-based transfer
 ├── worklist.rs        # Chase-Lev deque
 ├── sync.rs            # Lock ordering discipline
-├── collector.rs       # GC orchestrator
+├── gc.rs       # GC orchestrator
 └── mark/
     ├── mod.rs        # Module exports
     ├── bitmap.rs     # MarkBitmap implementation
