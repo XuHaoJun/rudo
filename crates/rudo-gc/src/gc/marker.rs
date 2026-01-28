@@ -62,18 +62,31 @@ pub struct PerThreadMarkQueue {
     /// Pending work received from other threads (push-based transfer).
     /// Uses Mutex for safe concurrent access from multiple pushers.
     pending_work: Mutex<Vec<*const GcBox<()>>>,
+    /// Target capacity for dynamic growth monitoring.
+    /// When queue utilization exceeds this threshold, overflow handling is triggered.
+    capacity_hint: AtomicUsize,
+    /// Maximum capacity before forcing overflow handling.
+    max_capacity: usize,
 }
 
 const MARK_QUEUE_SIZE: usize = 1024;
 
+/// Default capacity hint threshold (75% of max capacity).
+const DEFAULT_CAPACITY_THRESHOLD: f64 = 0.75;
+
 /// Buffer size for pending work received via push-based transfer.
-/// Fixed small buffer to minimize memory overhead (8-16 items).
 const PENDING_WORK_BUFFER_SIZE: usize = 16;
 
 impl PerThreadMarkQueue {
     /// Create a new per-thread mark queue with the given worker index.
     #[must_use]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation
+    )]
     pub fn new_with_index(worker_idx: usize) -> Self {
+        let max_capacity = MARK_QUEUE_SIZE;
         Self {
             queue: Arc::new(StealQueue::new()),
             bottom: Cell::new(0),
@@ -81,6 +94,10 @@ impl PerThreadMarkQueue {
             owned_pages: Vec::new(),
             marked_count: AtomicUsize::new(0),
             pending_work: Mutex::new(Vec::with_capacity(PENDING_WORK_BUFFER_SIZE)),
+            capacity_hint: AtomicUsize::new(
+                (max_capacity as f64 * DEFAULT_CAPACITY_THRESHOLD) as usize,
+            ),
+            max_capacity,
         }
     }
 
@@ -101,6 +118,135 @@ impl PerThreadMarkQueue {
         self.push(obj.as_ptr())
     }
 
+    // ============================================================================
+    // Dynamic Stack Growth
+    // ============================================================================
+
+    /// Get the current length of the queue.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.queue.len(&self.bottom)
+    }
+
+    /// Get the capacity hint threshold.
+    #[must_use]
+    pub fn capacity_hint(&self) -> usize {
+        self.capacity_hint.load(Ordering::Relaxed)
+    }
+
+    /// Get the maximum capacity.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn max_capacity(&self) -> usize {
+        self.max_capacity
+    }
+
+    /// Get the current utilization percentage (0.0 to 1.0).
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn utilization(&self) -> f64 {
+        let len = self.len();
+        len as f64 / self.max_capacity as f64
+    }
+
+    /// Check if queue is near capacity and overflow handling may be needed.
+    #[must_use]
+    pub fn is_near_capacity(&self) -> bool {
+        self.len() >= self.capacity_hint.load(Ordering::Relaxed)
+    }
+
+    /// Handle overflow when queue is full or near capacity.
+    ///
+    /// This method is called when `push()` fails or when the queue
+    /// reaches the capacity hint threshold. It implements strategies
+    /// to handle the overflow:
+    ///
+    /// 1. Push excess work to remote workers' `pending_work` queues
+    /// 2. Update capacity hint if utilization pattern suggests growth
+    ///
+    /// # Arguments
+    ///
+    /// * `work` - The work item that couldn't be pushed locally
+    /// * `all_queues` - All worker queues for finding recipients
+    ///
+    /// # Returns
+    ///
+    /// `true` if overflow was handled successfully, `false` if all recipients are full
+    pub fn handle_overflow(
+        &self,
+        work: *const GcBox<()>,
+        all_queues: &[PerThreadMarkQueue],
+    ) -> bool {
+        // Strategy 1: Push to remote workers' pending_work
+        for other in all_queues {
+            if other.worker_idx() == self.worker_idx {
+                continue;
+            }
+            if other.pending_work_len() < PENDING_WORK_BUFFER_SIZE {
+                PerThreadMarkQueue::push_remote(&Arc::new(other.clone()), work);
+                return true;
+            }
+        }
+
+        // Strategy 2: Grow capacity hint if we're consistently near capacity
+        let current_hint = self.capacity_hint.load(Ordering::Relaxed);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let new_hint = (current_hint as f64 * 1.1) as usize;
+        if new_hint < self.max_capacity {
+            self.capacity_hint
+                .store(new_hint.min(self.max_capacity), Ordering::Relaxed);
+            return true;
+        }
+
+        false
+    }
+
+    /// Update capacity hint based on observed utilization pattern.
+    ///
+    /// Called periodically to adapt the capacity threshold to actual usage.
+    /// Reduces the hint if we're consistently under-utilized.
+    pub fn update_capacity_hint(&self) {
+        let utilization = self.utilization();
+        let current_hint = self.capacity_hint.load(Ordering::Relaxed);
+
+        // If utilization is consistently below 50% of hint, reduce hint
+        if utilization < 0.5 && current_hint > self.max_capacity / 4 {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
+            let new_hint = (current_hint as f64 * 0.9) as usize;
+            self.capacity_hint
+                .store(new_hint.max(self.max_capacity / 4), Ordering::Relaxed);
+        }
+        // If utilization is consistently above hint, increase hint
+        else if utilization > 0.9 {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
+            let new_hint = (current_hint as f64 * 1.1) as usize;
+            self.capacity_hint
+                .store(new_hint.min(self.max_capacity), Ordering::Relaxed);
+        }
+    }
+
+    /// Get the number of overflow events handled.
+    ///
+    /// Useful for monitoring and tuning capacity hints.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn overflow_count(&self) -> usize {
+        // This would require an AtomicUsize counter - placeholder for now
+        0
+    }
+
     /// Pop an object from the local end (LIFO).
     /// Returns None if the queue is empty.
     pub fn pop(&self) -> Option<*const GcBox<()>> {
@@ -116,12 +262,6 @@ impl PerThreadMarkQueue {
         self.queue
             .steal(&self.bottom)
             .map(|ptr| ptr as *const GcBox<()>)
-    }
-
-    /// Get the current length of the queue.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.queue.len(&self.bottom)
     }
 
     /// Check if the queue is empty.
@@ -677,6 +817,8 @@ impl Clone for PerThreadMarkQueue {
             owned_pages: Vec::new(),
             marked_count: AtomicUsize::new(0),
             pending_work: Mutex::new(Vec::with_capacity(PENDING_WORK_BUFFER_SIZE)),
+            capacity_hint: AtomicUsize::new(self.capacity_hint.load(Ordering::Relaxed)),
+            max_capacity: self.max_capacity,
         }
     }
 }

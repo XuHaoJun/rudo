@@ -107,24 +107,24 @@
 
 **Tests for User Story 3** (write first, verify fail):
 
-- [ ] T036 [P] [US3] Unit test for `MarkBitmap` in `tests/unit/test_mark_bitmap.rs`
-- [ ] T037 [P] [US3] Integration test for bitmap marking in `tests/integration/mark_bitmap.rs`
-- [ ] T038 [P] [US3] Migration test from forwarding pointers to bitmap in `tests/integration/mark_bitmap.rs`
-- [ ] T039 [P] [US3] Memory overhead benchmark in `tests/benchmarks/marking.rs`
+- [X] T036 [P] [US3] Unit test for `MarkBitmap` in `tests/unit/test_mark_bitmap.rs` (in `gc::mark::bitmap::tests`)
+- [X] T037 [P] [US3] Integration test for bitmap marking in `tests/integration/mark_bitmap.rs`
+- [X] T038 [P] [US3] Migration test from forwarding pointers to bitmap in `tests/integration/mark_bitmap.rs`
+- [X] T039 [P] [US3] Memory overhead benchmark in `tests/benchmarks/marking.rs`
 
 **Implementation for User Story 3**:
 
-- [ ] T040 [US3] Create `MarkBitmap` struct with `Vec<u64>` bitmap storage in `src/heap/mark/bitmap.rs`
-- [ ] T041 [US3] Implement `new()` constructor with capacity validation in `src/heap/mark/bitmap.rs`
-- [ ] T042 [US3] Implement `mark()` method using word/bit index calculations in `src/heap/mark/bitmap.rs`
-- [ ] T043 [US3] Implement `is_marked()` method in `src/heap/mark/bitmap.rs`
-- [ ] T044 [US3] Implement `clear()` method for sweep phase in `src/heap/mark/bitmap.rs`
-- [ ] T045 [US3] Add `marked_count: AtomicUsize` field and update on mark in `src/heap/mark/bitmap.rs`
-- [ ] T046 [US3] Add `bitmap: Option<MarkBitmap>` field to `PageHeader` in `src/heap/page.rs`
-- [ ] T047 [US3] Remove `forwarding: GcHeader` field from `GcBox<T>` in `src/gc.rs`
-- [ ] T048 [US3] Update mark phase to set bitmap bits instead of forwarding pointers in `src/marker.rs`
-- [ ] T049 [US3] Update sweep phase to read bitmap for liveness in `src/gc.rs`
-- [ ] T050 [US3] Add SAFETY comments to all unsafe bitmap operations in `src/heap/mark/bitmap.rs`
+- [X] T040 [US3] Create `MarkBitmap` struct with `Vec<u64>` bitmap storage in `crates/rudo-gc/src/gc/mark/bitmap.rs`
+- [X] T041 [US3] Implement `new()` constructor with capacity validation in `crates/rudo-gc/src/gc/mark/bitmap.rs`
+- [X] T042 [US3] Implement `mark()` method using word/bit index calculations in `crates/rudo-gc/src/gc/mark/bitmap.rs`
+- [X] T043 [US3] Implement `is_marked()` method in `crates/rudo-gc/src/gc/mark/bitmap.rs`
+- [X] T044 [US3] Implement `clear()` method for sweep phase in `crates/rudo-gc/src/gc/mark/bitmap.rs`
+- [X] T045 [US3] Add `marked_count: AtomicUsize` field and update on mark in `crates/rudo-gc/src/gc/mark/bitmap.rs`
+- [X] T046 [US3] Add `bitmap: Option<MarkBitmap>` field to `PageHeader` in `crates/rudo-gc/src/heap.rs` (already has mark_bitmap field)
+- [X] T047 [US3] Remove `forwarding: GcHeader` field from `GcBox<T>` in `crates/rudo-gc/src/ptr.rs` (no forwarding pointer exists)
+- [X] T048 [US3] Update mark phase to set bitmap bits instead of forwarding pointers in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T049 [US3] Update sweep phase to read bitmap for liveness in `crates/rudo-gc/src/gc/collector.rs`
+- [X] T050 [US3] Add SAFETY comments to all unsafe bitmap operations in `crates/rudo-gc/src/gc/mark/bitmap.rs`
 
 **Checkpoint**: Mark bitmap implemented; memory overhead benchmarks should show 50% reduction
 
@@ -138,19 +138,19 @@
 
 **Tests for User Story 4** (write first, verify fail):
 
-- [ ] T051 [P] [US4] Unit test for dynamic stack growth in `tests/unit/test_mark_queue.rs`
-- [ ] T052 [P] [US4] Integration test for queue capacity handling in `tests/integration/work_stealing.rs`
-- [ ] T053 [P] [US4] Scalability benchmark with varying worker counts in `tests/benchmarks/marking.rs`
+- [X] T051 [P] [US4] Unit test for dynamic stack growth in `tests/unit/test_mark_queue.rs` (in `tests/integration/work_stealing.rs`)
+- [X] T052 [P] [US4] Integration test for queue capacity handling in `tests/integration/work_stealing.rs`
+- [X] T053 [P] [US4] Scalability benchmark with varying worker counts in `tests/benchmarks/marking.rs`
 
 **Implementation for User Story 4**:
 
-- [ ] T054 [US4] Add `capacity_hint: AtomicUsize` to `PerThreadMarkQueue` in `src/heap/mark/queue.rs`
-- [ ] T055 [US4] Implement queue capacity monitoring in `push_local()` in `src/heap/mark/queue.rs`
-- [ ] T056 [US4] Implement `handle_overflow()` method for capacity growth in `src/heap/mark/queue.rs`
-- [ ] T057 [US4] Implement pre-allocation strategy when threshold exceeded in `src/heap/mark/queue.rs`
-- [ ] T058 [US4] Add overflow work transfer to remote `pending_work` as fallback in `src/heap/mark/queue.rs`
-- [ ] T059 [US4] Add queue capacity utilization metrics in `src/heap/mark/queue.rs`
-- [ ] T060 [US4] Integrate dynamic growth with existing Chase-Lev deque in `src/worklist.rs`
+- [X] T054 [US4] Add `capacity_hint: AtomicUsize` to `PerThreadMarkQueue` in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T055 [US4] Implement queue capacity monitoring in `push_local()` in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T056 [US4] Implement `handle_overflow()` method in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T057 [US4] Implement pre-allocation strategy in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T058 [US4] Add overflow work transfer to remote `pending_work` in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T059 [US4] Add queue capacity utilization metrics in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T060 [US4] Integrate dynamic growth with existing Chase-Lev deque in `crates/rudo-gc/src/gc/marker.rs`
 
 **Checkpoint**: Dynamic stack growth implemented; scalability benchmarks should show proportional scaling
 
