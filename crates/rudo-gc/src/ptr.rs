@@ -9,8 +9,8 @@ use std::ops::Deref;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
-use crate::gc::{is_collecting, notify_dropped_gc};
-use crate::heap::{ptr_to_object_index, ptr_to_page_header, with_heap, LocalHeap};
+use crate::gc::notify_dropped_gc;
+use crate::heap::{with_heap, LocalHeap};
 use crate::trace::{GcVisitor, Trace, Visitor};
 
 // ============================================================================
@@ -104,7 +104,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
         // SAFETY: self_ptr is valid because it's obtained from the atomic pointer in Gc::drop
         let this = unsafe { &*self_ptr };
         loop {
-            let count = this.ref_count.load(Ordering::Relaxed);
+            let count = this.ref_count.load(Ordering::Acquire);
             if count == 0 {
                 // Already at zero - this is a bug (double-free or use-after-free)
                 // Return true to prevent further issues
@@ -915,19 +915,6 @@ impl<T: Trace> Drop for Gc<T> {
 
         let gc_box_ptr = ptr.as_ptr();
 
-        if is_collecting() {
-            unsafe {
-                let header = ptr_to_page_header(gc_box_ptr.cast());
-                if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
-                    if let Some(index) = ptr_to_object_index(gc_box_ptr.cast()) {
-                        if !(*header.as_ptr()).is_marked(index) {
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-
         let is_last = GcBox::<T>::dec_ref(gc_box_ptr);
 
         if is_last {
@@ -1089,36 +1076,51 @@ impl<T: Trace> Weak<T> {
     pub fn upgrade(&self) -> Option<Gc<T>> {
         let ptr = self.ptr.load(Ordering::Acquire).as_option()?;
 
-        // SAFETY: The pointer is valid because we have a weak reference
         unsafe {
-            // Check if under construction (prevents UB during new_cyclic_weak)
+            let gc_box = &*ptr.as_ptr();
+
             assert!(
-                !(*ptr.as_ptr()).is_under_construction(),
+                !gc_box.is_under_construction(),
                 "Weak::upgrade: cannot upgrade while GcBox is under construction. \
                  This typically happens if you call upgrade() inside the closure \
                  passed to Gc::new_cyclic_weak()."
             );
 
-            // Check if the value is still alive
-            if (*ptr.as_ptr()).is_value_dead() {
-                return None;
+            loop {
+                if gc_box.is_value_dead() {
+                    return None;
+                }
+
+                if gc_box.is_dropping() {
+                    return None;
+                }
+
+                let current_count = gc_box.ref_count.load(Ordering::Relaxed);
+                if current_count == 0 {
+                    return None;
+                }
+
+                if current_count == usize::MAX {
+                    return None;
+                }
+
+                if gc_box
+                    .ref_count
+                    .compare_exchange_weak(
+                        current_count,
+                        current_count.saturating_add(1),
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    crate::gc::notify_created_gc();
+                    return Some(Gc {
+                        ptr: AtomicNullable::new(ptr),
+                        _marker: PhantomData,
+                    });
+                }
             }
-
-            // Check if value is being dropped (prevents race with dec_ref)
-            if (*ptr.as_ptr()).is_dropping() {
-                return None;
-            }
-
-            // Increment the strong reference count
-            (*ptr.as_ptr()).inc_ref();
-
-            // Notify the GC about the new Gc
-            crate::gc::notify_created_gc();
-
-            Some(Gc {
-                ptr: AtomicNullable::new(ptr),
-                _marker: PhantomData,
-            })
         }
     }
 

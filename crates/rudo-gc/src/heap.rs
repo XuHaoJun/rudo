@@ -586,7 +586,7 @@ impl PageHeader {
     pub fn set_dirty(&mut self, index: usize) {
         let word = index / 64;
         let bit = index % 64;
-        self.dirty_bitmap[word].fetch_or(1u64 << bit, Ordering::Release);
+        self.dirty_bitmap[word].fetch_or(1u64 << bit, Ordering::AcqRel);
     }
 
     /// Clear the dirty bit for an object at the given index.
