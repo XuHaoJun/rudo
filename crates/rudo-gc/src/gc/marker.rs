@@ -329,6 +329,17 @@ impl PerThreadMarkQueue {
         other.steal()
     }
 
+    /// Get the number of owned pages for this worker.
+    #[must_use]
+    pub fn owned_count(&self) -> usize {
+        self.owned_pages.len()
+    }
+
+    /// Register a page as owned by this worker.
+    pub fn push_owned_page(&mut self, page: NonNull<PageHeader>) {
+        self.owned_pages.push(page);
+    }
+
     /// Work stealing algorithm: attempt to steal from other queues
     /// when local queue is empty or nearly empty.
     /// Iterates through other queues in FIFO order to find work.
@@ -854,7 +865,7 @@ pub fn worker_mark_loop(
 }
 
 /// Try to steal work from other queues.
-/// Returns true if work was stolen, false if all queues are empty.
+/// Returns true if work was stolen or queued, false if all queues are empty.
 fn try_steal_work(queue: &Arc<PerThreadMarkQueue>, all_queues: &[Arc<PerThreadMarkQueue>]) -> bool {
     if let Some(obj) = pop_overflow_work() {
         if queue.push(obj) {
@@ -868,6 +879,11 @@ fn try_steal_work(queue: &Arc<PerThreadMarkQueue>, all_queues: &[Arc<PerThreadMa
                 return true;
             }
         }
+        // Fallback: push back to overflow queue to prevent work loss
+        // This can only fail if clearing is in progress, in which case
+        // the work will be picked up by the clearer
+        let _ = push_overflow_work(obj);
+        return true;
     }
 
     for other in all_queues {
@@ -926,8 +942,8 @@ mod marker_clone_bug_tests {
     fn test_per_thread_mark_queue_functions_without_clone() {
         let mut queue = PerThreadMarkQueue::new();
         let page: NonNull<()> = NonNull::dangling();
-        queue.owned_pages.push(page.cast());
-        assert_eq!(queue.owned_pages.len(), 1);
+        queue.push_owned_page(page.cast());
+        assert_eq!(queue.owned_count(), 1);
         assert_eq!(queue.len(), 0);
     }
 
@@ -936,8 +952,8 @@ mod marker_clone_bug_tests {
     fn test_owned_pages_is_properly_encapsulated() {
         let mut queue = PerThreadMarkQueue::new();
         let page: NonNull<()> = NonNull::dangling();
-        queue.owned_pages.push(page.cast());
-        assert_eq!(queue.owned_pages.len(), 1);
+        queue.push_owned_page(page.cast());
+        assert_eq!(queue.owned_count(), 1);
     }
 }
 
