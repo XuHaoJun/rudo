@@ -966,9 +966,14 @@ mod overflow_queue_use_after_free_tests {
             pop_barrier.wait();
             let mut count = 0;
             loop {
+                let total_pushed = pushed_count.load(Ordering::Acquire);
+                if total_pushed < NUM_ITEMS {
+                    std::thread::yield_now();
+                    continue;
+                }
                 if pop_overflow_work().is_some() {
                     count += 1;
-                } else if pushed_count.load(std::sync::atomic::Ordering::Relaxed) >= NUM_ITEMS {
+                } else {
                     break;
                 }
             }
