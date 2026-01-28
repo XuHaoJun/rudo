@@ -383,6 +383,15 @@ impl PerThreadMarkQueue {
     ///
     /// `true` if work was successfully pushed, `false` if buffer is full
     /// and work was dropped.
+    /// Push work to be processed by the owning worker.
+    ///
+    /// Uses a bounded buffer (16 items) to reduce steal contention.
+    /// If the buffer is full, falls back to the shared overflow queue
+    /// to prevent work loss.
+    ///
+    /// # Returns
+    ///
+    /// true if work was queued, false if all queues are full
     ///
     /// # Panics
     ///
@@ -393,7 +402,8 @@ impl PerThreadMarkQueue {
             pending.push(work);
             true
         } else {
-            false
+            drop(pending);
+            push_overflow_work(work).is_ok()
         }
     }
 
@@ -963,7 +973,7 @@ mod push_remote_overflow_tests {
     use std::sync::Arc;
 
     #[test]
-    fn test_push_remote_returns_false_when_buffer_full() {
+    fn test_push_remote_falls_back_to_overflow_when_buffer_full() {
         let owner = Arc::new(PerThreadMarkQueue::new());
         let work_items: Vec<*const GcBox<()>> = (0..20).map(|i| i as *const _).collect();
 
@@ -974,7 +984,7 @@ mod push_remote_overflow_tests {
         assert_eq!(owner.pending_work_len(), 16);
 
         let result = PerThreadMarkQueue::push_remote(&owner, work_items[17]);
-        assert!(!result, "Push should fail when buffer is full");
+        assert!(result, "Push should succeed (falls back to overflow queue)");
         assert_eq!(owner.pending_work_len(), 16);
     }
 
