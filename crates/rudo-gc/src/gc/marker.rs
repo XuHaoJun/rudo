@@ -153,17 +153,22 @@ pub fn clear_overflow_queue() {
     loop {
         let users = OVERFLOW_QUEUE_USERS.load(Ordering::Acquire);
         if users == 0 {
-            break;
+            let old_gen = OVERFLOW_QUEUE_CLEAR_GEN.load(Ordering::Acquire);
+            if OVERFLOW_QUEUE_CLEAR_GEN
+                .compare_exchange(old_gen, old_gen + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break;
+            }
         }
         std::hint::spin_loop();
     }
-    OVERFLOW_QUEUE_CLEAR_GEN.fetch_add(1, Ordering::Relaxed);
     loop {
         if pop_overflow_work().is_none() {
             break;
         }
     }
-    OVERFLOW_QUEUE_CLEAR_GEN.fetch_add(1, Ordering::Relaxed);
+    OVERFLOW_QUEUE_CLEAR_GEN.fetch_add(1, Ordering::Release);
 }
 
 /// A per-thread mark queue that holds objects to be traced.
@@ -1158,5 +1163,41 @@ mod overflow_queue_verification_tests {
         reader.join().unwrap();
         let popped_count = read_count.load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(popped_count, 100, "All items should be popped");
+    }
+
+    #[test]
+    fn test_clear_overflow_queue_function() {
+        while pop_overflow_work().is_some() {}
+
+        for i in 0..10 {
+            let work = i as *const GcBox<()>;
+            assert!(push_overflow_work(work).is_ok(), "Push {i} should succeed");
+        }
+
+        assert!(
+            pop_overflow_work().is_some(),
+            "Queue should have items before clear"
+        );
+
+        clear_overflow_queue();
+
+        assert!(
+            pop_overflow_work().is_none(),
+            "Queue should be empty after clear"
+        );
+
+        for i in 10..20 {
+            let work = i as *const GcBox<()>;
+            assert!(
+                push_overflow_work(work).is_ok(),
+                "Push {i} should succeed after clear"
+            );
+        }
+
+        let mut count = 0;
+        while pop_overflow_work().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 10, "Only items pushed after clear should remain");
     }
 }

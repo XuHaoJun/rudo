@@ -107,14 +107,14 @@ impl MarkBitmap {
 
     /// Clear all marks for reuse.
     ///
-    /// Uses Release ordering to ensure all prior mark operations are visible
-    /// before the bitmap is reused. This matches the acquire-release semantics
-    /// needed for proper synchronization between marking and sweeping phases.
+    /// Uses `SeqCst` ordering to ensure all prior mark operations are visible
+    /// before the bitmap is reused, and to synchronize with concurrent
+    /// `SeqCst` operations in `mark()` and `is_marked()`.
     pub fn clear(&self) {
         for word in &self.bitmap {
-            word.store(0, Ordering::Release);
+            word.store(0, Ordering::SeqCst);
         }
-        self.marked_count.store(0, Ordering::Release);
+        self.marked_count.store(0, Ordering::SeqCst);
     }
 }
 
