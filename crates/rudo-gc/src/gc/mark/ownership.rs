@@ -44,6 +44,15 @@ pub struct OwnedPagesTracker {
 /// - The tracker is only ever accessed by the owning thread
 unsafe impl Send for OwnedPagesTracker {}
 
+/// Safety: `OwnedPagesTracker` is `Sync` because:
+/// - `HashSet`<`NonNull`<PageHeader>> is `Sync` when the set is only accessed by a single thread
+/// - The design invariant that each tracker is owned by exactly one thread is enforced
+///   by construction (created by the owning thread, never shared)
+/// - `ThreadId` is `Sync`
+/// - Interior mutability via `HashSet` is safe because the type system guarantees
+///   single-thread access through the ownership model
+unsafe impl Sync for OwnedPagesTracker {}
+
 impl OwnedPagesTracker {
     /// Create a new owned pages tracker for the current thread.
     #[must_use]

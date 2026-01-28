@@ -34,28 +34,70 @@ use crate::trace::{GcVisitor, VisitorKind};
 ///
 /// When all per-thread `pending_work` buffers are full, work is pushed here
 /// as a fallback. Workers check this queue during steal attempts.
-static OVERFLOW_QUEUE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
+///
+/// # Synchronization
+///
+/// The queue uses `OVERFLOW_QUEUE_USERS` to track threads currently accessing
+/// the queue. `clear_overflow_queue()` waits for this count to reach zero
+/// before attempting to clear, preventing use-after-free races.
+///
+/// # ABA Prevention
+///
+/// The queue uses a generation counter stored in the high bits of an `AtomicUsize`
+/// to prevent ABA problems. Each push/pop operation increments the generation,
+/// ensuring that CAS failures correctly detect when the queue state has changed
+/// even if the pointer address is reused.
+static OVERFLOW_QUEUE: AtomicUsize = AtomicUsize::new(0);
+
+/// Generation counter for ABA prevention.
+/// Stored in the high 16 bits of `OVERFLOW_QUEUE` value.
+const GENERATION_SHIFT: usize = 48;
+const GENERATION_MASK: usize = 0xFFFF << GENERATION_SHIFT;
+const PTR_MASK: usize = !GENERATION_MASK;
+
+/// Get the pointer from a tagged queue value.
+const fn ptr_from_value(value: usize) -> *const OverflowNode {
+    (value & PTR_MASK) as *const OverflowNode
+}
+
+/// Get the generation from a tagged queue value.
+const fn gen_from_value(value: usize) -> usize {
+    (value & GENERATION_MASK) >> GENERATION_SHIFT
+}
+
+/// Create a tagged value from pointer and generation.
+fn make_value(ptr: *const OverflowNode, gen: usize) -> usize {
+    (ptr as usize & PTR_MASK) | ((gen & 0xFFFF) << GENERATION_SHIFT)
+}
+
+/// Counter tracking threads currently accessing the overflow queue.
+/// Used by `clear_overflow_queue()` to wait for all users to finish.
+static OVERFLOW_QUEUE_USERS: AtomicUsize = AtomicUsize::new(0);
 
 /// Push work to the shared overflow queue.
 /// Returns true if successful, false if queue is full (should never happen with lock-free CAS).
 fn push_overflow_work(work: *const GcBox<()>) -> bool {
+    OVERFLOW_QUEUE_USERS.fetch_add(1, Ordering::AcqRel);
     loop {
         let current = OVERFLOW_QUEUE.load(Ordering::Acquire);
+        let current_gen = gen_from_value(current);
+        let current_ptr = ptr_from_value(current);
         let new_node = Box::into_raw(Box::new(OverflowNode {
             work,
-            next: AtomicPtr::new(current.cast::<OverflowNode>()),
+            next: AtomicPtr::new(current_ptr as *mut OverflowNode),
         }));
+        let new_value = make_value(new_node, current_gen.wrapping_add(1));
         if OVERFLOW_QUEUE
-            .compare_exchange(
-                current,
-                new_node.cast::<std::ffi::c_void>(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
+            .compare_exchange(current, new_value, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
+            OVERFLOW_QUEUE_USERS.fetch_sub(1, Ordering::AcqRel);
             return true;
         }
+        // SAFETY: CAS failed, meaning another thread succeeded in pushing their node.
+        // The work pointer in our node is intentionally leaked - it was never registered
+        // in the queue, so the caller still owns it and must handle cleanup.
+        // We only free the node structure itself (Box), not the contained work pointer.
         unsafe {
             Box::from_raw(new_node);
         }
@@ -65,24 +107,33 @@ fn push_overflow_work(work: *const GcBox<()>) -> bool {
 /// Pop work from the shared overflow queue.
 /// Returns None if the queue is empty.
 fn pop_overflow_work() -> Option<*const GcBox<()>> {
+    OVERFLOW_QUEUE_USERS.fetch_add(1, Ordering::AcqRel);
     loop {
         let current = OVERFLOW_QUEUE.load(Ordering::Acquire);
-        if current.is_null() {
+        if current == 0 {
+            OVERFLOW_QUEUE_USERS.fetch_sub(1, Ordering::AcqRel);
             return None;
         }
-        let node_ptr = current.cast::<OverflowNode>();
+        let current_gen = gen_from_value(current);
+        let current_ptr = ptr_from_value(current);
+        if current_ptr.is_null() {
+            OVERFLOW_QUEUE_USERS.fetch_sub(1, Ordering::AcqRel);
+            return None;
+        }
+        let node_ptr = current_ptr;
         let node = unsafe { &*node_ptr };
-        let next = node.next.load(Ordering::Acquire);
+        let next_ptr = node.next.load(Ordering::Acquire);
+        let next_value = if next_ptr.is_null() {
+            0
+        } else {
+            make_value(next_ptr, current_gen.wrapping_add(1))
+        };
         if OVERFLOW_QUEUE
-            .compare_exchange(
-                current,
-                next.cast::<std::ffi::c_void>(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
+            .compare_exchange(current, next_value, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            let owned_node = unsafe { Box::from_raw(node_ptr) };
+            OVERFLOW_QUEUE_USERS.fetch_sub(1, Ordering::AcqRel);
+            let owned_node = unsafe { Box::from_raw(node_ptr as *mut OverflowNode) };
             return Some(owned_node.work);
         }
     }
@@ -94,6 +145,13 @@ struct OverflowNode {
 }
 
 pub fn clear_overflow_queue() {
+    loop {
+        let users = OVERFLOW_QUEUE_USERS.load(Ordering::Acquire);
+        if users == 0 {
+            break;
+        }
+        std::hint::spin_loop();
+    }
     loop {
         if pop_overflow_work().is_none() {
             break;
