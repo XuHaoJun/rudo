@@ -230,6 +230,8 @@ pub fn collect() {
 
 /// Perform collection as the collector thread.
 fn perform_multi_threaded_collect() {
+    crate::gc::marker::clear_overflow_queue();
+
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
@@ -829,6 +831,8 @@ fn mark_minor_roots_parallel(
                 .clear_all_dirty();
         }
     }
+
+    crate::gc::marker::clear_overflow_queue();
 }
 
 /// Mark roots from all threads' stacks for Major GC.
@@ -954,6 +958,8 @@ fn mark_major_roots_parallel(
         coordinator.record_marked(marked);
         coordinator.worker_completed();
     }
+
+    crate::gc::marker::clear_overflow_queue();
 }
 
 /// Minor Collection: Collect Young Generation only.

@@ -80,39 +80,6 @@ fn test_capacity_hint_growth() {
     assert!(new_hint <= queue.max_capacity());
 }
 
-/// Test overflow handling with remote push.
-#[test]
-fn test_overflow_handling() {
-    let num_queues = 4;
-    let queues: Vec<Arc<PerThreadMarkQueue>> = (0..num_queues)
-        .map(|i| Arc::new(PerThreadMarkQueue::new_with_index(i)))
-        .collect();
-
-    let queues_ref: Vec<PerThreadMarkQueue> = queues.iter().map(|q| (**q).clone()).collect();
-    let ptr = 0xAAAAsize as *const rudo_gc::ptr::GcBox<()>;
-
-    // Fill queue 0 to capacity
-    for _ in 0..MARK_QUEUE_SIZE {
-        assert!(queues[0].push(ptr), "Should push until full");
-    }
-
-    // Try to handle overflow by pushing to other queues
-    let handled = queues[0].handle_overflow(ptr, &queues_ref);
-
-    // Should be able to push to another queue's pending_work
-    assert!(
-        handled,
-        "Overflow should be handled by pushing to remote queue"
-    );
-
-    // Verify some queue received the overflow
-    let received_overflow = queues.iter().any(|q| q.has_pending_work());
-    assert!(
-        received_overflow,
-        "At least one queue should have overflow work"
-    );
-}
-
 /// Test concurrent push-based transfer.
 #[test]
 fn test_concurrent_push_transfer() {
@@ -126,7 +93,6 @@ fn test_concurrent_push_transfer() {
 
     let barrier = Arc::new(Barrier::new(num_producers + num_consumers));
     let produced = Arc::new(AtomicUsize::new(0));
-    let consumers_ref: Vec<PerThreadMarkQueue> = consumers.iter().map(|q| (**q).clone()).collect();
 
     // Producer threads push to consumers
     let producer_handles: Vec<_> = (0..num_producers)

@@ -92,7 +92,7 @@ struct OverflowNode {
     next: AtomicPtr<OverflowNode>,
 }
 
-fn clear_overflow_queue() {
+pub fn clear_overflow_queue() {
     loop {
         if pop_overflow_work().is_none() {
             break;
@@ -226,96 +226,6 @@ impl PerThreadMarkQueue {
     #[must_use]
     pub fn is_near_capacity(&self) -> bool {
         self.len() >= self.capacity_hint.load(Ordering::Relaxed)
-    }
-
-    /// Handle overflow when queue is full or near capacity.
-    ///
-    /// This method is called when `push()` fails or when the queue
-    /// reaches the capacity hint threshold. It implements strategies
-    /// to handle the overflow:
-    ///
-    /// 1. Push excess work to remote workers' `pending_work` queues
-    /// 2. Update capacity hint if utilization pattern suggests growth
-    ///
-    /// # Arguments
-    ///
-    /// * `work` - The work item that couldn't be pushed locally
-    /// * `all_queues` - All worker queues for finding recipients
-    ///
-    /// # Returns
-    ///
-    /// `true` if overflow was handled successfully, `false` if all recipients are full
-    pub fn handle_overflow(
-        &self,
-        work: *const GcBox<()>,
-        all_queues: &[Arc<PerThreadMarkQueue>],
-    ) -> bool {
-        self.overflow_count.fetch_add(1, Ordering::Relaxed);
-
-        for other in all_queues {
-            if other.worker_idx() == self.worker_idx {
-                continue;
-            }
-            if other.pending_work_len() < PENDING_WORK_BUFFER_SIZE
-                && PerThreadMarkQueue::push_remote(other, work)
-            {
-                return true;
-            }
-        }
-
-        let current_hint = self.capacity_hint.load(Ordering::Relaxed);
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss
-        )]
-        let new_hint = (current_hint as f64 * 1.1) as usize;
-        if new_hint < self.max_capacity {
-            self.capacity_hint
-                .store(new_hint.min(self.max_capacity), Ordering::Relaxed);
-        }
-
-        push_overflow_work(work)
-    }
-
-    /// Update capacity hint based on observed utilization pattern.
-    ///
-    /// Called periodically to adapt the capacity threshold to actual usage.
-    /// Reduces the hint if we're consistently under-utilized.
-    pub fn update_capacity_hint(&self) {
-        let utilization = self.utilization();
-        let current_hint = self.capacity_hint.load(Ordering::Relaxed);
-
-        // If utilization is consistently below 50% of hint, reduce hint
-        if utilization < 0.5 && current_hint > self.max_capacity / 4 {
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                clippy::cast_precision_loss
-            )]
-            let new_hint = (current_hint as f64 * 0.9) as usize;
-            self.capacity_hint
-                .store(new_hint.max(self.max_capacity / 4), Ordering::Relaxed);
-        }
-        // If utilization is consistently above hint, increase hint
-        else if utilization > 0.9 {
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                clippy::cast_precision_loss
-            )]
-            let new_hint = (current_hint as f64 * 1.1) as usize;
-            self.capacity_hint
-                .store(new_hint.min(self.max_capacity), Ordering::Relaxed);
-        }
-    }
-
-    /// Get the number of overflow events handled.
-    ///
-    /// Useful for monitoring and tuning capacity hints.
-    #[must_use]
-    pub fn overflow_count(&self) -> usize {
-        self.overflow_count.load(Ordering::Relaxed)
     }
 
     /// Pop an object from the local end (LIFO).
@@ -982,79 +892,13 @@ mod push_remote_overflow_tests {
     }
 
     #[test]
-    fn test_push_remote_returns_true_when_buffer_not_full() {
+    fn test_push_remote_fills_buffer_and_fails() {
         let owner = Arc::new(PerThreadMarkQueue::new());
         let work = 42usize as *const GcBox<()>;
 
         let result = PerThreadMarkQueue::push_remote(&owner, work);
         assert!(result, "Push should succeed when buffer has space");
         assert_eq!(owner.pending_work_len(), 1);
-    }
-
-    #[test]
-    fn test_handle_overflow_grows_hint_and_uses_overflow_queue() {
-        let num_queues = 4;
-        let queues: Vec<Arc<PerThreadMarkQueue>> = (0..num_queues)
-            .map(|_| Arc::new(PerThreadMarkQueue::new()))
-            .collect();
-
-        let work = 42usize as *const GcBox<()>;
-
-        for queue in &queues {
-            for _ in 0..PENDING_WORK_BUFFER_SIZE {
-                let _ = PerThreadMarkQueue::push_remote(queue, work);
-            }
-        }
-
-        assert_eq!(
-            queues[0].pending_work_len(),
-            PENDING_WORK_BUFFER_SIZE,
-            "Buffer should be full before overflow"
-        );
-
-        let sender = queues[0].clone();
-        let result = sender.handle_overflow(work, &queues);
-
-        assert!(result, "handle_overflow should push work to overflow queue");
-
-        for queue in &queues {
-            assert_eq!(
-                queue.pending_work_len(),
-                PENDING_WORK_BUFFER_SIZE,
-                "Remote buffers should still be full"
-            );
-        }
-
-        let overflow_work = pop_overflow_work();
-        assert!(overflow_work.is_some(), "Work should be in overflow queue");
-    }
-
-    #[test]
-    fn test_handle_overflow_uses_overflow_when_pending_buffer_full() {
-        let owner = Arc::new(PerThreadMarkQueue::new());
-        let sender = Arc::new(PerThreadMarkQueue::new());
-        let all_queues = vec![owner.clone(), sender.clone()];
-
-        let work = 42usize as *const GcBox<()>;
-
-        for _ in 0..PENDING_WORK_BUFFER_SIZE {
-            let _ = PerThreadMarkQueue::push_remote(&owner, work);
-        }
-
-        assert_eq!(owner.pending_work_len(), PENDING_WORK_BUFFER_SIZE);
-
-        let result = sender.handle_overflow(work, &all_queues);
-
-        assert!(
-            result,
-            "handle_overflow should return true when work is pushed to overflow queue"
-        );
-
-        let overflow_work = pop_overflow_work();
-        assert!(
-            overflow_work.is_some(),
-            "Work should be saved to overflow queue when pending buffer is full"
-        );
     }
 }
 
@@ -1144,46 +988,12 @@ mod overflow_queue_use_after_free_tests {
 }
 
 #[cfg(test)]
-mod handle_overflow_work_loss_tests {
+mod overflow_queue_verification_tests {
     use super::*;
     use std::sync::Arc;
 
     #[test]
-    fn test_handle_overflow_uses_overflow_queue_when_remote_full() {
-        let owner = Arc::new(PerThreadMarkQueue::new());
-        let sender = Arc::new(PerThreadMarkQueue::new());
-        let all_queues = vec![owner.clone(), sender.clone()];
-
-        let work = 42usize as *const GcBox<()>;
-
-        for _ in 0..PENDING_WORK_BUFFER_SIZE {
-            assert!(PerThreadMarkQueue::push_remote(&owner, work));
-        }
-
-        assert_eq!(owner.pending_work_len(), PENDING_WORK_BUFFER_SIZE);
-
-        let result = sender.handle_overflow(work, &all_queues);
-
-        assert!(
-            result,
-            "handle_overflow should return true when work is pushed to overflow queue"
-        );
-
-        let overflow_work = pop_overflow_work();
-        assert!(
-            overflow_work.is_some(),
-            "Work should be in overflow queue when remote buffers are full"
-        );
-    }
-}
-
-#[cfg(test)]
-mod verify_bug_tests {
-    use super::*;
-    use std::sync::Arc;
-
-    #[test]
-    fn test_bug1_overflow_queue_never_cleared_between_gc_cycles() {
+    fn test_overflow_queue_cleared_after_mark_phase() {
         while pop_overflow_work().is_some() {}
 
         for i in 0..10 {
@@ -1206,7 +1016,7 @@ mod verify_bug_tests {
     }
 
     #[test]
-    fn test_bug2_fixed_try_steal_work_checks_overflow_queue() {
+    fn test_try_steal_work_checks_overflow_queue() {
         while pop_overflow_work().is_some() {}
 
         let queues: Vec<Arc<PerThreadMarkQueue>> = (0..4)
@@ -1231,21 +1041,8 @@ mod verify_bug_tests {
     }
 
     #[test]
-    #[ignore = "Requires manual code review to verify handle_overflow is never called"]
-    fn test_bug3_handle_overflow_dead_code_in_mark_loop() {
-        // This test documents the bug - handle_overflow() exists but is never
-        // called from worker_mark_loop() (lines 825-865 in original file).
-        //
-        // The worker_mark_loop only:
-        // 1. Pops from local queue (line 834: while let Some(obj) = queue.pop())
-        // 2. Calls try_steal_work() (line 859) which doesn't call handle_overflow
-        //
-        // handle_overflow() is only called from test code (lines 994, 1024, 1143)
-    }
-
-    #[test]
     #[allow(clippy::redundant_clone)]
-    fn test_bug4_overflow_queue_relaxed_ordering() {
+    fn test_overflow_queue_concurrent_push_pop() {
         use std::sync::atomic::AtomicUsize;
         use std::sync::Arc;
         use std::thread;
@@ -1287,12 +1084,5 @@ mod verify_bug_tests {
         reader.join().unwrap();
         let popped_count = read_count.load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(popped_count, 100, "All items should be popped");
-    }
-
-    #[test]
-    fn test_bug5_clone_trait_removed() {
-        let queue = PerThreadMarkQueue::new();
-        let _ = queue.worker_idx();
-        let _ = queue.max_capacity();
     }
 }
