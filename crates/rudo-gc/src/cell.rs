@@ -4,7 +4,6 @@
 //! notifies the Garbage Collector when mutations occur. Use this for
 //! all interior mutability of GC-managed objects.
 
-use crate::heap::ptr_to_page_header;
 use crate::trace::Trace;
 use std::cell::{Ref, RefCell, RefMut};
 
@@ -75,41 +74,53 @@ impl<T: ?Sized> GcCell<T> {
     ///
     /// This checks if the cell is in an old generation page and marks it as dirty if so.
     fn write_barrier(&self) {
-        // We need to find if we are in a GC page and if that page is Old.
-        // SAFETY: self points to valid memory.
         let ptr = std::ptr::from_ref(self).cast::<u8>();
         unsafe {
-            // ptr_to_page_header returns NonNull, so it's never null.
-            // But we must ensure it's actually a GC page via magic check inside helper or manual check?
-            // ptr_to_page_header assumes valid pointer.
-            // is_gc_pointer checks magic.
-            // But here we want the header to check generation.
-            let header = ptr_to_page_header(ptr);
-            // NonNull doesn't have is_null(). It is never null.
+            crate::heap::with_heap(|heap| {
+                let page_addr = (ptr as usize) & crate::heap::page_mask();
+                let is_large = heap.large_object_map.contains_key(&page_addr);
 
-            // Validate magic before trusting generation (in case stack allocated)
-            if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
-                // We are in a GC page.
-                // Check generation.
-                if (*header.as_ptr()).generation > 0 {
-                    // We are in an old page. We must record this write.
-                    // Find our object index manually to avoid redundant header lookup.
-                    let block_size = (*header.as_ptr()).block_size as usize;
-                    let header_size = (*header.as_ptr()).header_size as usize;
-                    let page_addr = header.as_ptr() as usize;
-                    let ptr_addr = ptr as usize;
+                if is_large {
+                    if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                        let header = gc_box.as_ptr().cast::<crate::heap::PageHeader>();
+                        if (*header).magic == crate::heap::MAGIC_GC_PAGE && (*header).generation > 0
+                        {
+                            let block_size = (*header).block_size as usize;
+                            let header_size = (*header).header_size as usize;
+                            let header_page_addr = header as usize;
+                            let ptr_addr = ptr as usize;
 
-                    // Check pointer is within valid range
-                    if ptr_addr >= page_addr + header_size {
-                        let offset = ptr_addr - (page_addr + header_size);
-                        let index = offset / block_size;
+                            if ptr_addr >= header_page_addr + header_size {
+                                let offset = ptr_addr - (header_page_addr + header_size);
+                                let index = offset / block_size;
 
-                        if index < (*header.as_ptr()).obj_count as usize {
-                            (*header.as_ptr()).set_dirty(index);
+                                if index < (*header).obj_count as usize {
+                                    (*header).set_dirty(index);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let header = crate::heap::ptr_to_page_header(ptr);
+                    if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE
+                        && (*header.as_ptr()).generation > 0
+                    {
+                        let block_size = (*header.as_ptr()).block_size as usize;
+                        let header_size = (*header.as_ptr()).header_size as usize;
+                        let header_page_addr = header.as_ptr() as usize;
+                        let ptr_addr = ptr as usize;
+
+                        if ptr_addr >= header_page_addr + header_size {
+                            let offset = ptr_addr - (header_page_addr + header_size);
+                            let index = offset / block_size;
+
+                            if index < (*header.as_ptr()).obj_count as usize {
+                                (*header.as_ptr()).set_dirty(index);
+                            }
                         }
                     }
                 }
-            }
+            });
         }
     }
 }

@@ -1,14 +1,6 @@
 use rudo_gc::heap::{page_size, segment_manager};
 use rudo_gc::Gc;
 
-/// Clear CPU callee-saved registers to prevent stale pointer values from being
-/// treated as roots by the conservative GC.
-///
-/// # Safety
-///
-/// This function clears callee-saved registers (R12-R15 on `x86_64`).
-/// It should only be called when those registers don't contain values
-/// needed by the calling code.
 #[inline(never)]
 unsafe fn clear_registers() {
     #[cfg(all(target_arch = "x86_64", not(miri)))]
@@ -28,109 +20,94 @@ unsafe fn clear_registers() {
     std::hint::black_box(());
 }
 
+#[derive(rudo_gc::Trace)]
+#[allow(clippy::large_stack_arrays)]
+struct LargeObject {
+    data: [u8; 5000],
+}
+
 #[test]
 fn test_large_object_map_cleanup() {
-    #[derive(rudo_gc::Trace)]
-    struct Big {
-        data: [u8; 5000],
-    }
-
-    #[inline(never)]
-    fn clear_stack() {
-        let mut x = [0u64; 1024];
-        x.fill(0);
-        std::hint::black_box(&mut x);
-    }
-
-    #[inline(never)]
-    fn do_alloc() {
-        let g = Gc::new(Big { data: [0; 5000] });
+    let addr = std::thread::spawn(|| {
+        let g = Gc::new(LargeObject { data: [0; 5000] });
         let ptr = Gc::as_ptr(&g) as usize;
-        let addr = ptr & !(page_size() - 1);
-
-        // Verify it's in the global map
-        let contains = segment_manager()
-            .lock()
-            .unwrap()
-            .large_object_map
-            .contains_key(&addr);
-        assert!(contains, "Should be in global map");
-    }
-
-    std::thread::spawn(move || {
-        do_alloc();
-
-        clear_stack();
-
-        // CRITICAL: Clear callee-saved registers to prevent stale pointer values
-        // from being treated as roots by the conservative GC.
-        // Without this, the GC might find a stale pointer value in a register
-        // and incorrectly keep the large object alive.
-        unsafe {
-            clear_registers();
-        }
-
-        // Force a full collection to trigger sweep_large_objects
-        rudo_gc::collect_full();
-
-        // Verify it's removed from the global map
-        let (is_empty, len) = {
-            let manager = segment_manager().lock().unwrap();
-            (
-                manager.large_object_map.is_empty(),
-                manager.large_object_map.len(),
-            )
-        };
-        assert!(
-            is_empty,
-            "Global large_object_map should be empty after sweep, but contains {len} entries"
-        );
+        ptr & !(page_size() - 1)
     })
     .join()
     .unwrap();
+
+    let contains = segment_manager()
+        .lock()
+        .unwrap()
+        .large_object_map
+        .contains_key(&addr);
+    assert!(contains);
+
+    unsafe {
+        clear_registers();
+    }
+
+    let mut allocations = Vec::new();
+    for _ in 0..2500 {
+        allocations.push(Gc::new([0u8; 4096]));
+    }
+
+    drop(allocations);
+
+    rudo_gc::collect_full();
+
+    let contains = segment_manager()
+        .lock()
+        .unwrap()
+        .large_object_map
+        .contains_key(&addr);
+    assert!(!contains);
 }
 
 #[test]
 fn test_large_object_global_map_cleanup_on_thread_exit() {
-    #[derive(rudo_gc::Trace)]
-    struct Big {
-        data: [u8; 5000],
-    }
-
     let page_addrs = std::thread::spawn(|| {
-        let g = Gc::new(Big { data: [0; 5000] });
+        let g = Gc::new(LargeObject { data: [0; 5000] });
         let ptr = Gc::as_ptr(&g) as usize;
         let header_addr = ptr & !(page_size() - 1);
 
-        let total_size: usize = 5000 + 128;
-        let pages_needed = total_size.div_ceil(page_size());
-
+        let pages_needed = 2;
         let mut addrs = Vec::new();
         for p in 0..pages_needed {
             addrs.push(header_addr + (p * page_size()));
         }
-
-        // Verify they are in the global map
-        let manager = segment_manager().lock().unwrap();
-        for addr in &addrs {
-            assert!(
-                manager.large_object_map.contains_key(addr),
-                "Addr {addr:x} should be in global map before thread exit"
-            );
-        }
-        drop(manager);
         addrs
     })
     .join()
     .unwrap();
 
-    // Now the thread has exited, LocalHeap::drop should have run.
-    // Verify all pages are removed from the global map.
     let manager = segment_manager().lock().unwrap();
-    for addr in page_addrs {
+    for addr in &page_addrs {
         assert!(
-            !manager.large_object_map.contains_key(&addr),
-            "Addr {addr:x} should have been removed from global map after thread exit"
+            manager.large_object_map.contains_key(addr),
+            "Addr {addr:x} should still be in map"
+        );
+    }
+    drop(manager);
+
+    unsafe {
+        clear_registers();
+    }
+
+    let mut allocations = Vec::new();
+    for _ in 0..2500 {
+        allocations.push(Gc::new([0u8; 4096]));
+    }
+
+    drop(allocations);
+
+    rudo_gc::collect_full();
+
+    let manager = segment_manager().lock().unwrap();
+    for addr in &page_addrs {
+        assert!(
+            !manager.large_object_map.contains_key(addr),
+            "Addr {addr:x} should be removed"
         );
     }
     drop(manager);

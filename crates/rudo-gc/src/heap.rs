@@ -1557,14 +1557,6 @@ impl Drop for LocalHeap {
                     is_large,
                     original_owner: current_thread,
                 });
-
-                if is_large {
-                    let header_addr = header as usize;
-                    for p in 0..(size / page_size()) {
-                        let page_addr = header_addr + (p * page_size());
-                        manager.large_object_map.remove(&page_addr);
-                    }
-                }
             }
         }
         drop(manager);
@@ -1588,19 +1580,43 @@ pub fn sweep_orphan_pages() {
 
     manager.orphan_pages.retain(|orphan| unsafe {
         let header = orphan.addr as *mut PageHeader;
+        let is_large = ((*header).flags & PAGE_FLAG_LARGE) != 0;
 
-        let has_survivors = if orphan.is_large {
+        let has_survivors = if is_large {
             (*header).is_marked(0)
         } else {
             let obj_count = (*header).obj_count as usize;
             (0..obj_count).any(|i| (*header).is_marked(i))
         };
 
-        if has_survivors {
+        let has_weak_refs = if is_large {
+            let header_size = (*header).header_size as usize;
+            let obj_ptr = (orphan.addr as *mut u8).add(header_size);
+            #[allow(clippy::cast_ptr_alignment)]
+            let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+            (*gc_box_ptr).weak_count() > 0
+        } else {
+            let block_size = (*header).block_size as usize;
+            let obj_count = (*header).obj_count as usize;
+            let header_size = PageHeader::header_size(block_size);
+
+            (0..obj_count).any(|i| {
+                if (*header).is_allocated(i) {
+                    let obj_ptr = (orphan.addr as *mut u8).add(header_size + i * block_size);
+                    #[allow(clippy::cast_ptr_alignment)]
+                    let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                    (*gc_box_ptr).weak_count() > 0
+                } else {
+                    false
+                }
+            })
+        };
+
+        if has_survivors || has_weak_refs {
             (*header).clear_all_marks();
             true
         } else {
-            to_reclaim.push((orphan.addr, orphan.size));
+            to_reclaim.push((orphan.addr, orphan.size, is_large, header as usize));
             false
         }
     });
@@ -1610,7 +1626,7 @@ pub fn sweep_orphan_pages() {
     // Phase 1: Finalize (call drop_fn) for all doomed objects.
     // We do this BEFORE unmapping any memory because objects may have
     // cross-page references.
-    for &(addr, _size) in &to_reclaim {
+    for &(addr, _size, _is_large, _header_addr) in &to_reclaim {
         unsafe {
             let header = addr as *mut PageHeader;
             let is_large = ((*header).flags & PAGE_FLAG_LARGE) != 0;
@@ -1642,10 +1658,21 @@ pub fn sweep_orphan_pages() {
         }
     }
 
-    // Phase 2: Reclaim memory.
-    for (addr, size) in to_reclaim {
+    // Phase 2: Reclaim memory and clean up large_object_map entries.
+    for (addr, size, is_large, header_addr) in to_reclaim {
         unsafe {
             sys_alloc::Mmap::from_raw(addr as *mut u8, size);
+        }
+
+        if is_large {
+            let mut manager = segment_manager()
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let ps = page_size();
+            for p in 0..(size / ps) {
+                let page_addr = header_addr + (p * ps);
+                manager.large_object_map.remove(&page_addr);
+            }
         }
     }
 }
