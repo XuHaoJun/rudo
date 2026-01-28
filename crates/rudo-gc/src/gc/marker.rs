@@ -74,17 +74,26 @@ fn make_value(ptr: *const OverflowNode, gen: usize) -> usize {
 /// Used by `clear_overflow_queue()` to wait for all users to finish.
 static OVERFLOW_QUEUE_USERS: AtomicUsize = AtomicUsize::new(0);
 
+/// Generation counter for detecting clear operations.
+/// Incremented when clearing begins, allows pushers to detect and abort.
+static OVERFLOW_QUEUE_CLEAR_GEN: AtomicUsize = AtomicUsize::new(0);
+
 /// Push work to the shared overflow queue.
-/// Returns true if successful, false if queue is full (should never happen with lock-free CAS).
-fn push_overflow_work(work: *const GcBox<()>) -> bool {
+/// Returns Ok(()) if successful, Err(work) if the queue is being cleared or CAS failed.
+fn push_overflow_work(work: *const GcBox<()>) -> Result<(), *const GcBox<()>> {
     OVERFLOW_QUEUE_USERS.fetch_add(1, Ordering::AcqRel);
     loop {
+        let clear_gen = OVERFLOW_QUEUE_CLEAR_GEN.load(Ordering::Acquire);
+        if clear_gen % 2 == 1 {
+            OVERFLOW_QUEUE_USERS.fetch_sub(1, Ordering::AcqRel);
+            return Err(work);
+        }
         let current = OVERFLOW_QUEUE.load(Ordering::Acquire);
         let current_gen = gen_from_value(current);
         let current_ptr = ptr_from_value(current);
         let new_node = Box::into_raw(Box::new(OverflowNode {
             work,
-            next: AtomicPtr::new(current_ptr as *mut OverflowNode),
+            next: AtomicPtr::new(current_ptr.cast_mut()),
         }));
         let new_value = make_value(new_node, current_gen.wrapping_add(1));
         if OVERFLOW_QUEUE
@@ -92,12 +101,8 @@ fn push_overflow_work(work: *const GcBox<()>) -> bool {
             .is_ok()
         {
             OVERFLOW_QUEUE_USERS.fetch_sub(1, Ordering::AcqRel);
-            return true;
+            return Ok(());
         }
-        // SAFETY: CAS failed, meaning another thread succeeded in pushing their node.
-        // The work pointer in our node is intentionally leaked - it was never registered
-        // in the queue, so the caller still owns it and must handle cleanup.
-        // We only free the node structure itself (Box), not the contained work pointer.
         unsafe {
             Box::from_raw(new_node);
         }
@@ -133,7 +138,7 @@ fn pop_overflow_work() -> Option<*const GcBox<()>> {
             .is_ok()
         {
             OVERFLOW_QUEUE_USERS.fetch_sub(1, Ordering::AcqRel);
-            let owned_node = unsafe { Box::from_raw(node_ptr as *mut OverflowNode) };
+            let owned_node = unsafe { Box::from_raw(node_ptr.cast_mut()) };
             return Some(owned_node.work);
         }
     }
@@ -152,11 +157,13 @@ pub fn clear_overflow_queue() {
         }
         std::hint::spin_loop();
     }
+    OVERFLOW_QUEUE_CLEAR_GEN.fetch_add(1, Ordering::Relaxed);
     loop {
         if pop_overflow_work().is_none() {
             break;
         }
     }
+    OVERFLOW_QUEUE_CLEAR_GEN.fetch_add(1, Ordering::Relaxed);
 }
 
 /// A per-thread mark queue that holds objects to be traced.
@@ -974,8 +981,8 @@ mod overflow_queue_use_after_free_tests {
         let work1 = std::ptr::dangling::<GcBox<()>>();
         let work2 = std::ptr::dangling::<GcBox<()>>();
 
-        assert!(push_overflow_work(work1));
-        assert!(push_overflow_work(work2));
+        assert!(push_overflow_work(work1).is_ok());
+        assert!(push_overflow_work(work2).is_ok());
 
         let popped1 = pop_overflow_work();
         assert!(popped1.is_some());
@@ -1014,7 +1021,7 @@ mod overflow_queue_use_after_free_tests {
             push_barrier.wait();
             for i in 0..NUM_ITEMS {
                 let work = i as *const GcBox<()>;
-                push_overflow_work(work);
+                let _ = push_overflow_work(work);
                 pushed_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         });
@@ -1062,14 +1069,14 @@ mod overflow_queue_verification_tests {
 
         for i in 0..10 {
             let work = i as *const GcBox<()>;
-            assert!(push_overflow_work(work), "Push {i} should succeed");
+            assert!(push_overflow_work(work).is_ok(), "Push {i} should succeed");
         }
 
         while pop_overflow_work().is_some() {}
 
         for i in 10..20 {
             let work = i as *const GcBox<()>;
-            assert!(push_overflow_work(work), "Push {i} should succeed");
+            assert!(push_overflow_work(work).is_ok(), "Push {i} should succeed");
         }
 
         let mut count = 0;
@@ -1088,7 +1095,10 @@ mod overflow_queue_verification_tests {
             .collect();
 
         let work = 42usize as *const GcBox<()>;
-        assert!(push_overflow_work(work), "Should push to overflow queue");
+        assert!(
+            push_overflow_work(work).is_ok(),
+            "Should push to overflow queue"
+        );
 
         let result = try_steal_work(&queues[0], &queues);
 
@@ -1124,7 +1134,7 @@ mod overflow_queue_verification_tests {
             barrier_for_writer.wait();
             for i in 0..100 {
                 let work = i as *const GcBox<()>;
-                push_overflow_work(work);
+                let _ = push_overflow_work(work);
                 write_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         });
