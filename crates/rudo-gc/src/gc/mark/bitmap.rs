@@ -67,10 +67,14 @@ impl MarkBitmap {
     /// Get the number of marked slots.
     #[must_use]
     pub fn marked_count(&self) -> usize {
-        self.marked_count.load(Ordering::Relaxed)
+        self.marked_count.load(Ordering::SeqCst)
     }
 
     /// Mark a slot as visited.
+    ///
+    /// Uses `SeqCst` ordering to ensure cross-thread visibility of mark bits.
+    /// This matches Chez Scheme's approach of using memory barriers to ensure
+    /// that mark bits are visible to all threads before sweepers inspect them.
     ///
     /// # Safety
     ///
@@ -79,14 +83,17 @@ impl MarkBitmap {
         let word = slot_index / 64;
         let bit = slot_index % 64;
         let mask = 1u64 << bit;
-        let prev = self.bitmap[word].fetch_or(mask, Ordering::Relaxed);
+        let prev = self.bitmap[word].fetch_or(mask, Ordering::SeqCst);
         // Only increment if bit was not already set (idempotent marking)
         if prev & mask == 0 {
-            self.marked_count.fetch_add(1, Ordering::Relaxed);
+            self.marked_count.fetch_add(1, Ordering::SeqCst);
         }
     }
 
     /// Check if a slot is marked.
+    ///
+    /// Uses `SeqCst` ordering to ensure we see all marks from other threads
+    /// before sweeping. This prevents prematurely sweeping live objects.
     ///
     /// # Safety
     ///
@@ -95,15 +102,19 @@ impl MarkBitmap {
     pub unsafe fn is_marked(&self, slot_index: usize) -> bool {
         let word = slot_index / 64;
         let bit = slot_index % 64;
-        (self.bitmap[word].load(Ordering::Relaxed) >> bit) & 1 != 0
+        (self.bitmap[word].load(Ordering::SeqCst) >> bit) & 1 != 0
     }
 
     /// Clear all marks for reuse.
+    ///
+    /// Uses Release ordering to ensure all prior mark operations are visible
+    /// before the bitmap is reused. This matches the acquire-release semantics
+    /// needed for proper synchronization between marking and sweeping phases.
     pub fn clear(&self) {
         for word in &self.bitmap {
-            word.store(0, Ordering::Relaxed);
+            word.store(0, Ordering::Release);
         }
-        self.marked_count.store(0, Ordering::Relaxed);
+        self.marked_count.store(0, Ordering::Release);
     }
 }
 

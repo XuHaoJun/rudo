@@ -3,6 +3,15 @@
 //! This module provides utilities for tracking page ownership and implementing
 //! ownership-based work distribution to improve cache locality and reduce
 //! false sharing during parallel marking.
+//!
+//! # Thread Safety Model
+//!
+//! Each worker thread has its own `OwnedPagesTracker`. Ownership is established
+//! at allocation time (when a page is created, it records the allocating thread).
+//! During marking, workers prioritize their owned pages for better cache locality.
+//!
+//! This design follows Chez Scheme's approach: "A segment is owned by the thread
+//! that originally allocated it."
 
 use std::collections::HashSet;
 use std::ptr::NonNull;
@@ -14,6 +23,12 @@ use crate::heap::PageHeader;
 ///
 /// Tracks pages owned by this worker for ownership-based load distribution.
 /// When marking, workers prioritize their owned pages for better cache locality.
+///
+/// # Thread Safety
+///
+/// `OwnedPagesTracker` is `Send` but not `Sync`. Each thread should have its
+/// own instance, accessed only by the owning thread. This matches Chez Scheme's
+/// design where ownership is established at allocation time.
 #[derive(Debug)]
 pub struct OwnedPagesTracker {
     /// Set of pages owned by this worker.
@@ -21,6 +36,13 @@ pub struct OwnedPagesTracker {
     /// The worker thread ID.
     owner_thread: ThreadId,
 }
+
+/// Safety: `OwnedPagesTracker` is `Send` because:
+/// - `HashSet`<`NonNull`<PageHeader>> is `Send` (`NonNull` is `Send`, interior mutability
+///   is protected by thread ownership invariant)
+/// - `ThreadId` is `Send`
+/// - The tracker is only ever accessed by the owning thread
+unsafe impl Send for OwnedPagesTracker {}
 
 impl OwnedPagesTracker {
     /// Create a new owned pages tracker for the current thread.
