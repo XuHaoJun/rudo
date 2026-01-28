@@ -86,6 +86,13 @@ fn push_overflow_work(work: *const GcBox<()>) -> Result<(), *const GcBox<()>> {
         let clear_gen = OVERFLOW_QUEUE_CLEAR_GEN.load(Ordering::Acquire);
         if clear_gen % 2 == 1 {
             OVERFLOW_QUEUE_USERS.fetch_sub(1, Ordering::AcqRel);
+            loop {
+                std::hint::spin_loop();
+                let new_gen = OVERFLOW_QUEUE_CLEAR_GEN.load(Ordering::Acquire);
+                if new_gen % 2 == 0 {
+                    break;
+                }
+            }
             return Err(work);
         }
         let current = OVERFLOW_QUEUE.load(Ordering::Acquire);
