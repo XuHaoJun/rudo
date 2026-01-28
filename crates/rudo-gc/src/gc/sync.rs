@@ -180,33 +180,35 @@ pub fn validate_lock_order(_tag: LockOrder, _expected_min: LockOrder) {
     // No-op in release builds
 }
 
+thread_local! {
+    static MIN_LOCK_ORDER: std::cell::Cell<u8> = const { std::cell::Cell::new(1) };
+}
+
 /// Thread-local storage for the current minimum lock order.
 ///
 /// Tracks the minimum order value of locks currently held by this thread.
 /// Used for validation of lock acquisition order.
 #[inline]
-#[allow(clippy::used_underscore_binding)]
 #[allow(clippy::missing_const_for_fn)]
-pub fn set_min_lock_order(_order: LockOrder) {
-    // In debug builds, this would set thread-local state
-    // for validating lock acquisition order.
+pub fn set_min_lock_order(order: LockOrder) {
     #[cfg(debug_assertions)]
     {
-        let _ = _order; // Suppress unused warning
-                        // thread_local! {
-                        //     static MIN_LOCK_ORDER: AtomicU8 = AtomicU8::new(0);
-                        // }
-                        // MIN_LOCK_ORDER.with(|min| {
-                        //     min.store(order.order_value(), Ordering::Relaxed);
-                        // });
+        MIN_LOCK_ORDER.with(|min| {
+            min.set(order.order_value());
+        });
     }
+    let _ = order;
 }
 
 /// Get the current minimum lock order held by this thread.
 #[inline]
 #[cfg(debug_assertions)]
-pub const fn get_min_lock_order() -> LockOrder {
-    LockOrder::LocalHeap // Placeholder
+pub fn get_min_lock_order() -> LockOrder {
+    MIN_LOCK_ORDER.with(|min| match min.get() {
+        2 => LockOrder::GlobalMarkState,
+        3 => LockOrder::GcRequest,
+        _ => LockOrder::LocalHeap,
+    })
 }
 
 #[cfg(test)]

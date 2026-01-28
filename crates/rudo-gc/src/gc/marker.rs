@@ -23,6 +23,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Barrier;
+use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
@@ -62,11 +63,15 @@ pub struct PerThreadMarkQueue {
     /// Pending work received from other threads (push-based transfer).
     /// Uses Mutex for safe concurrent access from multiple pushers.
     pending_work: Mutex<Vec<*const GcBox<()>>>,
+    /// Condition variable to signal when pending work is available.
+    pending_work_cvar: Condvar,
     /// Target capacity for dynamic growth monitoring.
     /// When queue utilization exceeds this threshold, overflow handling is triggered.
     capacity_hint: AtomicUsize,
     /// Maximum capacity before forcing overflow handling.
     max_capacity: usize,
+    /// Count of overflow events handled.
+    overflow_count: AtomicUsize,
 }
 
 const MARK_QUEUE_SIZE: usize = 1024;
@@ -94,10 +99,12 @@ impl PerThreadMarkQueue {
             owned_pages: Vec::new(),
             marked_count: AtomicUsize::new(0),
             pending_work: Mutex::new(Vec::with_capacity(PENDING_WORK_BUFFER_SIZE)),
+            pending_work_cvar: Condvar::new(),
             capacity_hint: AtomicUsize::new(
                 (max_capacity as f64 * DEFAULT_CAPACITY_THRESHOLD) as usize,
             ),
             max_capacity,
+            overflow_count: AtomicUsize::new(0),
         }
     }
 
@@ -177,6 +184,8 @@ impl PerThreadMarkQueue {
         work: *const GcBox<()>,
         all_queues: &[PerThreadMarkQueue],
     ) -> bool {
+        self.overflow_count.fetch_add(1, Ordering::Relaxed);
+
         // Strategy 1: Push to remote workers' pending_work
         for other in all_queues {
             if other.worker_idx() == self.worker_idx {
@@ -241,10 +250,8 @@ impl PerThreadMarkQueue {
     ///
     /// Useful for monitoring and tuning capacity hints.
     #[must_use]
-    #[allow(clippy::missing_const_for_fn)]
     pub fn overflow_count(&self) -> usize {
-        // This would require an AtomicUsize counter - placeholder for now
-        0
+        self.overflow_count.load(Ordering::Relaxed)
     }
 
     /// Pop an object from the local end (LIFO).
@@ -318,11 +325,8 @@ impl PerThreadMarkQueue {
     /// Acquires `owner.pending_work` lock. This is a per-queue lock with
     /// order equivalent to `LocalHeap` (order 1).
     pub fn push_remote(owner: &Arc<PerThreadMarkQueue>, work: *const GcBox<()>) {
-        let mut pending = owner.pending_work.lock().unwrap();
-        pending.push(work);
-        // Note: In a more sophisticated implementation, we would notify
-        // the owner here. For simplicity, workers poll their pending_work
-        // when their local queue is empty.
+        owner.pending_work.lock().unwrap().push(work);
+        owner.pending_work_cvar.notify_one();
     }
 
     /// Receive all pending work from other workers.
@@ -369,19 +373,34 @@ impl PerThreadMarkQueue {
     /// Uses `self.pending_work` for condition synchronization.
     #[allow(dead_code)]
     pub fn wait_for_work(&self, timeout_ms: u64) -> bool {
-        let mut backoff = 1;
-        let max_backoff = 1024;
         let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(timeout_ms);
 
-        while start.elapsed().as_millis() < u128::from(timeout_ms) {
+        loop {
             if self.has_pending_work() || !self.queue.is_empty(&self.bottom) {
                 return true;
             }
-            // Exponential backoff to reduce CPU usage
-            std::thread::sleep(std::time::Duration::from_millis(backoff));
-            backoff = (backoff * 2).min(max_backoff);
+
+            if start.elapsed() >= timeout {
+                return false;
+            }
+
+            let remaining = timeout.saturating_sub(start.elapsed());
+            let guard = self
+                .pending_work_cvar
+                .wait_timeout_while(self.pending_work.lock().unwrap(), remaining, |pending| {
+                    pending.is_empty() && self.queue.is_empty(&self.bottom)
+                })
+                .unwrap();
+
+            if !guard.0.is_empty() || !self.queue.is_empty(&self.bottom) {
+                return true;
+            }
+
+            if start.elapsed() >= timeout {
+                return false;
+            }
         }
-        false
     }
 
     /// Check if pending work is available.
@@ -443,9 +462,12 @@ impl PerThreadMarkQueue {
 
     /// Check if two workers have overlapping page ownership.
     fn has_overlapping_ownership(&self, other: &PerThreadMarkQueue) -> bool {
-        // Simplified: assume overlap if either has owned pages
-        // A more sophisticated implementation would track shared pages
-        !self.owned_pages.is_empty() || !other.owned_pages.is_empty()
+        self.owned_pages.iter().any(|page| {
+            other
+                .owned_pages
+                .iter()
+                .any(|other_page| page.as_ptr() == other_page.as_ptr())
+        })
     }
 
     /// Get the number of owned pages.
@@ -814,11 +836,13 @@ impl Clone for PerThreadMarkQueue {
             queue: Arc::clone(&self.queue),
             bottom: Cell::new(self.bottom.get()),
             worker_idx: self.worker_idx,
-            owned_pages: Vec::new(),
+            owned_pages: self.owned_pages.clone(),
             marked_count: AtomicUsize::new(0),
             pending_work: Mutex::new(Vec::with_capacity(PENDING_WORK_BUFFER_SIZE)),
+            pending_work_cvar: Condvar::new(),
             capacity_hint: AtomicUsize::new(self.capacity_hint.load(Ordering::Relaxed)),
             max_capacity: self.max_capacity,
+            overflow_count: AtomicUsize::new(0),
         }
     }
 }
