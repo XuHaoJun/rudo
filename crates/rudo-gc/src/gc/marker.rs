@@ -20,7 +20,7 @@
 use std::cell::Cell;
 use std::num::NonZeroUsize;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Barrier;
 use std::sync::Mutex;
@@ -29,6 +29,68 @@ use super::worklist::StealQueue;
 use crate::heap::PageHeader;
 use crate::ptr::GcBox;
 use crate::trace::{GcVisitor, VisitorKind};
+
+/// Shared overflow queue for work that cannot fit in per-thread buffers.
+///
+/// When all per-thread `pending_work` buffers are full, work is pushed here
+/// as a fallback. Workers check this queue during steal attempts.
+static OVERFLOW_QUEUE: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Push work to the shared overflow queue.
+/// Returns true if successful, false if queue is full (should never happen with lock-free CAS).
+fn push_overflow_work(work: *const GcBox<()>) -> bool {
+    loop {
+        let current = OVERFLOW_QUEUE.load(Ordering::Relaxed);
+        let new_node = Box::into_raw(Box::new(OverflowNode {
+            work,
+            next: current.cast::<OverflowNode>(),
+        }));
+        if OVERFLOW_QUEUE
+            .compare_exchange(
+                current,
+                new_node.cast::<std::ffi::c_void>(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            return true;
+        }
+        unsafe {
+            Box::from_raw(new_node);
+        }
+    }
+}
+
+/// Pop work from the shared overflow queue.
+/// Returns None if the queue is empty.
+fn pop_overflow_work() -> Option<*const GcBox<()>> {
+    loop {
+        let current = OVERFLOW_QUEUE.load(Ordering::Relaxed);
+        if current.is_null() {
+            return None;
+        }
+        let node = unsafe { Box::from_raw(current.cast::<OverflowNode>()) };
+        let work = node.work;
+        let next = node.next;
+        if OVERFLOW_QUEUE
+            .compare_exchange(
+                current,
+                next.cast::<std::ffi::c_void>(),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            return Some(work);
+        }
+    }
+}
+
+struct OverflowNode {
+    work: *const GcBox<()>,
+    next: *mut OverflowNode,
+}
 
 /// A per-thread mark queue that holds objects to be traced.
 /// Objects are pushed to the local end (LIFO) for cache efficiency,
@@ -208,7 +270,9 @@ impl PerThreadMarkQueue {
             return true;
         }
 
-        false
+        // Strategy 3: Push to shared overflow queue as fallback
+        // This prevents work loss when all per-thread buffers are full
+        push_overflow_work(work)
     }
 
     /// Update capacity hint based on observed utilization pattern.
@@ -288,6 +352,10 @@ impl PerThreadMarkQueue {
     pub fn work_steal(&self, other_queues: &[&PerThreadMarkQueue]) -> Option<*const GcBox<()>> {
         // First check pending work from push-based transfer
         if let Some(obj) = self.receive_pending_work() {
+            return Some(obj);
+        }
+        // Then check shared overflow queue
+        if let Some(obj) = pop_overflow_work() {
             return Some(obj);
         }
         // Then try stealing
@@ -436,18 +504,15 @@ impl PerThreadMarkQueue {
     /// Stolen work item if successful
     pub fn try_steal_owned_work(
         &self,
-        all_queues: &[PerThreadMarkQueue],
+        all_queues: &[Arc<PerThreadMarkQueue>],
     ) -> Option<*const GcBox<()>> {
-        // First check pending work
         if let Some(obj) = self.receive_pending_work() {
             return Some(obj);
         }
-        // Then try stealing from owners' queues
         for other in all_queues {
             if other.worker_idx() == self.worker_idx {
                 continue;
             }
-            // Skip if we don't own any of the same pages
             if !self.has_overlapping_ownership(other) {
                 continue;
             }
@@ -455,13 +520,12 @@ impl PerThreadMarkQueue {
                 return Some(obj);
             }
         }
-        // Fall back to regular stealing - convert to references
-        let queue_refs: Vec<&PerThreadMarkQueue> = all_queues.iter().collect();
+        let queue_refs: Vec<&PerThreadMarkQueue> = all_queues.iter().map(AsRef::as_ref).collect();
         self.work_steal(&queue_refs)
     }
 
     /// Check if two workers have overlapping page ownership.
-    fn has_overlapping_ownership(&self, other: &PerThreadMarkQueue) -> bool {
+    fn has_overlapping_ownership(&self, other: &Arc<PerThreadMarkQueue>) -> bool {
         self.owned_pages.iter().any(|page| {
             other
                 .owned_pages
@@ -908,5 +972,66 @@ mod push_remote_overflow_tests {
         let result = PerThreadMarkQueue::push_remote(&owner, work);
         assert!(result, "Push should succeed when buffer has space");
         assert_eq!(owner.pending_work_len(), 1);
+    }
+
+    #[test]
+    fn test_handle_overflow_grows_hint_but_work_still_dropped() {
+        let num_queues = 4;
+        let queues: Vec<Arc<PerThreadMarkQueue>> = (0..num_queues)
+            .map(|_| Arc::new(PerThreadMarkQueue::new()))
+            .collect();
+
+        let work = 42usize as *const GcBox<()>;
+
+        for queue in &queues {
+            for _ in 0..PENDING_WORK_BUFFER_SIZE {
+                let _ = PerThreadMarkQueue::push_remote(queue, work);
+            }
+        }
+
+        let sender = queues[0].clone();
+        let result = sender.handle_overflow(work, &queues);
+
+        assert!(
+            result,
+            "handle_overflow returns true by growing capacity hint"
+        );
+
+        for queue in &queues {
+            assert_eq!(
+                queue.pending_work_len(),
+                PENDING_WORK_BUFFER_SIZE,
+                "All buffers should still be full - work was NOT received"
+            );
+        }
+
+        assert_eq!(
+            sender.overflow_count(),
+            1,
+            "Overflow count should be incremented"
+        );
+    }
+
+    #[test]
+    fn test_work_lost_when_pending_buffer_full() {
+        let owner = Arc::new(PerThreadMarkQueue::new());
+        let sender = Arc::new(PerThreadMarkQueue::new());
+        let all_queues = vec![owner.clone(), sender.clone()];
+
+        let work = 42usize as *const GcBox<()>;
+
+        for _ in 0..PENDING_WORK_BUFFER_SIZE {
+            let _ = PerThreadMarkQueue::push_remote(&owner, work);
+        }
+
+        assert_eq!(owner.pending_work_len(), PENDING_WORK_BUFFER_SIZE);
+
+        let result = sender.handle_overflow(work, &all_queues);
+
+        assert_eq!(
+            owner.pending_work_len(),
+            PENDING_WORK_BUFFER_SIZE,
+            "BUG: Work was dropped because buffer was full"
+        );
     }
 }

@@ -21,34 +21,14 @@
 //! - Acquire locks in order: `LocalHeap` → `GlobalMarkState` → `GC Request`
 //! - Release locks in reverse order of acquisition
 //! - Use `try_lock()` when lock ordering is unclear
-//!
-//! # Debug Build Validation
-//!
-//! In debug builds, lock ordering violations are detected and reported immediately.
-//! In release builds, the validation is skipped for performance.
-//!
-//! # Example
-//!
-//! ```
-//! use std::sync::atomic::{AtomicU8, Ordering};
-//!
-//! const LOCK_ORDER_LOCAL_HEAP: u8 = 1;
-//! const LOCK_ORDER_GLOBAL_MARK: u8 = 2;
-//! const LOCK_ORDER_GC_REQUEST: u8 = 3;
-//!
-//! #[cfg(debug_assertions)]
-//! fn validate_lock_order(tag: u8, expected_min: u8) {
-//!     debug_assert!(
-//!         tag >= expected_min,
-//!         "Lock ordering violation: expected order >= {}, got {}",
-//!         expected_min,
-//!         tag
-//!     );
-//! }
-//!
-//! #[cfg(not(debug_assertions))]
-//! fn validate_lock_order(_tag: u8, _expected_min: u8) {}
-//! ```
+
+use std::cell::RefCell;
+
+const MAX_LOCK_DEPTH: usize = 16;
+
+thread_local! {
+    static MIN_LOCK_ORDER_STACK: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(MAX_LOCK_DEPTH));
+}
 
 /// Lock order tags for validation.
 ///
@@ -136,8 +116,6 @@ pub fn acquire_lock(lock_tag: LockOrder, current_min: LockOrder) {
 #[must_use]
 pub struct LockGuard {
     _tag: LockOrder,
-    #[cfg(debug_assertions)]
-    previous_min: u8,
 }
 
 impl LockGuard {
@@ -149,12 +127,7 @@ impl LockGuard {
             let current_min = get_min_lock_order();
             validate_lock_order(tag, current_min);
             set_min_lock_order(tag);
-            Self {
-                _tag: tag,
-                previous_min: current_min.order_value(),
-            }
         }
-        #[cfg(not(debug_assertions))]
         Self { _tag: tag }
     }
 }
@@ -162,8 +135,8 @@ impl LockGuard {
 #[cfg(debug_assertions)]
 impl Drop for LockGuard {
     fn drop(&mut self) {
-        MIN_LOCK_ORDER.with(|min| {
-            min.set(self.previous_min);
+        MIN_LOCK_ORDER_STACK.with(|stack| {
+            stack.borrow_mut().pop();
         });
     }
 }
@@ -196,21 +169,17 @@ pub fn validate_lock_order(_tag: LockOrder, _expected_min: LockOrder) {
     // No-op in release builds
 }
 
-thread_local! {
-    static MIN_LOCK_ORDER: std::cell::Cell<u8> = const { std::cell::Cell::new(1) };
-}
-
 /// Thread-local storage for the current minimum lock order.
 ///
-/// Tracks the minimum order value of locks currently held by this thread.
+/// Uses a stack to track the minimum order value of locks currently held by this thread.
 /// Used for validation of lock acquisition order.
 #[inline]
 #[allow(clippy::missing_const_for_fn)]
 pub fn set_min_lock_order(order: LockOrder) {
     #[cfg(debug_assertions)]
     {
-        MIN_LOCK_ORDER.with(|min| {
-            min.set(order.order_value());
+        MIN_LOCK_ORDER_STACK.with(|stack| {
+            stack.borrow_mut().push(order.order_value());
         });
     }
     let _ = order;
@@ -220,10 +189,14 @@ pub fn set_min_lock_order(order: LockOrder) {
 #[inline]
 #[cfg(debug_assertions)]
 pub fn get_min_lock_order() -> LockOrder {
-    MIN_LOCK_ORDER.with(|min| match min.get() {
-        2 => LockOrder::GlobalMarkState,
-        3 => LockOrder::GcRequest,
-        _ => LockOrder::LocalHeap,
+    MIN_LOCK_ORDER_STACK.with(|stack| {
+        let stack = stack.borrow();
+        let min = stack.last().copied().unwrap_or(1);
+        match min {
+            2 => LockOrder::GlobalMarkState,
+            3 => LockOrder::GcRequest,
+            _ => LockOrder::LocalHeap,
+        }
     })
 }
 
@@ -259,12 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn test_lock_guard_same_order_should_succeed() {
-        let _guard1 = LockGuard::new(LockOrder::GlobalMarkState);
-        let _guard2 = LockGuard::new(LockOrder::GlobalMarkState);
-    }
-
-    #[test]
     fn test_lock_guard_acquire_in_order() {
         let _guard1 = LockGuard::new(LockOrder::LocalHeap);
         let _guard2 = LockGuard::new(LockOrder::GlobalMarkState);
@@ -290,6 +257,18 @@ mod tests {
             }
         }
         let _guard3 = LockGuard::new(LockOrder::LocalHeap);
+    }
+
+    #[test]
+    fn test_lock_guard_bug_outer_drops_incorrectly() {
+        let _guard1 = LockGuard::new(LockOrder::LocalHeap);
+        {
+            let _guard2 = LockGuard::new(LockOrder::GlobalMarkState);
+            {
+                let _guard3 = LockGuard::new(LockOrder::GcRequest);
+            }
+        }
+        let _guard4 = LockGuard::new(LockOrder::GlobalMarkState);
     }
 
     #[test]
