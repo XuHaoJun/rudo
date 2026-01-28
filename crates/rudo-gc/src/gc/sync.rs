@@ -136,6 +136,8 @@ pub fn acquire_lock(lock_tag: LockOrder, current_min: LockOrder) {
 #[must_use]
 pub struct LockGuard {
     _tag: LockOrder,
+    #[cfg(debug_assertions)]
+    previous_min: u8,
 }
 
 impl LockGuard {
@@ -146,9 +148,23 @@ impl LockGuard {
         {
             let current_min = get_min_lock_order();
             validate_lock_order(tag, current_min);
+            set_min_lock_order(tag);
+            Self {
+                _tag: tag,
+                previous_min: current_min.order_value(),
+            }
         }
-        set_min_lock_order(tag);
+        #[cfg(not(debug_assertions))]
         Self { _tag: tag }
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        MIN_LOCK_ORDER.with(|min| {
+            min.set(self.previous_min);
+        });
     }
 }
 
@@ -253,5 +269,41 @@ mod tests {
         let _guard1 = LockGuard::new(LockOrder::LocalHeap);
         let _guard2 = LockGuard::new(LockOrder::GlobalMarkState);
         let _guard3 = LockGuard::new(LockOrder::GcRequest);
+    }
+
+    #[test]
+    #[should_panic(expected = "Lock ordering violation")]
+    fn test_lock_guard_nested_drop_then_lower_order_should_panic_if_bug_exists() {
+        let _guard1 = LockGuard::new(LockOrder::GlobalMarkState);
+        {
+            let _guard2 = LockGuard::new(LockOrder::GcRequest);
+        }
+        let _guard3 = LockGuard::new(LockOrder::LocalHeap);
+    }
+
+    #[test]
+    fn test_lock_guard_state_restoration_after_drop() {
+        {
+            let _guard1 = LockGuard::new(LockOrder::GlobalMarkState);
+            {
+                let _guard2 = LockGuard::new(LockOrder::GcRequest);
+            }
+        }
+        let _guard3 = LockGuard::new(LockOrder::LocalHeap);
+    }
+
+    #[test]
+    fn test_lock_guard_multiple_nested_scopes() {
+        {
+            let _guard1 = LockGuard::new(LockOrder::LocalHeap);
+            {
+                let _guard2 = LockGuard::new(LockOrder::GlobalMarkState);
+                {
+                    let _guard3 = LockGuard::new(LockOrder::GcRequest);
+                }
+            }
+        }
+        let _guard4 = LockGuard::new(LockOrder::LocalHeap);
+        let _guard5 = LockGuard::new(LockOrder::GlobalMarkState);
     }
 }

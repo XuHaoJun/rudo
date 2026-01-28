@@ -187,8 +187,9 @@ impl PerThreadMarkQueue {
             if other.worker_idx() == self.worker_idx {
                 continue;
             }
-            if other.pending_work_len() < PENDING_WORK_BUFFER_SIZE {
-                PerThreadMarkQueue::push_remote(other, work);
+            if other.pending_work_len() < PENDING_WORK_BUFFER_SIZE
+                && PerThreadMarkQueue::push_remote(other, work)
+            {
                 return true;
             }
         }
@@ -315,18 +316,22 @@ impl PerThreadMarkQueue {
     /// This function must be called while not holding any locks of order
     /// order equivalent to `LocalHeap` (order 1).
     ///
+    /// # Returns
+    ///
+    /// `true` if work was successfully pushed, `false` if buffer is full
+    /// and work was dropped.
+    ///
     /// # Panics
     ///
     /// Panics if the mutex is poisoned.
-    pub fn push_remote(owner: &Arc<PerThreadMarkQueue>, work: *const GcBox<()>) {
+    pub fn push_remote(owner: &Arc<PerThreadMarkQueue>, work: *const GcBox<()>) -> bool {
         let mut pending = owner.pending_work.lock().unwrap();
         if pending.len() < PENDING_WORK_BUFFER_SIZE {
             pending.push(work);
+            true
+        } else {
+            false
         }
-        // If buffer is full, the work is dropped. The original owner will
-        // need to rediscover this object during their own marking phase.
-        // This is simpler than Chez Scheme's segment ownership but works
-        // for the common case of local object graphs.
     }
 
     /// Receive pending work from other workers.
@@ -871,5 +876,37 @@ mod marker_clone_bug_tests {
         let page: NonNull<()> = NonNull::dangling();
         queue.owned_pages.push(page.cast());
         assert_eq!(queue.owned_pages.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod push_remote_overflow_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_push_remote_returns_false_when_buffer_full() {
+        let owner = Arc::new(PerThreadMarkQueue::new());
+        let work_items: Vec<*const GcBox<()>> = (0..20).map(|i| i as *const _).collect();
+
+        for &work in &work_items[..16] {
+            let result = PerThreadMarkQueue::push_remote(&owner, work);
+            assert!(result, "First 16 pushes should succeed");
+        }
+        assert_eq!(owner.pending_work_len(), 16);
+
+        let result = PerThreadMarkQueue::push_remote(&owner, work_items[17]);
+        assert!(!result, "Push should fail when buffer is full");
+        assert_eq!(owner.pending_work_len(), 16);
+    }
+
+    #[test]
+    fn test_push_remote_returns_true_when_buffer_not_full() {
+        let owner = Arc::new(PerThreadMarkQueue::new());
+        let work = 42usize as *const GcBox<()>;
+
+        let result = PerThreadMarkQueue::push_remote(&owner, work);
+        assert!(result, "Push should succeed when buffer has space");
+        assert_eq!(owner.pending_work_len(), 1);
     }
 }
