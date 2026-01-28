@@ -81,13 +81,13 @@ impl<T: ?Sized> GcCell<T> {
                 let is_large = heap.large_object_map.contains_key(&page_addr);
 
                 if is_large {
-                    if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
-                        let header = gc_box.as_ptr().cast::<crate::heap::PageHeader>();
+                    if let Some(&(head_addr, _, _)) = heap.large_object_map.get(&page_addr) {
+                        let header = head_addr as *mut crate::heap::PageHeader;
                         if (*header).magic == crate::heap::MAGIC_GC_PAGE && (*header).generation > 0
                         {
                             let block_size = (*header).block_size as usize;
                             let header_size = (*header).header_size as usize;
-                            let header_page_addr = header as usize;
+                            let header_page_addr = head_addr;
                             let ptr_addr = ptr as usize;
 
                             if ptr_addr >= header_page_addr + header_size {
