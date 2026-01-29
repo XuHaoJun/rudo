@@ -207,6 +207,7 @@ impl Visitor for GcVisitorConcurrent<'_> {
 
 // SAFETY: Gc<T> traces its inner value
 unsafe impl<T: Trace> Trace for Gc<T> {
+    #[inline]
     fn trace(&self, visitor: &mut impl Visitor) {
         visitor.visit(self);
     }

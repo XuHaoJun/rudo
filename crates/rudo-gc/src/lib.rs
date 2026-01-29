@@ -52,11 +52,6 @@
 //! drop(b);
 //! collect(); // Cycle is detected and freed
 //! ```
-//!
-//! # Thread Safety
-//!
-//! `Gc<T>` is `!Send` and `!Sync`. It can only be used within a single thread.
-//! For multi-threaded garbage collection, consider future `sync::Gc<T>` support.
 
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]

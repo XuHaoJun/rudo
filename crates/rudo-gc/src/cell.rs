@@ -128,6 +128,7 @@ impl<T: ?Sized> GcCell<T> {
 // SAFETY: GcCell is Trace if T is Trace.
 // It just traces the inner value.
 unsafe impl<T: Trace + ?Sized> Trace for GcCell<T> {
+    #[inline]
     fn trace(&self, visitor: &mut impl crate::trace::Visitor) {
         // SAFETY:
         // 1. GC happens during Stop-The-World (STW), all mutator threads are paused

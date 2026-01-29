@@ -674,7 +674,10 @@ fn mark_minor_roots_multi(
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
+                mark_and_trace_incremental(
+                    std::ptr::NonNull::new_unchecked(gc_box_ptr),
+                    &mut visitor,
+                );
                 continue;
             }
 
@@ -687,14 +690,21 @@ fn mark_minor_roots_multi(
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                    ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
+                    mark_and_trace_incremental(
+                        std::ptr::NonNull::new_unchecked(gc_box_ptr),
+                        &mut visitor,
+                    );
                 }
             }
             (*header).clear_all_dirty();
         }
     }
 
-    visitor.process_worklist();
+    while let Some(ptr) = visitor.worklist.pop() {
+        unsafe {
+            ((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), &mut visitor);
+        }
+    }
 }
 
 #[inline]
@@ -873,7 +883,11 @@ fn mark_major_roots_multi(
         }
     });
 
-    visitor.process_worklist();
+    while let Some(ptr) = visitor.worklist.pop() {
+        unsafe {
+            ((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), &mut visitor);
+        }
+    }
 }
 
 /// Mark roots using parallel marking with work stealing.
@@ -1370,6 +1384,32 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     }
 }
 
+#[inline]
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
+    let ptr_addr = ptr.as_ptr() as *const u8;
+    let header = crate::heap::ptr_to_page_header(ptr_addr);
+
+    if (*header.as_ptr()).magic != crate::heap::MAGIC_GC_PAGE {
+        return;
+    }
+
+    if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+        if visitor.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
+            return;
+        }
+
+        if (*header.as_ptr()).is_marked(idx) {
+            return;
+        }
+        (*header.as_ptr()).set_mark(idx);
+    } else {
+        return;
+    }
+
+    visitor.worklist.push(ptr);
+}
+
 /// Sweep Large Object Space.
 ///
 /// Large objects that are unmarked should be deallocated entirely.
@@ -1504,6 +1544,7 @@ impl GcVisitor {
 }
 
 impl Visitor for GcVisitor {
+    #[inline]
     fn visit<T: Trace>(&mut self, gc: &crate::Gc<T>) {
         let raw = gc.raw_ptr();
         if !raw.is_null() {

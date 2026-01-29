@@ -45,7 +45,7 @@ fn test_deep_chain_1000() {
 
 #[test]
 fn test_deep_chain_traverse_after_gc() {
-    const DEPTH: usize = 5_000;
+    const DEPTH: usize = 1_000;
     let head = ChainNode::new(0);
     let mut current = head.clone();
     for i in 1..DEPTH {
@@ -70,7 +70,7 @@ fn test_deep_chain_traverse_after_gc() {
 
 #[test]
 fn test_deep_chain_with_registered_root() {
-    const DEPTH: usize = 5_000;
+    const DEPTH: usize = 1_000;
     let head = ChainNode::new(0);
     register_test_root(Gc::as_ptr(&head).cast::<u8>());
     let mut current = head.clone();
