@@ -130,6 +130,8 @@ pub unsafe fn mark(&self, slot_index: usize) {
 }
 ```
 
+**優化建議 (RLC 建議)**：考慮在 TLAB 或本地緩衝區進行非原子標記，最後再一次性合併到全域 Bitmap，以減少 Cache Coherence 流量。
+
 ### 關鍵程式碼位置
 
 - `crates/rudo-gc/src/gc/mark/bitmap.rs` - MarkBitmap 實現
@@ -266,10 +268,80 @@ pub const THREAD_STATE_INACTIVE: usize = 2;     // 非活躍
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### safepoint() API
+
+提供手動安全點檢查給使用者：
+
+```rust
+/// 手動檢查 GC 請求並阻塞直到處理完成。
+///
+/// 此函數應該在長期執行的迴圈中呼叫（不進行分配的情況下），
+/// 以確保執行緒能及時響應 GC 請求。
+///
+/// # 範例
+///
+/// ```
+/// use rudo_gc::safepoint;
+///
+/// for _ in 0..1000 {
+///     // 做一些非分配的工作...
+///     let _: Vec<i32> = (0..100).collect();
+///
+///     // 檢查 GC 請求
+///     safepoint();
+/// }
+/// ```
+pub fn safepoint() {
+    crate::heap::check_safepoint();
+}
+```
+
+### 無限迴圈風險
+
+**風險**：如果執行緒進入緊湊計算迴圈（不分配、不呼叫函數），可能永遠不檢查 `GC_REQUESTED`，導致 Stop-Forever。
+
+**緩解措施**：
+
+1. **`safepoint()` 手動檢查**：使用者應在長時間迴圈中手動呼叫
+2. **`clear_registers()`**：清除分配器的 registers，避免殘留指標
+3. **`MASK` 機制**：頁面地址 XOR MASK 過濾 False Roots
+4. **Stack Conflict 檢測**：分配時檢測並隔離問題頁面
+
+```rust
+/// 清除 CPU registers 以防止 "False Roots" 殘留。
+///
+/// 這用於分配器，確保新分配頁面的指標不會殘留在 register 中。
+#[inline(never)]
+pub unsafe fn clear_registers() {
+    #[cfg(all(target_arch = "x86_64", not(miri)))]
+    unsafe {
+        std::arch::asm!(
+            "xor r12, r12",
+            "xor r13, r13",
+            "xor r14, r14",
+            "xor r15, r15",
+        );
+    }
+}
+```
+
+### Address Space Coloring 與 False Root 過濾
+
+```rust
+/// 使用 MASK 隱藏分配器的變數，避免保守堆疊掃描誤判。
+const MASK: usize = 0x5555_5555_5555_5555;
+
+fn calculate_masked_range(mmap: &Mmap, size: usize, mask: usize) -> (usize, usize) {
+    let ptr = mmap.ptr() as usize;
+    (ptr ^ mask, (ptr + size) ^ mask)
+}
+```
+
 ### 關鍵程式碼位置
 
 - `crates/rudo-gc/src/heap.rs` - ThreadRegistry, ThreadControlBlock
-- `crates/rudo-gc/src/stack.rs` - 堆疊掃描
+- `crates/rudo-gc/src/stack.rs` - 堆疊掃描, clear_registers
+- `crates/rudo-gc/src/gc/gc.rs` - safepoint API
 
 ---
 
@@ -320,6 +392,19 @@ pub struct GcBox<T: Trace + ?Sized> {
     value: T,
 }
 ```
+
+### Header 開銷
+
+| 元件 | 大小 |
+|------|------|
+| ref_count | 8 bytes |
+| weak_count | 8 bytes |
+| drop_fn | 8 bytes |
+| trace_fn | 8 bytes |
+| is_dropping | 8 bytes |
+| **總計** | **40 bytes** |
+
+**優化建議 (RLC 建議)**：考慮將 `drop_fn` 和 `trace_fn` 移入靜態 `VTable`，在 `GcBox` 中只存一個指向 `VTable` 的指標。這可以節省 8-16 bytes。
 
 ### 標誌位設計
 
@@ -374,6 +459,8 @@ fn try_mark_dropping(&self) -> bool {
 
 ## 11. 保守堆疊掃描
 
+### 設計特點
+
 ```rust
 unsafe fn scan_heap_region_conservatively(
     region_ptr: *const u8,
@@ -390,9 +477,22 @@ unsafe fn scan_heap_region_conservatively(
 - 保守掃描：可能將整數誤識別為指標（導致記憶體膨脹）
 - 用於處理無法靜態追蹤的根（如 native stack）
 
+### 限制
+
+1. **False Positive 風險**：整數可能被誤識別為指標，導致記憶體膨脹
+2. **無法實現 Compaction**：保守掃描無法更新堆疊上的「疑似指標」，因此無法實現移動式 GC
+3. **無法實現 Precise GC**：需要編譯器支持或過程巨集才能實現精確掃描
+
+### 緩解機制
+
+1. **`MASK` 機制**：頁面地址 XOR MASK 過濾 False Roots
+2. **`clear_registers()`**：清除分配器的 registers
+3. **Stack Conflict 檢測**：分配時檢測並隔離問題頁面
+
 ### 關鍵程式碼位置
 
 - `crates/rudo-gc/src/scan.rs` - 保守掃描
+- `crates/rudo-gc/src/stack.rs` - 堆疊掃描, clear_registers
 
 ---
 

@@ -23,6 +23,8 @@ The library is built on a **BiBOP (Big Bag of Pages)** memory layout, which allo
 - **Large Object Space (LOS)**: Specialized handling for objects larger than 2KB to prevent fragmentation.
 - **Weak References**: Support for `Weak<T>` pointers with proper lifecycle management.
 - **ZST Optimization**: Zero-Sized Types (like `()`) are handled with zero heap allocation overhead.
+- **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`, enabling safe multi-threaded data sharing.
+- **Parallel Marking**: Work-stealing based parallel marking for multi-core scalability.
 
 ## Installation
 
@@ -56,16 +58,32 @@ struct Node {
     next: GcCell<Option<Gc<Node>>>, // Use GcCell for interior mutability
 }
 
-let node = Gc::new(Node { 
-    value: 1, 
-    next: GcCell::new(Some(Gc::new(Node { 
-        value: 2, 
-        next: GcCell::new(None) 
-    }))) 
+let node = Gc::new(Node {
+    value: 1,
+    next: GcCell::new(Some(Gc::new(Node {
+        value: 2,
+        next: GcCell::new(None)
+    })))
 });
 
 // Mutating a GC-managed object
 *node.next.borrow_mut() = None;
+```
+
+### Long-running Loops
+
+If your code has long-running loops that don't perform allocations, use `safepoint()` to ensure threads respond to GC requests:
+
+```rust
+use rudo_gc::safepoint;
+
+for _ in 0..1_000_000 {
+    // Compute-intensive work without allocations
+    let result = heavy_calculation();
+
+    // CRITICAL: Check for GC requests to prevent "Stop-Forever"
+    safepoint();
+}
 ```
 
 ## Handling Cycles
@@ -100,10 +118,12 @@ assert_eq!(self_ref.data, 42);
 `rudo-gc` is designed with performance and Rust compatibility in mind:
 
 1.  **Allocation**: Uses thread-local bump-pointer allocation (TLAB) within size-class segments.
-2.  **Marking**: Employs a parallel-ready mark-sweep algorithm.
+2.  **Marking**: Employs a parallel-ready mark-sweep algorithm with work-stealing.
 3.  **Sweeping**: Reclaims memory into free lists for small objects or deallocates pages for large ones.
 4.  **Generations**: Objects start in "Generation 0" and are promoted to "Generation 1" if they survive a Minor GC.
 5.  **Interior Mutability**: `GcCell<T>` provides a `RefCell`-like API with integrated write barriers to track old-to-young pointers.
+6.  **Safe Points**: Cooperative rendezvous protocol for multi-threaded GC coordination. Use `safepoint()` in long-running loops.
+7.  **Thread Safety**: Multi-threaded GC with thread coordination and parallel marking.
 
 ## Trace Trait
 
@@ -117,9 +137,11 @@ For a deeper dive into the philosophy behind the collector, see the [design docu
 
 ## Safety & Limitations
 
-- **Single-threaded**: Currently, `Gc<T>` is `!Send` and `!Sync`. All GC operations are thread-local.
+- **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`. This allows safe sharing of GC-managed data between threads.
 - **Address Stability**: While objects don't move, their memory is reclaimed once unreachable. Holding an `&T` across a collection point is safe as long as the parent `Gc<T>` is still rooted.
 - **Platform Support**: Conservative stack scanning is currently supported on **x86\_64 Linux, macOS, and Windows**, as well as **aarch64 Linux**. Miri is also fully supported for testing.
+- **Conservative Stack Scanning**: Roots are discovered by scanning the stack and registers. This may cause false positives (integers mistaken as pointers), leading to memory bloat. It also prevents implementing moving/compacting GC.
+- **Safe Point Requirement**: Threads must call `safepoint()` or perform allocations regularly. Long-running loops without these calls may cause "Stop-Forever" issues where threads don't respond to GC requests.
 
 ## License
 
