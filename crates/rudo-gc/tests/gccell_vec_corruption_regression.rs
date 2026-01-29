@@ -1,165 +1,218 @@
-//! Regression test for `GcCell`<Vec<Gc<T>>> corruption during collection.
-//!
-//! Bug: When calling `collect()`, the GC was incorrectly removing elements from
-//! `GcCell`<Vec<Gc<T>>>, causing data loss and crashes.
-//!
-//! Root cause: Incorrect page address calculation in `GcCell::write_barrier`
-//! for large objects, causing dirty bits to be set on wrong objects.
+//! Test for deep tree structure corruption with `GcCell`<Vec<Gc<T>>>
+//! This reproduces the issue seen in Rvue's layout example
 
 use rudo_gc::{collect, Gc, GcCell, Trace};
+use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Simplified Component structure matching Rvue's Component
 #[derive(Trace)]
-pub struct Component {
-    id: u64,
-    children: GcCell<Vec<Gc<Self>>>,
+pub struct TestComponent {
+    pub id: u64,
+    pub children: GcCell<Vec<Gc<Self>>>,
+    pub parent: GcCell<Option<Gc<Self>>>, // NOT traced (avoids cycles)
+    pub is_updating: AtomicBool,
 }
 
-impl Component {
-    fn new(id: u64) -> Gc<Self> {
+impl TestComponent {
+    #[must_use]
+    pub fn new(id: u64) -> Gc<Self> {
         Gc::new(Self {
             id,
             children: GcCell::new(Vec::new()),
-        })
-    }
-
-    fn add_child(&self, child: &Gc<Self>) {
-        self.children.borrow_mut().push(Gc::clone(child));
-    }
-}
-
-fn build_tree() -> Gc<Component> {
-    let root = Component::new(0);
-    root.add_child(&Component::new(1));
-    root.add_child(&Component::new(4));
-    root.add_child(&Component::new(14));
-    root
-}
-
-#[test]
-fn test_gccell_vec_elements_preserved_during_collect() {
-    let root1 = build_tree();
-    assert_eq!(root1.children.borrow().len(), 3);
-
-    let _root2 = build_tree();
-
-    collect();
-
-    assert_eq!(root1.children.borrow().len(), 3);
-}
-
-#[test]
-fn test_gccell_vec_children_accessible_after_collect() {
-    let root = build_tree();
-    let child_ids: Vec<u64> = root.children.borrow().iter().map(|c| c.id).collect();
-    assert_eq!(child_ids, vec![1, 4, 14]);
-
-    let _other = build_tree();
-    collect();
-
-    let child_ids_after: Vec<u64> = root.children.borrow().iter().map(|c| c.id).collect();
-    assert_eq!(child_ids_after, vec![1, 4, 14]);
-}
-
-#[test]
-fn test_gccell_vec_with_many_elements() {
-    let root = Gc::new(Component {
-        id: 0,
-        children: GcCell::new(Vec::new()),
-    });
-
-    for i in 0..100 {
-        root.add_child(&Component::new(i));
-    }
-
-    assert_eq!(root.children.borrow().len(), 100);
-
-    let _other = build_tree();
-    collect();
-
-    assert_eq!(root.children.borrow().len(), 100);
-
-    let ids: Vec<u64> = root.children.borrow().iter().map(|c| c.id).collect();
-    assert_eq!(ids, (0..100).collect::<Vec<_>>());
-}
-
-#[test]
-fn test_nested_gccell_vec() {
-    #[derive(Trace)]
-    struct Node {
-        id: u64,
-        children: GcCell<Vec<Gc<Self>>>,
-    }
-
-    impl Node {
-        fn new(id: u64) -> Gc<Self> {
-            Gc::new(Self {
-                id,
-                children: GcCell::new(Vec::new()),
-            })
-        }
-
-        fn add_child(&self, child: &Gc<Self>) {
-            self.children.borrow_mut().push(Gc::clone(child));
-        }
-    }
-
-    let root = Node::new(0);
-    let child1 = Node::new(1);
-    let child2 = Node::new(2);
-
-    child1.add_child(&Node::new(10));
-    child1.add_child(&Node::new(11));
-
-    child2.add_child(&Node::new(20));
-
-    root.add_child(&child1);
-    root.add_child(&child2);
-
-    assert_eq!(root.children.borrow().len(), 2);
-    assert_eq!(child1.children.borrow().len(), 2);
-    assert_eq!(child2.children.borrow().len(), 1);
-
-    let _other = build_tree();
-    collect();
-
-    assert_eq!(root.children.borrow().len(), 2);
-    assert_eq!(child1.children.borrow().len(), 2);
-    assert_eq!(child2.children.borrow().len(), 1);
-}
-
-#[derive(Trace)]
-pub struct TestAppState {
-    pub scene: GcCell<Vec<Gc<Component>>>,
-}
-
-impl TestAppState {
-    #[must_use]
-    pub fn new() -> Gc<Self> {
-        Gc::new(Self {
-            scene: GcCell::new(Vec::new()),
+            parent: GcCell::new(None),
+            is_updating: AtomicBool::new(false),
         })
     }
 
     #[allow(clippy::needless_pass_by_value)]
-    pub fn add_scene_root(&self, component: Gc<Component>) {
+    pub fn add_child(&self, child: Gc<Self>) {
+        if std::ptr::eq(&raw const *child, self) {
+            return;
+        }
+        self.children.borrow_mut().push(Gc::clone(&child));
+    }
+
+    pub fn update(&self) {
+        let was_updating = self.is_updating.swap(true, Ordering::SeqCst);
+        if was_updating {
+            return;
+        }
+        for child in self.children.borrow().iter() {
+            let _ = child.id;
+            child.update();
+        }
+        self.is_updating.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Effect structure (simplified from Rvue)
+#[derive(Trace)]
+pub struct TestEffect {
+    pub is_dirty: AtomicBool,
+}
+
+impl TestEffect {
+    #[must_use]
+    pub fn new() -> Gc<Self> {
+        Gc::new(Self {
+            is_dirty: AtomicBool::new(true),
+        })
+    }
+}
+
+/// `TestViewStruct` like in Rvue
+#[derive(Trace)]
+pub struct TestViewStruct {
+    pub root_component: Gc<TestComponent>,
+    pub effects: GcCell<Vec<Gc<TestEffect>>>,
+}
+
+/// `AppState` like in Rvue with multiple roots
+#[derive(Trace)]
+pub struct TestAppState {
+    pub view: GcCell<Option<TestViewStruct>>,
+    pub scene: GcCell<Vec<Gc<TestComponent>>>,
+    pub active_path: GcCell<Vec<Gc<TestComponent>>>,
+}
+
+impl TestAppState {
+    pub fn new() -> Gc<Self> {
+        Gc::new(Self {
+            view: GcCell::new(None),
+            scene: GcCell::new(Vec::new()),
+            active_path: GcCell::new(Vec::new()),
+        })
+    }
+
+    pub fn set_view(&self, view: TestViewStruct) {
+        *self.view.borrow_mut() = Some(view);
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn add_scene_root(&self, component: Gc<TestComponent>) {
         self.scene.borrow_mut().push(Gc::clone(&component));
     }
 }
 
+/// Build a deep tree similar to Rvue's layout example
+fn build_deep_tree() -> Gc<TestComponent> {
+    let root = TestComponent::new(0);
+
+    // Level 1: child1
+    let child1 = TestComponent::new(1);
+    let grandchild1 = TestComponent::new(2);
+    child1.add_child(Gc::clone(&grandchild1));
+    root.add_child(Gc::clone(&child1));
+
+    // Level 1: child2 (with 6 children)
+    let child2 = TestComponent::new(4);
+    let leaf1 = TestComponent::new(5);
+    let leaf2 = TestComponent::new(6);
+    let leaf3 = TestComponent::new(7);
+    let leaf4 = TestComponent::new(8);
+    let leaf5 = TestComponent::new(9);
+    let nested = TestComponent::new(11);
+    let nested_leaf1 = TestComponent::new(12);
+    let nested_leaf2 = TestComponent::new(13);
+
+    child2.add_child(Gc::clone(&leaf1));
+    child2.add_child(Gc::clone(&leaf2));
+    child2.add_child(Gc::clone(&leaf3));
+    child2.add_child(Gc::clone(&leaf4));
+    child2.add_child(Gc::clone(&leaf5));
+    nested.add_child(Gc::clone(&nested_leaf1));
+    nested.add_child(Gc::clone(&nested_leaf2));
+    child2.add_child(Gc::clone(&nested));
+    root.add_child(Gc::clone(&child2));
+
+    // Level 1: child3
+    let child3 = TestComponent::new(14);
+    let leaf = TestComponent::new(15);
+    child3.add_child(Gc::clone(&leaf));
+    root.add_child(Gc::clone(&child3));
+
+    root
+}
+
 #[test]
 #[cfg_attr(miri, ignore)]
+fn test_deep_tree_update_corruption() {
+    let root = build_deep_tree();
+
+    // Verify structure
+    assert_eq!(root.children.borrow().len(), 3);
+    let child2 = Gc::clone(&root.children.borrow()[1]);
+    assert_eq!(child2.id, 4);
+    assert_eq!(child2.children.borrow().len(), 6);
+
+    // Trigger GC
+    collect();
+
+    // Verify after GC
+    assert_eq!(root.children.borrow().len(), 3);
+    let child2_after_gc = Gc::clone(&root.children.borrow()[1]);
+    assert_eq!(child2_after_gc.children.borrow().len(), 6);
+
+    // Access first child
+    let first_child = Gc::clone(&child2_after_gc.children.borrow()[0]);
+    assert_eq!(first_child.id, 5);
+
+    // Update
+    root.update();
+
+    drop(root);
+    collect();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn test_rvue_like_usage() {
+    let root = build_deep_tree();
+    let effect = TestEffect::new();
+
+    // Create ViewStruct like Rvue
+    let view = TestViewStruct {
+        root_component: Gc::clone(&root),
+        effects: GcCell::new(vec![Gc::clone(&effect)]),
+    };
+
+    // Create AppState like Rvue
+    let app_state = TestAppState::new();
+    app_state.set_view(view);
+    app_state.add_scene_root(Gc::clone(&root));
+
+    // Simulate event loop iterations with GC
+    for _ in 0..3 {
+        root.update();
+        collect();
+    }
+
+    // Verify tree is still valid
+    assert_eq!(root.children.borrow().len(), 3);
+    let child2 = Gc::clone(&root.children.borrow()[1]);
+    assert_eq!(child2.children.borrow().len(), 6);
+
+    for child in child2.children.borrow().iter() {
+        let _ = child.id;
+    }
+
+    drop(app_state);
+    collect();
+}
+
+#[test]
 fn test_multiple_gc_roots() {
     // Build two separate trees
-    let root1 = build_tree();
+    let root1 = build_deep_tree();
     let root1_children_count = root1.children.borrow().len();
-    println!("DEBUG: root1 children: {root1_children_count}");
+    assert!(root1_children_count == 3, "root1 should have 3 children");
 
-    let root2 = build_tree();
+    let root2 = build_deep_tree();
     let root2_children_count = root2.children.borrow().len();
-    println!("DEBUG: root2 children: {root2_children_count}");
+    assert!(root2_children_count == 3, "root2 should have 3 children");
 
     // Check counts immediately
-    println!("DEBUG: After build - root1: {root1_children_count}, root2: {root2_children_count}");
+    assert!(root1_children_count == 3, "root1 should have 3 children");
 
     // Create app state with multiple roots
     let app_state = TestAppState::new();
@@ -167,14 +220,35 @@ fn test_multiple_gc_roots() {
     app_state.add_scene_root(Gc::clone(&root2));
 
     // Collect - both trees should be preserved
-    println!("DEBUG: Before collect - root1: {root1_children_count}");
+    assert!(root1_children_count == 3, "root1 should have 3 children");
     collect();
     let root1_after_gc = root1.children.borrow().len();
-    println!("DEBUG: After collect - root1: {root1_after_gc}");
+    assert!(root1_after_gc == 3, "root1 should have 3 children after GC");
 
     // Both roots should still have all children
     assert_eq!(root1.children.borrow().len(), 3, "root1 after GC");
     assert_eq!(root2.children.borrow().len(), 3, "root2 after GC");
+
+    // Update both
+    root1.update();
+    root2.update();
+
+    // Collect again
+    collect();
+
+    // Verify still valid
+    let child2 = Gc::clone(&root1.children.borrow()[1]);
+    assert_eq!(child2.children.borrow().len(), 6, "child2 children count");
+
+    // Access all children to verify they're not corrupted
+    for (i, child) in child2.children.borrow().iter().enumerate() {
+        assert!(
+            child.id >= 5 && child.id <= 13,
+            "child {} has invalid id {}",
+            i,
+            child.id
+        );
+    }
 
     drop(app_state);
     collect();

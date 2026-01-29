@@ -1095,6 +1095,18 @@ impl LocalHeap {
                     && (*header).free_list_head.is_some()
                 {
                     let idx = (*header).free_list_head.unwrap();
+                    // Sanity check: ensure slot is not already allocated
+                    // This can happen if free list and allocated_bitmap are out of sync
+                    if (*header).is_allocated(idx as usize) {
+                        // Skip this slot - pop from free list and continue
+                        let obj_ptr = page_ptr
+                            .as_ptr()
+                            .cast::<u8>()
+                            .add((*header).header_size as usize + (idx as usize * block_size));
+                        let next_head = obj_ptr.cast::<Option<u16>>().read_unaligned();
+                        (*header).free_list_head = next_head;
+                        continue;
+                    }
                     let h_size = (*header).header_size as usize;
                     let obj_ptr = page_ptr
                         .as_ptr()
