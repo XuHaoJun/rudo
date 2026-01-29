@@ -7,3 +7,9 @@
 [submodule "learn-projects/bdwgc"]
 	path = learn-projects/bdwgc
 	url = git@github.com:bdwgc/bdwgc.git
+[submodule "learn-projects/gc-arena"]
+	path = learn-projects/gc-arena
+	url = git@github.com:kyren/gc-arena.git
+[submodule "learn-projects/tokio-rs"]
+	path = learn-projects/tokio-rs
+	url = git@github.com:tokio-rs/tokio.git
