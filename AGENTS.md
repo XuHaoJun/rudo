@@ -109,6 +109,7 @@ This project uses `.cursor/commands/` for custom speckit workflows:
 - Rust 1.75+ (stable, with `std::sync::atomic` features) + `std::sync::atomic`, `std::thread`, `std::sync::Barrier`, `std::sync::Mutex` (003-parallel-marking)
 - Rust 1.75+ (as specified in AGENTS.md) + `std::sync::atomic`, `std::sync::Mutex`, `std::thread`, `std::sync::Barrier` (Rust stdlib only) (001-chez-gc-optimization)
 - In-memory heap (N/A for external storage) (001-chez-gc-optimization)
+- Rust 1.75+ (stable, with `std::sync::atomic` features) + tokio crate version 1.0+ (optional), tokio-util crate version 0.7+, rudo-gc-derive crate (004-tokio-async-integration)
 
 ## Recent Changes
 - 002-send-sync-trait: Added Rust 1.75+ + `std::sync::atomic` (Rust stdlib), no external crates
