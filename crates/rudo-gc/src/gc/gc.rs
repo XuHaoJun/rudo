@@ -876,14 +876,13 @@ fn mark_minor_roots_parallel(
         handles.push(handle);
     }
 
+    registry.set_complete();
+
     for handle in handles {
         let marked = handle.join().unwrap();
         coordinator.record_marked(marked);
         coordinator.worker_completed();
     }
-
-    registry.set_complete();
-    coordinator.wait_for_completion();
 
     for page in &dirty_pages {
         unsafe {
