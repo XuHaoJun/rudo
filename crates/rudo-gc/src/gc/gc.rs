@@ -876,6 +876,7 @@ fn mark_minor_roots_parallel(
         handles.push(handle);
     }
 
+    registry.notify_work_available();
     registry.set_complete();
 
     for handle in handles {
@@ -1042,6 +1043,7 @@ fn mark_major_roots_parallel(
         coordinator.worker_completed();
     }
 
+    registry.notify_work_available();
     registry.set_complete();
     coordinator.wait_for_completion();
 
