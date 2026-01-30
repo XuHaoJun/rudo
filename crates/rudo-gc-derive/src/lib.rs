@@ -40,13 +40,6 @@ impl RuntimeFlavor {
             s => Err(RuntimeFlavorParseError::InvalidVariant(s.to_string())),
         }
     }
-
-    fn parse_flavor(s: &str, span: proc_macro2::Span) -> Result<Self, syn::Error> {
-        match Self::from_str(s) {
-            Ok(flavor) => Ok(flavor),
-            Err(e) => Err(syn::Error::new(span, e.to_string())),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -159,72 +152,12 @@ pub fn main(
                 }
             }
             Meta::NameValue(nv) => {
-                let ident = nv
-                    .path
-                    .get_ident()
-                    .ok_or_else(|| syn::Error::new_spanned(&nv.path, "expected ident"));
-                let ident = match ident {
-                    Ok(ident) => ident,
+                let meta: Meta = nv.into();
+                let mut punctuated = syn::punctuated::Punctuated::new();
+                punctuated.push(meta);
+                match GcMainConfig::from_args(&punctuated) {
+                    Ok(config) => config,
                     Err(err) => return err.into_compile_error().into(),
-                };
-                match ident.to_string().as_str() {
-                    "flavor" => {
-                        if let Expr::Lit(ExprLit {
-                            lit: Lit::Str(s), ..
-                        }) = &nv.value
-                        {
-                            match RuntimeFlavor::parse_flavor(
-                                s.value().as_str(),
-                                proc_macro2::Span::call_site(),
-                            ) {
-                                Ok(flavor) => GcMainConfig {
-                                    flavor,
-                                    worker_threads: None,
-                                },
-                                Err(e) => return e.into_compile_error().into(),
-                            }
-                        } else {
-                            return syn::Error::new_spanned(
-                                &nv.value,
-                                "flavor must be a string literal",
-                            )
-                            .into_compile_error()
-                            .into();
-                        }
-                    }
-                    "worker_threads" => {
-                        if let Expr::Lit(ExprLit {
-                            lit: Lit::Int(i), ..
-                        }) = &nv.value
-                        {
-                            let worker_threads = i
-                                .base10_parse()
-                                .map_err(|_| syn::Error::new_spanned(i, "invalid integer"));
-                            let worker_threads = match worker_threads {
-                                Ok(n) => n,
-                                Err(err) => return err.into_compile_error().into(),
-                            };
-                            GcMainConfig {
-                                flavor: RuntimeFlavor::MultiThread,
-                                worker_threads: Some(worker_threads),
-                            }
-                        } else {
-                            return syn::Error::new_spanned(
-                                &nv.value,
-                                "worker_threads must be an integer literal",
-                            )
-                            .into_compile_error()
-                            .into();
-                        }
-                    }
-                    _ => {
-                        return syn::Error::new_spanned(
-                            ident,
-                            format!("unknown attribute: {ident}"),
-                        )
-                        .into_compile_error()
-                        .into();
-                    }
                 }
             }
             Meta::Path(path) => {
