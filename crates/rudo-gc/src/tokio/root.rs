@@ -74,13 +74,19 @@ impl GcRootSet {
     /// * `ptr` - The raw pointer address to unregister
     pub fn unregister(&self, ptr: usize) {
         let mut roots = self.roots.lock().unwrap();
-        if let Some(pos) = roots.iter().position(|&p| p == ptr) {
+        #[allow(clippy::option_if_let_else)]
+        let found = if let Some(pos) = roots.iter().position(|&p| p == ptr) {
             roots.swap_remove(pos);
-        }
+            true
+        } else {
+            false
+        };
         drop(roots);
 
-        self.count.fetch_sub(1, Ordering::AcqRel);
-        self.dirty.store(true, Ordering::Release);
+        if found {
+            self.count.fetch_sub(1, Ordering::AcqRel);
+            self.dirty.store(true, Ordering::Release);
+        }
     }
 
     /// Returns the number of currently registered roots.
@@ -102,9 +108,9 @@ impl GcRootSet {
     ///
     /// A vector of root pointer addresses
     pub fn snapshot(&self) -> Vec<usize> {
-        let roots = self.roots.lock().unwrap().clone();
+        let roots = self.roots.lock().unwrap();
         self.dirty.store(false, Ordering::Release);
-        roots
+        roots.clone()
     }
 
     /// Returns whether the root set has been modified since last snapshot.

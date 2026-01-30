@@ -4,7 +4,6 @@
 //! - [`GcTokioExt`] trait with [`root_guard()`][GcTokioExt::root_guard] and [`yield_now()`][GcTokioExt::yield_now]
 //! - [`GcRootSet`] for process-level root tracking
 //! - [`GcRootGuard`] for RAII root registration
-//! - [`spawn()`][crate::tokio::spawn] for automatic root tracking when spawning tasks
 //!
 //! # Enabling Tokio Support
 //!
@@ -40,14 +39,11 @@
 mod guard;
 mod root;
 
-pub use guard::{GcRootGuard, GcRootScope};
+pub use guard::GcRootGuard;
 pub use root::GcRootSet;
 
 #[cfg(feature = "tokio")]
 pub use rudo_gc_derive::main as gc_main;
-
-#[cfg(feature = "tokio")]
-pub use rudo_gc_derive::root as gc_root;
 
 use crate::ptr::Gc;
 use crate::trace::Trace;
@@ -133,51 +129,4 @@ impl<T: Trace + Send + Sync> GcTokioExt for Gc<T> {
     async fn yield_now(&self) {
         task::yield_now().await;
     }
-}
-
-/// Spawns an async task with automatic root tracking.
-///
-/// This function wraps `tokio::task::spawn` to automatically protect any `Gc<T>`
-/// pointers captured by the spawned task's future. Users do not need to manually
-/// create [`GcRootGuard`]s when using this function.
-///
-/// # Type Parameters
-///
-/// * `F` - The future to spawn, must be `Send + 'static`
-/// * `T` - The output type of the future, must be `Send + 'static`
-///
-/// # Example
-///
-/// ```
-/// use rudo_gc::{Gc, Trace};
-/// use rudo_gc::tokio::spawn;
-///
-/// #[derive(Trace)]
-/// struct Data { value: i32 }
-///
-/// #[tokio::main]
-/// async fn main() {
-///     let gc = Gc::new(Data { value: 42 });
-///
-///     // gc is automatically protected for the task's lifetime
-///     let result = spawn(async move {
-///         println!("Value: {}", gc.value);
-///         gc.value * 2
-///     }).await;
-///
-///     assert_eq!(result, 84);
-/// }
-/// ```
-#[cfg(feature = "tokio")]
-pub async fn spawn<F>(future: F) -> F::Output
-where
-    F: std::future::Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    // Create a new root guard for this spawn
-    let guard = unsafe { GcRootGuard::new(std::ptr::NonNull::dangling()) };
-    // SAFETY: We're creating a new GcRootScope that wraps the future with the guard.
-    // The guard is valid and will be dropped when the future completes.
-    let wrapped = unsafe { GcRootScope::new(future, guard) };
-    wrapped.await
 }

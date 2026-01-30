@@ -6,7 +6,7 @@
 //! This test verifies that `GcRootSet` correctly tracks roots across
 //! multiple tokio runtimes running concurrently.
 
-use rudo_gc::tokio::{spawn, GcRootSet, GcTokioExt};
+use rudo_gc::tokio::{GcRootSet, GcTokioExt};
 use rudo_gc::{Gc, Trace};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -32,9 +32,9 @@ fn runtime1_worker(shared: Arc<SharedData>) {
 
         RUNTIME1_GC_COUNT.fetch_add(1, Ordering::SeqCst);
 
-        let handle = spawn(async move { *gc_clone });
+        let handle = tokio::spawn(async move { *gc_clone });
 
-        let result = handle.await;
+        let result = handle.await.unwrap();
         assert_eq!(result, 42);
 
         RUNTIME1_GC_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -56,8 +56,8 @@ fn runtime2_worker(shared: Arc<SharedData>) {
 
         for i in 0..5 {
             let val = Gc::clone(&gc_clone);
-            let result = spawn(async move { *val + i }).await;
-            assert!(result >= 42 && result <= 46);
+            let result = tokio::spawn(async move { *val + i }).await.unwrap();
+            assert!((42..=46).contains(&result));
         }
 
         RUNTIME2_GC_COUNT.fetch_add(1, Ordering::SeqCst);

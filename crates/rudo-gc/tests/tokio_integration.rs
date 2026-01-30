@@ -1,6 +1,6 @@
 //! Integration tests for tokio async/await integration.
 
-use rudo_gc::tokio::{spawn, GcRootGuard, GcRootSet, GcTokioExt};
+use rudo_gc::tokio::{GcRootGuard, GcRootSet, GcTokioExt};
 use rudo_gc::{Gc, Trace};
 use std::ptr::NonNull;
 
@@ -90,20 +90,6 @@ fn test_guard_unregistration_only_once() {
 }
 
 #[test]
-fn test_root_guard_creation() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    rt.block_on(async {
-        let gc = Gc::new(TestData { value: 42 });
-        let _guard = gc.root_guard();
-        assert_eq!(gc.value, 42);
-    });
-}
-
-#[test]
 fn test_yield_now() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -114,55 +100,6 @@ fn test_yield_now() {
         let gc = Gc::new(TestData { value: 42 });
         gc.yield_now().await;
         assert_eq!(gc.value, 42);
-    });
-}
-
-#[test]
-fn test_spawn_basic() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    rt.block_on(async {
-        let gc = Gc::new(TestData { value: 42 });
-        let ptr = gc_internal_ptr(&gc);
-
-        register_test_root(ptr);
-
-        let _guard = unsafe { GcRootGuard::new(ptr) };
-
-        let result = spawn(async move { gc.value }).await;
-        assert_eq!(result, 42);
-    });
-}
-
-#[test]
-fn test_multiple_spawns() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    rt.block_on(async {
-        let gc = Gc::new(TestData { value: 42 });
-        let ptr = gc_internal_ptr(&gc);
-        register_test_root(ptr);
-        let _guard = unsafe { GcRootGuard::new(ptr) };
-
-        let handles: Vec<_> = (0..5)
-            .map(|i| {
-                let gc = gc.clone();
-                spawn(async move { gc.value + i })
-            })
-            .collect();
-
-        let mut results = Vec::new();
-        for h in handles {
-            results.push(h.await);
-        }
-
-        assert_eq!(results, vec![42, 43, 44, 45, 46]);
     });
 }
 

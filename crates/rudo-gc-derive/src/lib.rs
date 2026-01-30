@@ -299,35 +299,6 @@ pub fn main(
     expanded.into()
 }
 
-#[proc_macro_attribute]
-pub fn root(
-    _args: proc_macro::TokenStream,
-    item: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
-    let input = parse_macro_input!(item as syn::Expr);
-
-    match &input {
-        Expr::Async(expr) => {
-            let body = &expr.block;
-            let capture = &expr.capture;
-
-            let expanded = quote! {
-                {
-                    let _guard = ::rudo_gc::tokio::GcRootGuard::enter_scope();
-                    async { #capture #body }.await
-                }
-            };
-
-            expanded.into()
-        }
-        _ => quote_spanned! {
-            input.span() =>
-            compile_error!("#[gc::root] can only be applied to async blocks");
-        }
-        .into(),
-    }
-}
-
 #[proc_macro_derive(Trace, attributes(rudo_gc))]
 pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
