@@ -1,58 +1,260 @@
 //! Derive macro for the `Trace` trait.
-//!
-//! This crate provides a procedural macro to automatically implement the `Trace` trait
-//! for custom types, enabling them to be stored in `Gc<T>` smart pointers.
-//!
-//! # Usage
-//!
-//! ```ignore
-//! use rudo_gc::{Gc, Trace};
-//!
-//! #[derive(Trace)]
-//! struct MyStruct {
-//!     value: i32,
-//!     child: Option<Gc<MyStruct>>,
-//! }
-//! ```
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::{
-    parse_macro_input, parse_quote, spanned::Spanned, Data, DeriveInput, Fields, GenericParam,
-    Generics, Ident, Index, Path,
+    parse::Parser, parse_macro_input, parse_quote, spanned::Spanned, Data, DeriveInput, Expr,
+    ExprLit, Fields, GenericParam, Generics, Ident, Index, Lit, Meta, Path,
 };
 
-/// Derive the `Trace` trait for a struct or enum.
-///
-/// All fields that contain `Gc<T>` (directly or indirectly) will be
-/// automatically traced during garbage collection.
-///
-/// # Examples
-///
-/// ```ignore
-/// use rudo_gc::{Gc, Trace};
-///
-/// #[derive(Trace)]
-/// struct Node {
-///     value: i32,           // Primitive, no tracing needed
-///     left: Option<Gc<Node>>,  // Traced
-///     right: Option<Gc<Node>>, // Traced
-/// }
-/// ```
-///
-/// # Supported Types
-///
-/// - Structs with named fields
-/// - Structs with tuple fields
-/// - Unit structs
-/// - Enums with any variant type
-/// - Generic types (with `T: Trace` bounds added automatically)
+#[derive(Debug, Clone, Copy, Default)]
+enum RuntimeFlavor {
+    #[default]
+    MultiThread,
+    CurrentThread,
+}
+
+#[derive(Debug)]
+enum RuntimeFlavorParseError {
+    InvalidVariant(String),
+}
+
+impl std::fmt::Display for RuntimeFlavorParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidVariant(s) => {
+                write!(
+                    f,
+                    "flavor must be \"multi_thread\" or \"current_thread\", got \"{s}\""
+                )
+            }
+        }
+    }
+}
+
+impl RuntimeFlavor {
+    fn from_str(s: &str) -> Result<Self, RuntimeFlavorParseError> {
+        match s {
+            "multi_thread" => Ok(Self::MultiThread),
+            "current_thread" => Ok(Self::CurrentThread),
+            s => Err(RuntimeFlavorParseError::InvalidVariant(s.to_string())),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct GcMainConfig {
+    flavor: RuntimeFlavor,
+    worker_threads: Option<u16>,
+}
+
+impl Default for GcMainConfig {
+    fn default() -> Self {
+        Self {
+            flavor: RuntimeFlavor::MultiThread,
+            worker_threads: None,
+        }
+    }
+}
+
+impl GcMainConfig {
+    fn from_args(
+        args: &syn::punctuated::Punctuated<Meta, syn::Token![,]>,
+    ) -> Result<Self, syn::Error> {
+        let mut config = Self::default();
+
+        for arg in args {
+            match arg {
+                Meta::NameValue(nv) => {
+                    let ident = nv
+                        .path
+                        .get_ident()
+                        .ok_or_else(|| syn::Error::new_spanned(&nv.path, "expected ident"))?;
+
+                    match ident.to_string().as_str() {
+                        "flavor" => {
+                            let value = &nv.value;
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Str(s), ..
+                            }) = value
+                            {
+                                config.flavor = RuntimeFlavor::from_str(s.value().as_str())
+                                    .map_err(|e| syn::Error::new_spanned(s, e))?;
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    value,
+                                    "flavor must be a string literal",
+                                ));
+                            }
+                        }
+                        "worker_threads" => {
+                            let value = &nv.value;
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Int(i), ..
+                            }) = value
+                            {
+                                config.worker_threads = Some(i.base10_parse()?);
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    value,
+                                    "worker_threads must be an integer literal",
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                ident,
+                                format!("unknown attribute: {ident}"),
+                            ))
+                        }
+                    }
+                }
+                Meta::Path(path) => {
+                    return Err(syn::Error::new_spanned(path, "expected key = value"))
+                }
+                Meta::List(list) => {
+                    return Err(syn::Error::new_spanned(list, "expected key = value"))
+                }
+            }
+        }
+
+        Ok(config)
+    }
+}
+
+#[proc_macro_attribute]
+#[allow(clippy::too_many_lines)]
+pub fn main(
+    args: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let input = parse_macro_input!(item as syn::ItemFn);
+
+    let config = if args.is_empty() {
+        GcMainConfig::default()
+    } else {
+        match parse_macro_input!(args as Meta) {
+            Meta::List(list) => {
+                let inner =
+                    match syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated
+                        .parse2(list.tokens.clone())
+                    {
+                        Ok(inner) => inner,
+                        Err(e) => {
+                            return syn::Error::new_spanned(&list, e)
+                                .into_compile_error()
+                                .into()
+                        }
+                    };
+                match GcMainConfig::from_args(&inner) {
+                    Ok(config) => config,
+                    Err(err) => return err.into_compile_error().into(),
+                }
+            }
+            Meta::NameValue(nv) => {
+                let meta: Meta = nv.into();
+                let mut punctuated = syn::punctuated::Punctuated::new();
+                punctuated.push(meta);
+                match GcMainConfig::from_args(&punctuated) {
+                    Ok(config) => config,
+                    Err(err) => return err.into_compile_error().into(),
+                }
+            }
+            Meta::Path(path) => {
+                if path.is_ident("gc_main") || path.is_ident("main") {
+                    GcMainConfig::default()
+                } else {
+                    return syn::Error::new_spanned(
+                        path,
+                        "#[gc::main] requires parentheses: #[gc::main(...)]",
+                    )
+                    .into_compile_error()
+                    .into();
+                }
+            }
+        }
+    };
+
+    if input.sig.asyncness.is_none() {
+        return quote_spanned! {
+            input.sig.fn_token.span =>
+            compile_error!("the `async` keyword is missing from the function declaration");
+        }
+        .into();
+    }
+
+    let inputs = &input.sig.inputs;
+    let has_params = !inputs.is_empty();
+
+    if has_params && input.sig.ident != "main" {
+        return quote_spanned! {
+            input.sig.inputs.span() =>
+            compile_error!("functions with #[gc::main] cannot have arguments");
+        }
+        .into();
+    }
+
+    let body = &input.block;
+    let inputs = &input.sig.inputs;
+    let ident = &input.sig.ident;
+    let vis = &input.vis;
+    let constness = input.sig.constness;
+    let unsafety = input.sig.unsafety;
+    let _abi = input.sig.abi.as_ref();
+
+    let runtime_setup = match config.flavor {
+        RuntimeFlavor::MultiThread => {
+            let worker_threads = config
+                .worker_threads
+                .map_or_else(|| quote! {}, |n| quote! { .worker_threads(#n) });
+            quote_spanned! {input.sig.span() =>
+                ::tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    #worker_threads
+            }
+        }
+        RuntimeFlavor::CurrentThread => {
+            quote_spanned! {input.sig.span() =>
+                ::tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+            }
+        }
+    };
+
+    let expanded = if has_params {
+        quote! {
+            #vis #constness #unsafety fn #ident #inputs {
+                let _ = ::rudo_gc::tokio::GcRootSet::global();
+
+                let rt = #runtime_setup
+                    .build()
+                    .expect("Failed building the Runtime");
+
+                rt.block_on(async #body)
+            }
+        }
+    } else {
+        quote! {
+            #vis #constness #unsafety fn #ident () {
+                let _ = ::rudo_gc::tokio::GcRootSet::global();
+
+                let rt = #runtime_setup
+                    .build()
+                    .expect("Failed building the Runtime");
+
+                rt.block_on(async #body)
+            }
+        }
+    };
+
+    expanded.into()
+}
+
 #[proc_macro_derive(Trace, attributes(rudo_gc))]
 pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let mut rudo_gc: Path = parse_quote!(::rudo_gc);
 
-    // Look for `crate` argument in attributes
     for attr in &input.attrs {
         if !attr.path().is_ident("rudo_gc") {
             continue;
@@ -72,19 +274,12 @@ pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
     }
 
-    // Name of the type being implemented
     let name = &input.ident;
-
-    // Generic parameters of the type being implemented
     let generics = add_trait_bounds(&rudo_gc, input.generics);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-
-    // Generate the trace implementation
     let trace_body = generate_trace_body(&rudo_gc, name, &input.data);
 
     let generated = quote! {
-        // SAFETY: This implementation is generated by the derive macro and
-        // correctly traces all Gc fields in the structure.
         unsafe impl #impl_generics #rudo_gc::Trace for #name #ty_generics #where_clause {
             #[inline]
             fn trace(&self, visitor: &mut impl #rudo_gc::Visitor) {
@@ -96,7 +291,6 @@ pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     generated.into()
 }
 
-/// Add `T: Trace + 'static` bounds to all generic type parameters.
 fn add_trait_bounds(rudo_gc: &Path, mut generics: Generics) -> Generics {
     for param in &mut generics.params {
         if let GenericParam::Type(ref mut type_param) = *param {
@@ -126,7 +320,6 @@ fn add_trait_bounds(rudo_gc: &Path, mut generics: Generics) -> Generics {
     generics
 }
 
-/// Generate the body of the `trace` method for the given data type.
 fn generate_trace_body(rudo_gc: &Path, name: &Ident, data: &Data) -> TokenStream {
     match data {
         Data::Struct(data) => generate_struct_trace(rudo_gc, &data.fields),
@@ -139,7 +332,6 @@ fn generate_trace_body(rudo_gc: &Path, name: &Ident, data: &Data) -> TokenStream
     }
 }
 
-/// Generate trace calls for struct fields.
 fn generate_struct_trace(rudo_gc: &Path, fields: &Fields) -> TokenStream {
     match fields {
         Fields::Named(f) => {
@@ -164,7 +356,6 @@ fn generate_struct_trace(rudo_gc: &Path, fields: &Fields) -> TokenStream {
     }
 }
 
-/// Generate trace calls for enum variants.
 fn generate_enum_trace(rudo_gc: &Path, name: &Ident, data: &syn::DataEnum) -> TokenStream {
     let match_arms = data.variants.iter().map(|variant| {
         let var_name = &variant.ident;

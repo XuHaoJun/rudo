@@ -109,9 +109,43 @@ This project uses `.cursor/commands/` for custom speckit workflows:
 - Rust 1.75+ (stable, with `std::sync::atomic` features) + `std::sync::atomic`, `std::thread`, `std::sync::Barrier`, `std::sync::Mutex` (003-parallel-marking)
 - Rust 1.75+ (as specified in AGENTS.md) + `std::sync::atomic`, `std::sync::Mutex`, `std::thread`, `std::sync::Barrier` (Rust stdlib only) (001-chez-gc-optimization)
 - In-memory heap (N/A for external storage) (001-chez-gc-optimization)
+- Rust 1.75+ (stable, with `std::sync::atomic` features) + tokio crate version 1.0+ (optional), tokio-util crate version 0.7+, rudo-gc-derive crate (004-tokio-async-integration)
 
 ## Recent Changes
 - 002-send-sync-trait: Added Rust 1.75+ + `std::sync::atomic` (Rust stdlib), no external crates
+- 004-tokio-async-integration: Added tokio async/await support with GcRootSet, GcRootGuard, #[gc::main], and Gc::yield_now()
+
+## Tokio Async Integration (004-tokio-async-integration)
+
+### Root Tracking
+The tokio integration uses a process-level singleton `GcRootSet` to track GC roots across async tasks:
+
+```rust
+use rudo_gc::tokio::{GcRootSet, GcRootGuard, GcTokioExt};
+
+fn example() {
+    let gc = Gc::new(Data { value: 42 });
+    let _guard = gc.root_guard(); // Register as root
+
+    tokio::spawn(async move {
+        println!("{}", gc.value); // Safe to access
+    });
+}
+```
+
+### Cooperative GC Scheduling
+Use `Gc::yield_now()` to allow GC to run during long computations:
+
+```rust
+async fn process_large_dataset() {
+    let gc = Gc::new(LargeDataSet::new());
+
+    for item in dataset.iter() {
+        // Process item
+        gc.yield_now().await; // Allow GC to run
+    }
+}
+```
 
 ## Concurrency Patterns (001-chez-gc-optimization)
 

@@ -664,6 +664,19 @@ fn mark_minor_roots_multi(
         }
     });
 
+    #[cfg(feature = "tokio")]
+    #[allow(clippy::explicit_iter_loop)]
+    {
+        use crate::tokio::GcRootSet;
+        for &ptr in GcRootSet::global().snapshot(heap).iter() {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                    mark_object_minor(gc_box, &mut visitor);
+                }
+            }
+        }
+    }
+
     for page_ptr in heap.all_pages() {
         unsafe {
             let header = page_ptr.as_ptr();
@@ -734,7 +747,11 @@ unsafe fn mark_and_push_to_worker_queue(
 /// This function processes dirty pages in parallel, distributing them
 /// across worker queues based on page ownership.
 #[allow(dead_code)]
-#[allow(clippy::unnecessary_cast, clippy::ptr_cast_constness)]
+#[allow(
+    clippy::unnecessary_cast,
+    clippy::ptr_cast_constness,
+    clippy::too_many_lines
+)]
 fn mark_minor_roots_parallel(
     heap: &mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
@@ -785,6 +802,24 @@ fn mark_minor_roots_parallel(
             }
         }
     });
+
+    #[cfg(feature = "tokio")]
+    #[allow(clippy::explicit_iter_loop)]
+    {
+        use crate::tokio::GcRootSet;
+        for &ptr in GcRootSet::global().snapshot(heap).iter() {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                    mark_and_push_to_worker_queue(
+                        ptr as *const u8,
+                        gc_box,
+                        &worker_queues,
+                        num_workers,
+                    );
+                }
+            }
+        }
+    }
 
     let mut dirty_pages: Vec<*const PageHeader> = Vec::new();
     for page_ptr in heap.all_pages() {
@@ -882,6 +917,19 @@ fn mark_major_roots_multi(
             }
         }
     });
+
+    #[cfg(feature = "tokio")]
+    #[allow(clippy::explicit_iter_loop)]
+    {
+        use crate::tokio::GcRootSet;
+        for &ptr in GcRootSet::global().snapshot(heap).iter() {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                    mark_object(gc_box, &mut visitor);
+                }
+            }
+        }
+    }
 
     while let Some(ptr) = visitor.worklist.pop() {
         unsafe {

@@ -14,11 +14,14 @@ categories = ["memory-management", "rust-patterns"]
 default = ["derive"]
 derive = ["dep:rudo-gc-derive"]
 test-util = []
+tokio = ["dep:tokio", "dep:tokio-util"]
 
 [dependencies]
 rudo-gc-derive = { workspace = true, optional = true }
 sys_alloc = { workspace = true }
 libc = { workspace = true }
+tokio = { version = "1.0", optional = true, default-features = false, features = ["rt", "rt-multi-thread", "test-util", "sync"] }
+tokio-util = { version = "0.7", optional = true, features = ["rt"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
