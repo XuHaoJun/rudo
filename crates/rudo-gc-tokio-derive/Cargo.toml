@@ -7,6 +7,8 @@ license.workspace = true
 repository.workspace = true
 description = "Proc-macro for rudo-gc tokio integration"
 keywords = ["garbage-collection", "gc", "memory", "cycle-detection", "tokio"]
+categories = ["memory-management", "rust-patterns"]
+readme = "README.md"
 
 [lib]
 proc-macro = true
