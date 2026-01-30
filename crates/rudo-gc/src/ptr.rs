@@ -531,8 +531,9 @@ impl<T: Trace> Gc<T> {
         // Since the value is zero-sized, this is just the ref_count field.
 
         // Use AtomicPtr for thread-safe lazy initialization of ZST singleton.
-        // The singleton is allocated once in static memory and never collected,
-        // preventing UAF when GC runs while ZST_BOX still holds a pointer.
+        // The singleton is initialized with weak_count=1, which prevents the GC
+        // sweep phase from reclaiming it. This ensures the singleton address
+        // remains valid for the lifetime of the program, preventing ABA issues.
         static ZST_SINGLETON: AtomicPtr<GcBox<()>> = AtomicPtr::new(std::ptr::null_mut());
 
         let gc_box_ptr: *mut GcBox<()> = {
@@ -543,10 +544,12 @@ impl<T: Trace> Gc<T> {
                 let gc_box = alloc_ptr.as_ptr().cast::<GcBox<()>>();
 
                 // SAFETY: We just allocated this memory. The value is a ZST (unit type).
+                // weak_count is set to 1 to mark this as an immortal singleton that
+                // should never be reclaimed by the GC sweep phase.
                 unsafe {
                     gc_box.write(GcBox {
                         ref_count: AtomicUsize::new(1),
-                        weak_count: AtomicUsize::new(0),
+                        weak_count: AtomicUsize::new(1),
                         drop_fn: GcBox::<()>::drop_fn_for,
                         trace_fn: GcBox::<()>::trace_fn_for,
                         is_dropping: AtomicUsize::new(0),
