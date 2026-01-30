@@ -25,6 +25,7 @@ The library is built on a **BiBOP (Big Bag of Pages)** memory layout, which allo
 - **ZST Optimization**: Zero-Sized Types (like `()`) are handled with zero heap allocation overhead.
 - **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`, enabling safe multi-threaded data sharing.
 - **Parallel Marking**: Work-stealing based parallel marking for multi-core scalability.
+- **Tokio Async Integration**: Full support for async/await with `GcRootSet`, `GcRootGuard`, and `#[gc::main]` macro (requires `tokio` feature).
 
 ## Installation
 
@@ -40,6 +41,13 @@ If you want to use the `#[derive(Trace)]` macro, enable the `derive` feature:
 ```toml
 [dependencies]
 rudo-gc = { version = "0.1.0", features = ["derive"] }
+```
+
+For Tokio async/await integration:
+
+```toml
+[dependencies]
+rudo-gc = { version = "0.1.0", features = ["derive", "tokio"] }
 ```
 
 ## Quick Start
@@ -113,6 +121,66 @@ let self_ref = weak.as_ref().unwrap().upgrade().unwrap();
 assert_eq!(self_ref.data, 42);
 ```
 
+## Tokio Async Integration
+
+Enable the `tokio` feature for async/await support:
+
+```toml
+[dependencies]
+rudo-gc = { version = "0.1.0", features = ["derive", "tokio"] }
+```
+
+### Root Guards
+
+When accessing `Gc<T>` inside `tokio::spawn`, you must register it as a root using `root_guard()`:
+
+```rust
+use rudo_gc::{Gc, Trace, GcTokioExt};
+
+#[derive(Trace)]
+struct Data { value: i32 }
+
+async fn example() {
+    let gc = Gc::new(Data { value: 42 });
+
+    // Register as root before spawning
+    let _guard = gc.root_guard();
+
+    tokio::spawn(async move {
+        println!("{}", gc.value); // Safe to access
+    }).await.unwrap();
+}
+```
+
+### GC Safepoints
+
+Use `yield_now()` to allow the GC to run during long computations:
+
+```rust
+async fn process_large_dataset(gc: Gc<LargeDataSet>) {
+    for item in dataset.iter() {
+        // Process item
+        gc.yield_now().await; // Allow GC to run
+    }
+}
+```
+
+### Runtime Initialization
+
+Use `#[gc::main]` to automatically initialize the root set before your main function:
+
+```rust
+#[gc::main(flavor = "multi_thread", worker_threads = 4)]
+async fn main() {
+    let gc = Gc::new(Data { value: 42 });
+    let _guard = gc.root_guard();
+
+    tokio::spawn(async move {
+        println!("{}", gc.value);
+    }).await.unwrap();
+}
+```
+
 ## Architecture
 
 `rudo-gc` is designed with performance and Rust compatibility in mind:
@@ -139,9 +207,10 @@ For a deeper dive into the philosophy behind the collector, see the [design docu
 
 - **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`. This allows safe sharing of GC-managed data between threads.
 - **Address Stability**: While objects don't move, their memory is reclaimed once unreachable. Holding an `&T` across a collection point is safe as long as the parent `Gc<T>` is still rooted.
-- **Platform Support**: Conservative stack scanning is currently supported on **x86\_64 Linux, macOS, and Windows**, as well as **aarch64 Linux**. Miri is also fully supported for testing.
+- **Platform Support**: Conservative stack scanning is currently supported on **x86_64 Linux, macOS, and Windows**, as well as **aarch64 Linux**. Miri is also fully supported for testing.
 - **Conservative Stack Scanning**: Roots are discovered by scanning the stack and registers. This may cause false positives (integers mistaken as pointers), leading to memory bloat. It also prevents implementing moving/compacting GC.
 - **Safe Point Requirement**: Threads must call `safepoint()` or perform allocations regularly. Long-running loops without these calls may cause "Stop-Forever" issues where threads don't respond to GC requests.
+- **Tokio Roots**: When using the `tokio` feature, roots must be registered with `GcRootSet` via `root_guard()`. Tokio tasks don't share stack with the main thread, so automatic stack scanning won't find roots in spawned tasks.
 
 ## License
 
