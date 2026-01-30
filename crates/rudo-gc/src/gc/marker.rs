@@ -824,8 +824,9 @@ impl ParallelMarkCoordinator {
     }
 
     /// Record marked objects from a worker.
+    /// Uses Release ordering to ensure marked objects are visible before the count update.
     pub fn record_marked(&self, count: usize) {
-        self.total_marked.fetch_add(count, Ordering::Relaxed);
+        self.total_marked.fetch_add(count, Ordering::Release);
     }
 
     /// Wait at the barrier for all workers to synchronize.

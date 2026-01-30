@@ -83,7 +83,10 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
             (*self.buffer.get())[index].write(item);
         }
 
-        bottom.store(b.wrapping_add(1), Ordering::Relaxed);
+        // SAFETY: Using Release ordering to ensure the data write is visible
+        // to stealing threads before bottom is incremented.
+        // This follows the Chase-Lev work-stealing algorithm correctness requirements.
+        bottom.store(b.wrapping_add(1), Ordering::Release);
 
         true
     }
@@ -111,7 +114,10 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
         }
 
         let new_b = b.wrapping_sub(1);
-        bottom.store(new_b, Ordering::Relaxed);
+        // SAFETY: Using Release ordering to synchronize with steal operations.
+        // When we decrement bottom, stealing threads must see this update
+        // before they can observe the queue state.
+        bottom.store(new_b, Ordering::Release);
 
         let index = new_b & self.mask;
 
@@ -131,11 +137,13 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
             .is_err()
         {
             // Another thread stole the item - put it back
-            bottom.store(b, Ordering::Relaxed);
+            // SAFETY: Using Release ordering for consistency with other bottom stores
+            bottom.store(b, Ordering::Release);
             return None;
         }
 
-        bottom.store(t.wrapping_add(1), Ordering::Relaxed);
+        // SAFETY: Using Release ordering to ensure stealers see consistent state
+        bottom.store(t.wrapping_add(1), Ordering::Release);
         Some(item)
     }
 
