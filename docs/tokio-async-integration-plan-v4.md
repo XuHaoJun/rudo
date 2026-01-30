@@ -205,8 +205,7 @@ crates/rudo-gc/src/gc/
 crates/rudo-gc/src/tokio/
 ├── mod.rs     [修改 - 移除 spawn(), 移除 GcRootScope export]
 ├── guard.rs   [修改 - 移除 enter_scope(), 移除 GcRootScope]
-├── root.rs    [修改 - 重構 API，新增 snapshot(heap)]
-└── spawn.rs   [保留空]
+└── root.rs    [修改 - 重構 API，新增 snapshot(heap)]
 
 crates/rudo-gc/tests/
 ├── tokio_integration.rs   [修改 - 更新測試]
