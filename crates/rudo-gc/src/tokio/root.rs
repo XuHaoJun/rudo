@@ -108,9 +108,9 @@ impl GcRootSet {
     ///
     /// A vector of root pointer addresses
     pub fn snapshot(&self) -> Vec<usize> {
-        let roots = self.roots.lock().unwrap();
+        let roots = self.roots.lock().unwrap().clone();
         self.dirty.store(false, Ordering::Release);
-        roots.clone()
+        roots
     }
 
     /// Returns whether the root set has been modified since last snapshot.
