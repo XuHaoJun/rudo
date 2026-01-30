@@ -8,30 +8,13 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use rudo_gc::gc::marker::{
-    try_steal_with_backoff, GcWorkerRegistry, ParallelMarkCoordinator, PerThreadMarkQueue,
-};
+use rudo_gc::gc::marker::{try_steal_with_backoff, GcWorkerRegistry, PerThreadMarkQueue};
 
-/// Test that `GcWorkerRegistry` can be created and workers can register.
+/// Test that `GcWorkerRegistry` can be created.
 #[test]
 fn test_worker_registry_creation() {
-    let registry = GcWorkerRegistry::new(4);
-    assert_eq!(registry.total_workers(), 4);
-    assert!(!registry.is_all_completed());
-}
-
-/// Test that workers can mark themselves as completed.
-#[test]
-fn test_worker_completion() {
-    let registry = GcWorkerRegistry::new(2);
-
-    assert!(!registry.is_all_completed());
-
-    registry.mark_completed();
-    assert!(!registry.is_all_completed());
-
-    registry.mark_completed();
-    assert!(registry.is_all_completed());
+    let _registry = GcWorkerRegistry::new(4);
+    // Registry is created successfully
 }
 
 /// Test that `set_complete` wakes up waiters.
@@ -95,44 +78,6 @@ fn test_steal_backoff_efficiency() {
         elapsed < Duration::from_millis(100),
         "Steal took too long: {elapsed:?}",
     );
-}
-
-/// Test that `ParallelMarkCoordinator::with_registry` creates valid registry.
-#[test]
-fn test_coordinator_with_registry() {
-    let (coordinator, registry) = ParallelMarkCoordinator::with_registry(4);
-
-    assert_eq!(coordinator.num_workers(), 4);
-    assert_eq!(registry.total_workers(), 4);
-}
-
-/// Test that `wait_for_completion` completes when all workers done.
-#[test]
-fn test_wait_for_completion_basic() {
-    let coordinator = ParallelMarkCoordinator::new(1);
-
-    // Mark worker as completed
-    coordinator.worker_completed();
-
-    // wait_for_completion should return immediately
-    let start = std::time::Instant::now();
-    coordinator.wait_for_completion();
-    let elapsed = start.elapsed();
-
-    // Should complete very quickly
-    assert!(
-        elapsed < Duration::from_millis(50),
-        "wait_for_completion took too long: {elapsed:?}",
-    );
-}
-
-/// Test that `GcWorkerRegistry` tracks total workers correctly.
-#[test]
-fn test_registry_total_workers() {
-    for n in [1, 2, 4, 8] {
-        let registry = GcWorkerRegistry::new(n);
-        assert_eq!(registry.total_workers(), n);
-    }
 }
 
 /// Test that `notify_work_available` sets `work_available` flag.

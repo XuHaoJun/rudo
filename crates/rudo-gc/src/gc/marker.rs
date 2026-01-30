@@ -22,7 +22,6 @@ use std::num::NonZeroUsize;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::Barrier;
 use std::sync::Condvar;
 use std::sync::Mutex;
 
@@ -211,10 +210,6 @@ pub struct GcWorkerRegistry {
     mutex: Mutex<GcWorkerState>,
     /// Condvar for waking workers when work is available or complete.
     cond: Condvar,
-    /// Total workers expected to complete.
-    total_workers: usize,
-    /// Workers that have completed their marking.
-    completed: AtomicUsize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -226,14 +221,12 @@ struct GcWorkerState {
 }
 
 impl GcWorkerRegistry {
-    /// Create a new worker registry for the given number of workers.
+    /// Create a new worker registry.
     #[must_use]
-    pub fn new(total_workers: usize) -> Arc<Self> {
+    pub fn new(_total_workers: usize) -> Arc<Self> {
         Arc::new(Self {
             mutex: Mutex::new(GcWorkerState::default()),
             cond: Condvar::new(),
-            total_workers,
-            completed: AtomicUsize::new(0),
         })
     }
 
@@ -291,23 +284,6 @@ impl GcWorkerRegistry {
         state.is_complete = true;
         drop(state);
         self.cond.notify_all();
-    }
-
-    /// Worker calls this when it has finished marking.
-    pub fn mark_completed(&self) {
-        self.completed.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Check if all workers have completed.
-    #[must_use]
-    pub fn is_all_completed(&self) -> bool {
-        self.completed.load(Ordering::Relaxed) >= self.total_workers
-    }
-
-    /// Get the total number of workers.
-    #[must_use]
-    pub const fn total_workers(&self) -> usize {
-        self.total_workers
     }
 }
 
@@ -833,14 +809,6 @@ impl ParallelMarkConfig {
 pub struct ParallelMarkCoordinator {
     /// The number of worker threads participating in marking.
     num_workers: usize,
-    /// Barrier for synchronizing workers at the end of marking.
-    barrier: Arc<Barrier>,
-    /// Shared counter for pages that need processing.
-    pages_remaining: AtomicUsize,
-    /// Flag indicating marking is complete.
-    marking_complete: AtomicUsize,
-    /// Total marked count.
-    total_marked: AtomicUsize,
 }
 
 impl ParallelMarkCoordinator {
@@ -849,10 +817,6 @@ impl ParallelMarkCoordinator {
     pub fn new(num_workers: usize) -> Self {
         Self {
             num_workers: num_workers.max(1),
-            barrier: Arc::new(Barrier::new(num_workers.max(1))),
-            pages_remaining: AtomicUsize::new(0),
-            marking_complete: AtomicUsize::new(0),
-            total_marked: AtomicUsize::new(0),
         }
     }
 
@@ -865,10 +829,6 @@ impl ParallelMarkCoordinator {
         let registry = GcWorkerRegistry::new(num_workers);
         let coordinator = Self {
             num_workers: num_workers.max(1),
-            barrier: Arc::new(Barrier::new(num_workers.max(1))),
-            pages_remaining: AtomicUsize::new(0),
-            marking_complete: AtomicUsize::new(0),
-            total_marked: AtomicUsize::new(0),
         };
         (coordinator, registry)
     }
@@ -878,12 +838,6 @@ impl ParallelMarkCoordinator {
     #[must_use]
     pub fn with_config(config: &ParallelMarkConfig) -> Self {
         Self::new(config.effective_workers())
-    }
-
-    /// Get the effective number of workers (at least 1).
-    #[must_use]
-    pub const fn num_workers(&self) -> usize {
-        self.num_workers
     }
 
     /// Check if running in single-threaded mode.
@@ -897,89 +851,27 @@ impl ParallelMarkCoordinator {
     pub fn should_use_parallel(&self, config: &ParallelMarkConfig) -> bool {
         config.use_parallel() && self.num_workers > 1
     }
+}
 
-    /// Start parallel marking with the given worker queues.
-    pub fn start_marking(
-        &self,
-        _worker_queues: &[PerThreadMarkQueue],
-        root_pages: &[*const PageHeader],
-    ) {
-        self.pages_remaining
-            .store(root_pages.len(), Ordering::Release);
-        self.marking_complete.store(0, Ordering::Release);
+/// Distribute dirty pages to worker queues for Minor GC parallel marking.
+///
+/// Dirty pages are pages that have been written to since the last GC.
+/// During Minor GC, we need to scan these pages for old->young references.
+/// This function distributes dirty pages evenly across worker queues.
+#[allow(clippy::similar_names)]
+pub fn distribute_dirty_pages(
+    dirty_pages: &[*const PageHeader],
+    worker_queues: &[PerThreadMarkQueue],
+) -> Vec<usize> {
+    let num_workers = worker_queues.len().max(1);
+    let mut distribution = Vec::with_capacity(dirty_pages.len());
+
+    for (idx, _page) in dirty_pages.iter().enumerate() {
+        let worker_idx = idx % num_workers;
+        distribution.push(worker_idx);
     }
 
-    /// Distribute dirty pages to worker queues for Minor GC parallel marking.
-    ///
-    /// Dirty pages are pages that have been written to since the last GC.
-    /// During Minor GC, we need to scan these pages for old->young references.
-    /// This function distributes dirty pages evenly across worker queues.
-    #[allow(clippy::similar_names)]
-    pub fn distribute_dirty_pages(
-        &self,
-        dirty_pages: &[*const PageHeader],
-        worker_queues: &[PerThreadMarkQueue],
-    ) -> Vec<usize> {
-        let num_workers = worker_queues.len().max(1);
-        let mut distribution = Vec::with_capacity(dirty_pages.len());
-
-        for (idx, _page) in dirty_pages.iter().enumerate() {
-            let worker_idx = idx % num_workers;
-            distribution.push(worker_idx);
-        }
-
-        distribution
-    }
-
-    /// Wait for all workers to complete marking.
-    ///
-    /// Uses exponential backoff: spin briefly, then yield.
-    /// This reduces CPU usage while waiting for workers.
-    pub fn wait_for_completion(&self) {
-        let mut spin_count = 0;
-        while self.marking_complete.load(Ordering::Acquire) < self.num_workers {
-            if spin_count < 8 {
-                std::hint::spin_loop();
-                spin_count += 1;
-            } else {
-                std::thread::yield_now();
-            }
-        }
-    }
-
-    /// Check if marking is complete.
-    #[must_use]
-    pub fn is_complete(&self) -> bool {
-        self.marking_complete.load(Ordering::Acquire) >= self.num_workers
-    }
-
-    /// Get the number of pages remaining to be processed.
-    #[must_use]
-    pub fn pages_remaining(&self) -> usize {
-        self.pages_remaining.load(Ordering::Acquire)
-    }
-
-    /// Get the total number of objects marked.
-    #[must_use]
-    pub fn total_marked(&self) -> usize {
-        self.total_marked.load(Ordering::Acquire)
-    }
-
-    /// Record marked objects from a worker.
-    /// Uses Release ordering to ensure marked objects are visible before the count update.
-    pub fn record_marked(&self, count: usize) {
-        self.total_marked.fetch_add(count, Ordering::Release);
-    }
-
-    /// Wait at the barrier for all workers to synchronize.
-    pub fn wait_at_barrier(&self) {
-        self.barrier.wait();
-    }
-
-    /// Mark that this worker has completed.
-    pub fn worker_completed(&self) {
-        self.marking_complete.fetch_add(1, Ordering::Release);
-    }
+    distribution
 }
 
 /// Execute the mark phase of garbage collection on a work queue.
@@ -1167,7 +1059,6 @@ pub fn worker_mark_loop_with_registry(
         }
     }
 
-    registry.mark_completed();
     marked
 }
 fn try_steal_work(queue: &Arc<PerThreadMarkQueue>, all_queues: &[Arc<PerThreadMarkQueue>]) -> bool {
@@ -1444,6 +1335,7 @@ mod overflow_queue_verification_tests {
     fn test_overflow_queue_concurrent_push_pop() {
         use std::sync::atomic::AtomicUsize;
         use std::sync::Arc;
+        use std::sync::Barrier;
         use std::thread;
 
         while pop_overflow_work().is_some() {}
@@ -1524,6 +1416,9 @@ mod overflow_queue_verification_tests {
     #[test]
     #[ignore = "Concurrent test - stress tests clear_overflow_queue vs pushers race"]
     fn test_clear_overflow_queue_concurrent_with_pushers() {
+        use std::sync::Arc;
+        use std::sync::Barrier;
+
         const NUM_PUSHERS: usize = 4;
         const ITEMS_PER_PUSHER: usize = 1000;
         const ITERATIONS: usize = 10;
