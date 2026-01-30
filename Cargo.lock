@@ -151,6 +151,7 @@ version = "0.3.2"
 dependencies = [
  "libc",
  "rudo-gc-derive",
+ "rudo-gc-tokio-derive",
  "sys_alloc",
  "tokio",
  "tokio-util",
@@ -159,6 +160,15 @@ dependencies = [
 
 [[package]]
 name = "rudo-gc-derive"
+version = "0.3.2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "rudo-gc-tokio-derive"
 version = "0.3.2"
 dependencies = [
  "proc-macro2",

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/rudo-gc", "crates/rudo-gc-derive", "crates/sys_alloc"]
+members = ["crates/rudo-gc", "crates/rudo-gc-derive", "crates/rudo-gc-tokio-derive", "crates/sys_alloc"]
 
 [workspace.package]
 version = "0.3.2"
@@ -13,6 +13,7 @@ categories = ["memory-management", "rust-patterns"]
 
 [workspace.dependencies]
 rudo-gc-derive = { path = "crates/rudo-gc-derive", version = "0.3" }
+rudo-gc-tokio-derive = { path = "crates/rudo-gc-tokio-derive", version = "0.3" }
 sys_alloc = { path = "crates/sys_alloc", version = "0.3" }
 libc = "0.2"
 windows-sys = "0.52"

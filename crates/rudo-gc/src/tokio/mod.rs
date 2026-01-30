@@ -43,7 +43,7 @@ pub use guard::GcRootGuard;
 pub use root::GcRootSet;
 
 #[cfg(feature = "tokio")]
-pub use rudo_gc_derive::main as gc_main;
+pub use rudo_gc_tokio_derive::gc_main;
 
 use crate::ptr::Gc;
 use crate::trace::Trace;
