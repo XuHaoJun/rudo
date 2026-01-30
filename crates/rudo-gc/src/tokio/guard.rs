@@ -25,6 +25,12 @@ use super::root::GcRootSet;
 /// // pointer is no longer a root
 /// ```
 ///
+/// # Warning
+///
+/// If a user calls `mem::forget()` on a `GcRootGuard`, the pointer will never
+/// be unregistered, causing a permanent memory leak. Users must not forget guards
+/// that protect GC pointers.
+///
 /// # Safety
 ///
 /// The pointer must be a valid, non-null pointer to a managed `GcBox`.
@@ -34,7 +40,13 @@ pub struct GcRootGuard {
     _phantom: PhantomData<u8>,
 }
 
+/// SAFETY: `GcRootGuard` only contains a raw pointer (`NonNull`<u8>) to a `GcBox`.
+/// The `GcBox` is protected by `GcRootSet`'s global Mutex, which provides
+/// synchronization. The guard is a simple ownership token - Send/Sync is
+/// safe because the actual pointer is never accessed, only stored/unstored
+/// through `GcRootSet` which handles synchronization.
 unsafe impl Send for GcRootGuard {}
+/// SAFETY: Same as Send - see Send impl for details.
 unsafe impl Sync for GcRootGuard {}
 
 impl GcRootGuard {

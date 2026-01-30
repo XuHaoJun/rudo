@@ -191,7 +191,7 @@ impl GcRootSet {
 
 static GLOBAL: OnceLock<GcRootSet> = OnceLock::new();
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tokio"))]
 mod tests {
     use super::*;
 

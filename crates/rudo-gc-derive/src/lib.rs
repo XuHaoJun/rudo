@@ -115,114 +115,107 @@ pub fn main(
 ) -> proc_macro::TokenStream {
     let input = parse_macro_input!(item as syn::ItemFn);
 
-    let config =
-        if args.is_empty() {
-            GcMainConfig::default()
-        } else {
-            match parse_macro_input!(args as Meta) {
-                Meta::List(list) => {
-                    let inner =
-                        match syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated
-                            .parse2(list.tokens.clone())
-                        {
-                            Ok(inner) => inner,
-                            Err(e) => {
-                                return syn::Error::new_spanned(&list, e)
-                                    .into_compile_error()
-                                    .into()
-                            }
-                        };
-                    match GcMainConfig::from_args(&inner) {
-                        Ok(config) => config,
-                        Err(err) => return err.into_compile_error().into(),
-                    }
-                }
-                Meta::NameValue(nv) => {
-                    let ident = nv
-                        .path
-                        .get_ident()
-                        .ok_or_else(|| syn::Error::new_spanned(&nv.path, "expected ident"));
-                    let ident = match ident {
-                        Ok(ident) => ident,
-                        Err(err) => return err.into_compile_error().into(),
+    let config = if args.is_empty() {
+        GcMainConfig::default()
+    } else {
+        match parse_macro_input!(args as Meta) {
+            Meta::List(list) => {
+                let inner =
+                    match syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated
+                        .parse2(list.tokens.clone())
+                    {
+                        Ok(inner) => inner,
+                        Err(e) => {
+                            return syn::Error::new_spanned(&list, e)
+                                .into_compile_error()
+                                .into()
+                        }
                     };
-                    match ident.to_string().as_str() {
-                        "flavor" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Str(s), ..
-                            }) = &nv.value
-                            {
-                                GcMainConfig {
-                                    flavor: match s.value().as_str() {
-                                        "multi_thread" => RuntimeFlavor::MultiThread,
-                                        "current_thread" => RuntimeFlavor::CurrentThread,
-                                        _ => return syn::Error::new_spanned(
-                                            s,
-                                            "flavor must be \"multi_thread\" or \"current_thread\"",
-                                        )
-                                        .into_compile_error()
-                                        .into(),
-                                    },
+                match GcMainConfig::from_args(&inner) {
+                    Ok(config) => config,
+                    Err(err) => return err.into_compile_error().into(),
+                }
+            }
+            Meta::NameValue(nv) => {
+                let ident = nv
+                    .path
+                    .get_ident()
+                    .ok_or_else(|| syn::Error::new_spanned(&nv.path, "expected ident"));
+                let ident = match ident {
+                    Ok(ident) => ident,
+                    Err(err) => return err.into_compile_error().into(),
+                };
+                match ident.to_string().as_str() {
+                    "flavor" => {
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Str(s), ..
+                        }) = &nv.value
+                        {
+                            match RuntimeFlavor::from_string(s.value().as_str()) {
+                                Ok(flavor) => GcMainConfig {
+                                    flavor,
                                     worker_threads: None,
-                                }
-                            } else {
-                                return syn::Error::new_spanned(
-                                    &nv.value,
-                                    "flavor must be a string literal",
-                                )
-                                .into_compile_error()
-                                .into();
+                                },
+                                Err(e) => return e.into_compile_error().into(),
                             }
-                        }
-                        "worker_threads" => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Int(i), ..
-                            }) = &nv.value
-                            {
-                                let worker_threads = i
-                                    .base10_parse()
-                                    .map_err(|_| syn::Error::new_spanned(i, "invalid integer"));
-                                let worker_threads = match worker_threads {
-                                    Ok(n) => n,
-                                    Err(err) => return err.into_compile_error().into(),
-                                };
-                                GcMainConfig {
-                                    flavor: RuntimeFlavor::MultiThread,
-                                    worker_threads: Some(worker_threads),
-                                }
-                            } else {
-                                return syn::Error::new_spanned(
-                                    &nv.value,
-                                    "worker_threads must be an integer literal",
-                                )
-                                .into_compile_error()
-                                .into();
-                            }
-                        }
-                        _ => {
+                        } else {
                             return syn::Error::new_spanned(
-                                ident,
-                                format!("unknown attribute: {ident}"),
+                                &nv.value,
+                                "flavor must be a string literal",
                             )
                             .into_compile_error()
                             .into();
                         }
                     }
-                }
-                Meta::Path(path) => {
-                    if path.is_ident("gc_main") || path.is_ident("main") {
-                        GcMainConfig::default()
-                    } else {
+                    "worker_threads" => {
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Int(i), ..
+                        }) = &nv.value
+                        {
+                            let worker_threads = i
+                                .base10_parse()
+                                .map_err(|_| syn::Error::new_spanned(i, "invalid integer"));
+                            let worker_threads = match worker_threads {
+                                Ok(n) => n,
+                                Err(err) => return err.into_compile_error().into(),
+                            };
+                            GcMainConfig {
+                                flavor: RuntimeFlavor::MultiThread,
+                                worker_threads: Some(worker_threads),
+                            }
+                        } else {
+                            return syn::Error::new_spanned(
+                                &nv.value,
+                                "worker_threads must be an integer literal",
+                            )
+                            .into_compile_error()
+                            .into();
+                        }
+                    }
+                    _ => {
                         return syn::Error::new_spanned(
-                            path,
-                            "#[gc::main] requires parentheses: #[gc::main(...)]",
+                            ident,
+                            format!("unknown attribute: {ident}"),
                         )
                         .into_compile_error()
                         .into();
                     }
                 }
             }
-        };
+            Meta::Path(path) => {
+                if path.is_ident("gc_main") || path.is_ident("main") {
+                    GcMainConfig::default()
+                } else {
+                    return syn::Error::new_spanned(
+                        path,
+                        "#[gc::main] requires parentheses: #[gc::main(...)]",
+                    )
+                    .into_compile_error()
+                    .into();
+                }
+            }
+        }
+    };
 
     if input.sig.asyncness.is_none() {
         return quote_spanned! {

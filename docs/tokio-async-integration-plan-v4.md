@@ -2,12 +2,14 @@
 
 **建立日期**: 2026-01-30
 **作者**: opencode
-**版本**: 4.1
-**基於**: v3 代碼審查 + v4 實作修正
+**版本**: 4.2
+**基於**: v3 代碼審查 + v4 實作修正 + v4.1 代碼審查跟進
 
 ## 執行摘要
 
 修復 v3 實作中的 critical bugs 並進行 **full redesign**。v3 的核心假設（使用 `enter_scope()` sentinel address 進行自動根追蹤）被發現是 **fundamentally broken**。
+
+v4.2 更新：基於 Code Review 發現了額外問題 - `GcRootGuard` 記憶體泄漏風險、`Send+Sync` 缺少安全註解、`RuntimeFlavor` 重複邏輯、測試模組編譯問題。
 
 v4.1 更新：基於 Code Review 發現了 **最嚴重的 bug** - `GcRootSet` 與 GC marking 完全脫節。新增 GC 整合、移除不可靠的 count 欄位、`snapshot()` 增加指標驗證。
 
@@ -265,3 +267,88 @@ let guard = unsafe { GcRootGuard::new(gc_internal_ptr) };
 - [ ] `GcRootSet::snapshot(heap)` 驗證指標並返回有效的 GcBox
 - [ ] **GC 會 tracing tokio roots** - 最關鍵的驗收標準
 - [ ] `GcRootSet::unregister()` 使用 `retain()` 避免順序問題
+- [ ] `GcRootGuard` 使用 `ManuallyDrop` 或明確記錄 `mem::forget` 限制
+- [ ] `Send + Sync` 實作有 `// SAFETY` 註解
+- [ ] `GcRootSet::shutdown()` 存在於測試清理（可選）
+- [ ] Derive crate 沒有重複的 `RuntimeFlavor` 解析
+- [ ] 測試模組正確使用 `#[cfg(all(test, feature = "tokio"))]`
+
+---
+
+## Phase 7: Address Code Review Issues (v4.1 Follow-up)
+
+**7.1 Fix `mem::forget` Memory Leak on `GcRootGuard`**
+
+Location: `guard.rs:48-55`
+
+Current issue: If a user calls `mem::forget()` on a `GcRootGuard`, the pointer is never unregistered, causing a permanent memory leak.
+
+Fix options:
+```rust
+// Option A: Use ManuallyDrop
+struct GcRootGuard {
+    ptr: usize,
+    _dropped: ManuallyDrop<()>,
+}
+
+impl Drop for GcRootGuard {
+    fn drop(&mut self) {
+        GcRootSet::global().unregister(self.ptr);
+    }
+}
+
+// Option B: Document as known unsoundness with clear warning
+// SAFETY: If user calls mem::forget(), the root will leak. This is a known
+// limitation - users must not forget guards that protect GC pointers.
+```
+
+**7.2 Add `// SAFETY` Comment for `Send + Sync`**
+
+Location: `guard.rs:37-38`
+
+```rust
+// SAFETY: GcRootGuard only contains a raw pointer (usize) to a GcBox.
+// The GcBox is protected by GcRootSet's global Mutex, which provides
+// synchronization. The guard is a simple ownership token - Send/Sync is
+// safe because the actual pointer is never accessed, only stored/unstored
+// through GcRootSet which handles synchronization.
+unsafe impl Send for GcRootGuard {}
+unsafe impl Sync for GcRootGuard {}
+```
+
+**7.3 Add Shutdown Capability (Optional)**
+
+Location: `root.rs:192`
+
+```rust
+impl GcRootSet {
+    pub fn shutdown() {
+        if let Some(set) = Self::global.get() {
+            set.roots.lock().unwrap().clear();
+            set.dirty.store(false, Ordering::Release);
+        }
+    }
+}
+```
+
+**7.4 Consolidate Duplicate `RuntimeFlavor::from_string`**
+
+Location: `derive/src/lib.rs:147-177` and `derive/src/lib.rs:69-112`
+
+Extract to single function:
+```rust
+fn parse_runtime_flavor(s: &str) -> Result<RuntimeFlavor, String> {
+    // Consolidate both implementations
+}
+```
+
+**7.5 Fix Test Module Compilation**
+
+Location: `root.rs:194`
+
+```rust
+#[cfg(all(test, feature = "tokio"))]
+mod tests {
+    // ...
+}
+```
