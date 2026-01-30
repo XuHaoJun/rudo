@@ -600,6 +600,15 @@ fn push_overflow_work(work: *const GcBox<()>) -> Result<(), *const GcBox<()>> {
 | 工作竊取 | Amortized O(1) | O(1) |
 | 頁面安全檢查 | O(1) | O(1) |
 
+## 17. 已知限制與風險摘要
+
+| 風險 | 嚴重程度 | 緩解方式 | 參考章節 |
+|------|----------|----------|----------|
+| 緊湊迴圈中 Stop-Forever | 高 | safepoint() 手動檢查 | §7 |
+| 保守堆疊掃描誤判 | 中 | MASK, Stack Conflict 檢測 | §11 |
+| 第三方非同步整合 | 中 | GcRootSet, GcTokioExt | §7 |
+| GcBox Header 40 bytes | 低 | VTable (規劃中) | §9 |
+
 ---
 
 > 本文件基於 2026-01-29 調查生成。如有更新，請同步維護。

@@ -89,7 +89,7 @@ for _ in 0..1_000_000 {
     // Compute-intensive work without allocations
     let result = heavy_calculation();
 
-    // CRITICAL: Check for GC requests to prevent "Stop-Forever"
+    // Check for GC requests to allow timely collection
     safepoint();
 }
 ```
@@ -209,8 +209,9 @@ For a deeper dive into the philosophy behind the collector, see the [design docu
 - **Address Stability**: While objects don't move, their memory is reclaimed once unreachable. Holding an `&T` across a collection point is safe as long as the parent `Gc<T>` is still rooted.
 - **Platform Support**: Conservative stack scanning is currently supported on **x86_64 Linux, macOS, and Windows**, as well as **aarch64 Linux**. Miri is also fully supported for testing.
 - **Conservative Stack Scanning**: Roots are discovered by scanning the stack and registers. This may cause false positives (integers mistaken as pointers), leading to memory bloat. It also prevents implementing moving/compacting GC.
-- **Safe Point Requirement**: Threads must call `safepoint()` or perform allocations regularly. Long-running loops without these calls may cause "Stop-Forever" issues where threads don't respond to GC requests.
+- **GC Response in Loops**: Threads must call `safepoint()` or perform allocations regularly. Long-running loops without these calls may delay GC response, potentially affecting collection latency.
 - **Tokio Roots**: When using the `tokio` feature, roots must be registered with `GcRootSet` via `root_guard()`. Tokio tasks don't share stack with the main thread, so automatic stack scanning won't find roots in spawned tasks.
+- **Thread Safety Considerations**: When using `Gc<T>` with third-party libraries like tokio or rayon, ensure proper root registration. Loops that perform heavy computation without allocations should call `safepoint()` periodically.
 
 ## License
 
@@ -220,3 +221,15 @@ This project is licensed under either of:
 - MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
 at your option.
+
+## When to Use Gc<T>
+
+Gc<T> is well-suited for:
+- Complex cyclic data structures
+- Graphs and trees with arbitrary sharing
+- Scenarios where manual Weak<T> management is error-prone
+
+Consider alternatives when:
+- Data size is small and predictable (consider Rc/Arc)
+- Maximum performance is critical and cycles are unlikely
+- Tight loops cannot include safepoint() calls or allocations
