@@ -67,6 +67,9 @@ mod stack;
 mod trace;
 mod trace_closure;
 
+#[cfg(feature = "tokio")]
+pub mod tokio;
+
 /// `BiBOP` memory management internals.
 ///
 /// This module is public for testing and advanced use cases.
