@@ -24,7 +24,9 @@ pub use gc::{
 };
 
 // Re-exports from marker
-pub use marker::{ParallelMarkConfig, ParallelMarkCoordinator, PerThreadMarkQueue};
+pub use marker::{
+    worker_mark_loop_with_registry, GcWorkerRegistry, ParallelMarkConfig, PerThreadMarkQueue,
+};
 
 // Re-exports from worklist
 pub use worklist::StealQueue;

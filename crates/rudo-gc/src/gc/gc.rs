@@ -10,7 +10,10 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::PoisonError;
 
-use crate::gc::marker::{worker_mark_loop, ParallelMarkConfig, PerThreadMarkQueue};
+use crate::gc::marker::{
+    worker_mark_loop, worker_mark_loop_with_registry, GcWorkerRegistry, ParallelMarkConfig,
+    PerThreadMarkQueue,
+};
 use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
 use crate::trace::{GcVisitor, Trace, Visitor, VisitorKind};
@@ -767,7 +770,7 @@ fn mark_minor_roots_parallel(
         .max_workers
         .min(crate::gc::marker::available_parallelism());
 
-    let (coordinator, worker_queues) = crate::gc::marker::init_parallel_marking(num_workers);
+    let worker_queues = crate::gc::marker::create_worker_queues(num_workers);
 
     let _visitor = GcVisitor::new(VisitorKind::Minor);
 
@@ -836,7 +839,7 @@ fn mark_minor_roots_parallel(
         }
     }
 
-    let distribution = coordinator.distribute_dirty_pages(&dirty_pages, &worker_queues);
+    let distribution = crate::gc::marker::distribute_dirty_pages(&dirty_pages, &worker_queues);
 
     for (idx, page) in dirty_pages.iter().enumerate() {
         let worker_idx = distribution[idx];
@@ -859,20 +862,27 @@ fn mark_minor_roots_parallel(
     let all_queues: Vec<Arc<PerThreadMarkQueue>> =
         worker_queues.into_iter().map(Arc::new).collect();
     let num_queues = all_queues.len();
+
+    let registry = GcWorkerRegistry::new(num_queues);
+
     let mut handles = Vec::new();
     for i in 0..num_queues {
         let queues = all_queues.clone();
         let queue = all_queues[i].clone();
-        let handle =
-            std::thread::spawn(move || worker_mark_loop(queue, &queues, VisitorKind::Minor));
+        let registry = registry.clone();
+        let handle = std::thread::spawn(move || {
+            worker_mark_loop_with_registry(queue, &registry, &queues, VisitorKind::Minor)
+        });
         handles.push(handle);
     }
 
+    registry.notify_work_available();
+
     for handle in handles {
-        let marked = handle.join().unwrap();
-        coordinator.record_marked(marked);
-        coordinator.worker_completed();
+        let _ = handle.join().unwrap();
     }
+
+    registry.set_complete();
 
     for page in &dirty_pages {
         unsafe {
@@ -960,7 +970,7 @@ fn mark_major_roots_parallel(
         .max_workers
         .min(crate::gc::marker::available_parallelism());
 
-    let (coordinator, worker_queues) = crate::gc::marker::init_parallel_marking(num_workers);
+    let worker_queues = crate::gc::marker::create_worker_queues(num_workers);
 
     let root_pages: Vec<*const PageHeader> = heap
         .all_pages()
@@ -973,8 +983,6 @@ fn mark_major_roots_parallel(
             }
         })
         .collect();
-
-    coordinator.start_marking(&worker_queues, &root_pages);
 
     let _visitor = GcVisitor::new(VisitorKind::Major);
 
@@ -1012,20 +1020,27 @@ fn mark_major_roots_parallel(
     let all_queues: Vec<Arc<PerThreadMarkQueue>> =
         worker_queues.into_iter().map(Arc::new).collect();
     let num_queues = all_queues.len();
+
+    let registry = GcWorkerRegistry::new(num_queues);
+
     let mut handles = Vec::new();
     for i in 0..num_queues {
         let queues = all_queues.clone();
         let queue = all_queues[i].clone();
-        let handle =
-            std::thread::spawn(move || worker_mark_loop(queue, &queues, VisitorKind::Major));
+        let registry = registry.clone();
+        let handle = std::thread::spawn(move || {
+            worker_mark_loop_with_registry(queue, &registry, &queues, VisitorKind::Major)
+        });
         handles.push(handle);
     }
 
+    registry.notify_work_available();
+
     for handle in handles {
-        let marked = handle.join().unwrap();
-        coordinator.record_marked(marked);
-        coordinator.worker_completed();
+        let _ = handle.join().unwrap();
     }
+
+    registry.set_complete();
 
     crate::gc::marker::clear_overflow_queue();
 }
