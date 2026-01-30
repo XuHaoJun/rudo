@@ -191,12 +191,14 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
         b.wrapping_sub(t)
     }
 
+    /// Check if the queue is empty.
     #[must_use]
     #[allow(dead_code)]
     pub fn is_empty(&self, bottom: &AtomicUsize) -> bool {
         self.len(bottom) == 0
     }
 
+    /// Check if the queue is full.
     #[must_use]
     #[allow(dead_code)]
     pub fn is_full(&self, bottom: &AtomicUsize) -> bool {

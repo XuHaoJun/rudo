@@ -131,6 +131,7 @@ pub fn notify_created_gc() {
     N_EXISTING.with(|n| n.set(n.get() + 1));
 }
 
+/// Notify that a `Gc` was dropped, potentially triggering collection.
 pub fn notify_dropped_gc() {
     N_DROPS.with(|n| n.set(n.get() + 1));
     maybe_collect();
@@ -1188,6 +1189,12 @@ fn mark_major_roots(heap: &LocalHeap) {
 }
 
 /// Mark object for Minor GC - adds to worklist for iterative tracing.
+///
+/// # Safety
+///
+/// The pointer must be a valid, non-null `GcBox` pointer that was previously
+/// returned by `Gc::allocate()`. The visitor must be a valid `GcVisitor`
+/// instance.
 pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
     let ptr_addr = ptr.as_ptr() as *const u8;
     let page_addr = (ptr_addr as usize) & crate::heap::page_mask();

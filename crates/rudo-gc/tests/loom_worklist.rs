@@ -1,6 +1,6 @@
 //! Loom tests for work-stealing queue atomic ordering.
 //!
-//! These tests verify the memory ordering guarantees for the StealQueue
+//! These tests verify the memory ordering guarantees for the `StealQueue`
 //! implementation.
 
 use std::sync::atomic::AtomicUsize;
