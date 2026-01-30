@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Proc-macro for rudo-gc tokio integration"
+keywords = ["garbage-collection", "gc", "memory", "cycle-detection", "tokio"]
 
 [lib]
 proc-macro = true
