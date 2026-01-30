@@ -188,6 +188,7 @@ pub fn set_min_lock_order(order: LockOrder) {
 /// Get the current minimum lock order held by this thread.
 #[inline]
 #[cfg(debug_assertions)]
+#[must_use]
 pub fn get_min_lock_order() -> LockOrder {
     MIN_LOCK_ORDER_STACK.with(|stack| {
         let stack = stack.borrow();

@@ -30,6 +30,8 @@ windows-sys = { workspace = true }
 [dev-dependencies]
 # For benchmarking (future)
 # criterion = "0.5"
+# For atomic ordering verification
+loom = "0.7"
 
 [lints]
 workspace = true

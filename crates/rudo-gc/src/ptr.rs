@@ -45,8 +45,10 @@ impl<T: Trace + ?Sized> GcBox<T> {
     const FLAGS_MASK: usize = Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG;
 
     /// Get the reference count.
+    /// Uses Acquire ordering to ensure we see the complete effect of any
+    /// prior decrements, preventing use-after-free.
     pub fn ref_count(&self) -> NonZeroUsize {
-        NonZeroUsize::new(self.ref_count.load(Ordering::Relaxed))
+        NonZeroUsize::new(self.ref_count.load(Ordering::Acquire))
             .expect("ref_count should never be zero for live GcBox")
     }
 
@@ -57,29 +59,33 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Set the under-construction flag.
+    /// Uses `Release` ordering to synchronize the flag with value construction completion.
+    /// Uses `AcqRel` when clearing to synchronize with concurrent readers.
     #[inline]
     fn set_under_construction(&self, flag: bool) {
         let mask = Self::UNDER_CONSTRUCTION_FLAG;
         if flag {
-            self.weak_count.fetch_or(mask, Ordering::Relaxed);
+            self.weak_count.fetch_or(mask, Ordering::Release);
         } else {
-            self.weak_count.fetch_and(!mask, Ordering::Relaxed);
+            self.weak_count.fetch_and(!mask, Ordering::AcqRel);
         }
     }
 
     /// Check if the value is currently being dropped (prevents `weak::upgrade` race).
     /// Returns the dropping state: 0 = not dropping, 1 = dropping phase 1, 2 = final dropping.
+    /// Uses `Acquire` ordering to synchronize with `try_mark_dropping()`.
     #[inline]
     fn dropping_state(&self) -> usize {
-        self.is_dropping.load(Ordering::Relaxed)
+        self.is_dropping.load(Ordering::Acquire)
     }
 
     /// Try to mark the value as dropping. Returns true if successful.
     /// Uses CAS to prevent races with concurrent upgrade.
+    /// The failure ordering is Acquire to ensure we see other threads' state changes.
     #[inline]
     fn try_mark_dropping(&self) -> bool {
         self.is_dropping
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed)
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
 

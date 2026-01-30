@@ -59,7 +59,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod cell;
-mod gc;
+pub mod gc;
 mod metrics;
 mod ptr;
 mod scan;
@@ -80,7 +80,7 @@ pub mod heap;
 pub use cell::GcCell;
 pub use gc::{
     collect, collect_full, default_collect_condition, safepoint, set_collect_condition,
-    CollectInfo, PerThreadMarkQueue,
+    CollectInfo, PerThreadMarkQueue, StealQueue,
 };
 pub use metrics::{last_gc_metrics, CollectionType, GcMetrics};
 pub use ptr::{Gc, Weak};

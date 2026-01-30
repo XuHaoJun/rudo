@@ -62,7 +62,15 @@ impl OwnedPagesTracker {
             owner_thread: std::thread::current().id(),
         }
     }
+}
 
+impl Default for OwnedPagesTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OwnedPagesTracker {
     /// Register a page as owned by this worker.
     pub fn add_owned_page(&mut self, page: NonNull<PageHeader>) {
         self.owned_pages.insert(page);
