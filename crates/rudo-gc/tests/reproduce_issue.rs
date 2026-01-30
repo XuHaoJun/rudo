@@ -39,7 +39,7 @@ fn test_reproduce_panic_safety_failure() {
     // Note: Gc assumes single threaded, so this is fine.
 
     let result = panic::catch_unwind(|| {
-        Gc::new_cyclic_weak(|_weak| {
+        Gc::new_cyclic_weak(|_weak| -> () {
             // Leak the weak pointer to the outside world
             // In a real exploit, this could be a thread-local or global.
             // Here we can just demonstrate logic.
