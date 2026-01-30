@@ -879,6 +879,7 @@ fn mark_minor_roots_parallel(
     for handle in handles {
         let marked = handle.join().unwrap();
         coordinator.record_marked(marked);
+        coordinator.worker_completed();
     }
 
     registry.set_complete();
@@ -1039,6 +1040,7 @@ fn mark_major_roots_parallel(
     for handle in handles {
         let marked = handle.join().unwrap();
         coordinator.record_marked(marked);
+        coordinator.worker_completed();
     }
 
     registry.set_complete();
