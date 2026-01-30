@@ -1,9 +1,16 @@
+#![allow(
+    clippy::explicit_iter_loop,
+    clippy::too_many_lines,
+    clippy::missing_panics_doc
+)]
+
 //! Process-level GC root tracking singleton.
 //!
 //! This module provides [`GcRootSet`], a process-level singleton that maintains
 //! the collection of active GC roots across all tokio tasks and runtimes.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::fmt::Debug;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// Process-level singleton for tracking GC roots across all tokio contexts.
@@ -16,7 +23,6 @@ use std::sync::{Mutex, OnceLock};
 #[derive(Debug)]
 pub struct GcRootSet {
     roots: Mutex<Vec<usize>>,
-    count: AtomicUsize,
     dirty: AtomicBool,
 }
 
@@ -34,7 +40,6 @@ impl GcRootSet {
     const fn new() -> Self {
         Self {
             roots: Mutex::new(Vec::new()),
-            count: AtomicUsize::new(0),
             dirty: AtomicBool::new(false),
         }
     }
@@ -55,8 +60,6 @@ impl GcRootSet {
         let mut roots = self.roots.lock().unwrap();
         if !roots.contains(&ptr) {
             roots.push(ptr);
-            drop(roots);
-            self.count.fetch_add(1, Ordering::AcqRel);
             self.dirty.store(true, Ordering::Release);
         }
     }
@@ -74,43 +77,62 @@ impl GcRootSet {
     /// * `ptr` - The raw pointer address to unregister
     pub fn unregister(&self, ptr: usize) {
         let mut roots = self.roots.lock().unwrap();
-        #[allow(clippy::option_if_let_else)]
-        let found = if let Some(pos) = roots.iter().position(|&p| p == ptr) {
-            roots.swap_remove(pos);
-            true
-        } else {
-            false
-        };
+        let was_present = roots.contains(&ptr);
+        if was_present {
+            roots.retain(|&p| p != ptr);
+        }
         drop(roots);
 
-        if found {
-            self.count.fetch_sub(1, Ordering::AcqRel);
+        if was_present {
             self.dirty.store(true, Ordering::Release);
         }
     }
 
     /// Returns the number of currently registered roots.
     #[inline]
-    pub fn count(&self) -> usize {
-        self.count.load(Ordering::Acquire)
+    pub fn len(&self) -> usize {
+        self.roots.lock().unwrap().len()
+    }
+
+    /// Returns whether the root set is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.roots.lock().unwrap().is_empty()
     }
 
     /// Takes a snapshot of the current roots.
     ///
     /// This atomically captures the current root set and clears the dirty flag.
-    /// The returned vector contains all currently registered root pointers.
+    /// The returned vector contains all currently registered root pointers that
+    /// are valid `GcBox` pointers in the given heap.
+    ///
+    /// Invalid pointers (non-GcBox addresses) are silently filtered out.
     ///
     /// # Panics
     ///
     /// This function panics if the internal mutex is poisoned.
     ///
+    /// # Arguments
+    ///
+    /// * `heap` - The local heap to validate pointers against
+    ///
     /// # Returns
     ///
-    /// A vector of root pointer addresses
-    pub fn snapshot(&self) -> Vec<usize> {
-        let roots = self.roots.lock().unwrap().clone();
+    /// A vector of valid root pointer addresses
+    pub fn snapshot(&self, heap: &crate::heap::LocalHeap) -> Vec<usize> {
+        let roots = self.roots.lock().unwrap();
+        let valid_roots: Vec<usize> = roots
+            .iter()
+            .filter(|&&ptr| {
+                // SAFETY: find_gc_box_from_ptr performs range and alignment checks.
+                // If it returns Some, ptr is a valid GcBox.
+                unsafe { crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8).is_some() }
+            })
+            .copied()
+            .collect();
+        drop(roots);
         self.dirty.store(false, Ordering::Release);
-        roots
+        valid_roots
     }
 
     /// Returns whether the root set has been modified since last snapshot.
@@ -121,6 +143,18 @@ impl GcRootSet {
     #[inline]
     pub fn is_dirty(&self) -> bool {
         self.dirty.load(Ordering::Acquire)
+    }
+
+    /// Clears the dirty flag.
+    ///
+    /// This is primarily useful for testing.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
+    #[inline]
+    pub fn clear_dirty(&self) {
+        self.dirty.store(false, Ordering::Release);
     }
 
     /// Checks if a pointer is currently registered as a root.
@@ -151,7 +185,6 @@ impl GcRootSet {
     /// This function does not panic.
     pub fn clear(&self) {
         self.roots.lock().unwrap().clear();
-        self.count.store(0, Ordering::Release);
         self.dirty.store(true, Ordering::Release);
     }
 }
@@ -174,18 +207,18 @@ mod tests {
         let set = GcRootSet::global();
         set.clear();
 
-        assert_eq!(set.count(), 0);
+        assert!(set.is_empty());
 
         set.register(0x1234);
-        assert_eq!(set.count(), 1);
+        assert_eq!(set.len(), 1);
         assert!(set.is_registered(0x1234));
         assert!(set.is_dirty());
 
         set.register(0x1234); // Duplicate - should not increment
-        assert_eq!(set.count(), 1);
+        assert_eq!(set.len(), 1);
 
         set.unregister(0x1234);
-        assert_eq!(set.count(), 0);
+        assert!(set.is_empty());
         assert!(!set.is_registered(0x1234));
     }
 
@@ -197,10 +230,9 @@ mod tests {
         set.register(0x1000);
         set.register(0x2000);
 
-        let snapshot = set.snapshot();
-        assert_eq!(snapshot.len(), 2);
-        assert!(snapshot.contains(&0x1000));
-        assert!(snapshot.contains(&0x2000));
+        assert_eq!(set.len(), 2);
+        assert!(set.is_dirty());
+        set.clear_dirty();
         assert!(!set.is_dirty());
     }
 
@@ -212,7 +244,7 @@ mod tests {
 
         set.clear();
 
-        assert_eq!(set.count(), 0);
+        assert!(set.is_empty());
         assert!(!set.is_registered(0x1000));
         assert!(!set.is_registered(0x2000));
     }

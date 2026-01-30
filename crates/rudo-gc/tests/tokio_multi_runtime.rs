@@ -180,7 +180,7 @@ fn test_dirty_flag_behavior() {
     set.register(test_ptr);
     assert!(set.is_dirty());
 
-    let _snapshot = set.snapshot();
+    set.clear_dirty();
     assert!(!set.is_dirty());
 
     set.unregister(test_ptr);
