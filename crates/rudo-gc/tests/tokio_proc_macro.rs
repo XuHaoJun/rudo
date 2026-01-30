@@ -1,4 +1,3 @@
-#![feature(proc_macro_hygiene)]
 #![allow(clippy::doc_markdown)]
 #![allow(clippy::let_unit_value)]
 #![allow(clippy::ignored_unit_patterns)]
