@@ -68,9 +68,10 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Check if the value is currently being dropped (prevents `weak::upgrade` race).
+    /// Returns the dropping state: 0 = not dropping, 1 = dropping phase 1, 2 = final dropping.
     #[inline]
-    fn is_dropping(&self) -> bool {
-        self.is_dropping.load(Ordering::Relaxed) != 0
+    fn dropping_state(&self) -> usize {
+        self.is_dropping.load(Ordering::Relaxed)
     }
 
     /// Try to mark the value as dropping. Returns true if successful.
@@ -80,6 +81,15 @@ impl<T: Trace + ?Sized> GcBox<T> {
         self.is_dropping
             .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed)
             .is_ok()
+    }
+
+    /// Mark the value as in final dropping phase (after value drop started).
+    /// This is used to distinguish between:
+    /// - Phase 1: value drop in progress (can still safely access nested Gc)
+    /// - Phase 2: after value drop completed (prevent reentrancy)
+    #[inline]
+    unsafe fn set_final_dropping(&self) {
+        self.is_dropping.store(2, Ordering::Release);
     }
 
     /// Increment the reference count.
@@ -104,13 +114,21 @@ impl<T: Trace + ?Sized> GcBox<T> {
         // SAFETY: self_ptr is valid because it's obtained from the atomic pointer in Gc::drop
         let this = unsafe { &*self_ptr };
         loop {
+            let dead_flag = this.weak_count_raw() & GcBox::<()>::DEAD_FLAG;
+            if dead_flag != 0 {
+                // Already marked as dead (e.g., during sweep phase drop of cyclic refs).
+                // Return false to prevent double-drop: the drop_fn was/will be called
+                // by the sweep phase, not by this dec_ref.
+                return false;
+            }
+
             let count = this.ref_count.load(Ordering::Acquire);
             if count == 0 {
                 // Already at zero - this is a bug (double-free or use-after-free)
                 // Return true to prevent further issues
                 return true;
             }
-            if count == 1 && !this.is_dropping() {
+            if count == 1 && this.dropping_state() == 0 {
                 // Last reference and not already marked as dropping
                 // Must mark as dropping BEFORE dropping to prevent
                 // race with concurrent Weak::upgrade
@@ -228,12 +246,28 @@ impl<T: Trace> GcBox<T> {
         // SAFETY: The caller must ensure ptr points to a GcBox<T> where T: Sized.
         // This is true for all objects allocated via Gc::new.
         let gc_box = ptr.cast::<Self>();
+
         unsafe {
+            // Check if already in final dropping phase (prevents reentrancy during
+            // cyclic reference drops in sweep phase). If dropping_state >= 2,
+            // we've already dropped the value and are being called again from
+            // nested Gc::drop during the drop of another object in the cycle.
+            if (*gc_box).dropping_state() >= 2 {
+                return;
+            }
+
+            // Set dead flag BEFORE dropping the value to prevent reentrancy.
+            // During cyclic reference drops, nested Gc::drop calls dec_ref,
+            // which checks the dead flag and returns early if set.
+            (*gc_box).set_dead();
+
             std::ptr::drop_in_place(std::ptr::addr_of_mut!((*gc_box).value));
-            // Mark as dropped to avoid double-dropping during sweep
+
+            // Mark as in final dropping phase AFTER value is dropped.
+            // This prevents any further reentrancy attempts.
+            (*gc_box).set_final_dropping();
             (*gc_box).drop_fn = GcBox::<()>::no_op_drop;
             (*gc_box).trace_fn = GcBox::<()>::no_op_trace;
-            (*gc_box).set_dead();
         }
     }
 
@@ -1091,7 +1125,7 @@ impl<T: Trace> Weak<T> {
                     return None;
                 }
 
-                if gc_box.is_dropping() {
+                if gc_box.dropping_state() != 0 {
                     return None;
                 }
 
