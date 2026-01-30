@@ -187,6 +187,23 @@ impl GcRootSet {
         self.roots.lock().unwrap().clear();
         self.dirty.store(true, Ordering::Release);
     }
+
+    /// Shuts down the global root set, clearing all registered roots.
+    ///
+    /// This is intended for use during process shutdown to ensure all
+    /// GC roots are released. After shutdown, calling `global()` will
+    /// create a new root set.
+    ///
+    /// # Safety
+    ///
+    /// This must only be called when no GC operations are in progress,
+    /// as concurrent access during shutdown is unsafe.
+    pub fn shutdown() {
+        if let Some(set) = GLOBAL.get() {
+            set.roots.lock().unwrap().clear();
+            set.dirty.store(false, Ordering::Release);
+        }
+    }
 }
 
 static GLOBAL: OnceLock<GcRootSet> = OnceLock::new();

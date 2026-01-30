@@ -14,15 +14,37 @@ enum RuntimeFlavor {
     CurrentThread,
 }
 
+#[derive(Debug)]
+enum RuntimeFlavorParseError {
+    InvalidVariant(String),
+}
+
+impl std::fmt::Display for RuntimeFlavorParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidVariant(s) => {
+                write!(
+                    f,
+                    "flavor must be \"multi_thread\" or \"current_thread\", got \"{s}\""
+                )
+            }
+        }
+    }
+}
+
 impl RuntimeFlavor {
-    fn from_string(s: &str) -> Result<Self, syn::Error> {
+    fn from_str(s: &str) -> Result<Self, RuntimeFlavorParseError> {
         match s {
             "multi_thread" => Ok(Self::MultiThread),
             "current_thread" => Ok(Self::CurrentThread),
-            _ => Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "flavor must be \"multi_thread\" or \"current_thread\"",
-            )),
+            s => Err(RuntimeFlavorParseError::InvalidVariant(s.to_string())),
+        }
+    }
+
+    fn parse_flavor(s: &str, span: proc_macro2::Span) -> Result<Self, syn::Error> {
+        match Self::from_str(s) {
+            Ok(flavor) => Ok(flavor),
+            Err(e) => Err(syn::Error::new(span, e.to_string())),
         }
     }
 }
@@ -63,7 +85,7 @@ impl GcMainConfig {
                                 lit: Lit::Str(s), ..
                             }) = value
                             {
-                                config.flavor = RuntimeFlavor::from_string(s.value().as_str())
+                                config.flavor = RuntimeFlavor::from_str(s.value().as_str())
                                     .map_err(|e| syn::Error::new_spanned(s, e))?;
                             } else {
                                 return Err(syn::Error::new_spanned(
@@ -151,7 +173,10 @@ pub fn main(
                             lit: Lit::Str(s), ..
                         }) = &nv.value
                         {
-                            match RuntimeFlavor::from_string(s.value().as_str()) {
+                            match RuntimeFlavor::parse_flavor(
+                                s.value().as_str(),
+                                proc_macro2::Span::call_site(),
+                            ) {
                                 Ok(flavor) => GcMainConfig {
                                     flavor,
                                     worker_threads: None,
