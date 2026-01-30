@@ -23,6 +23,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Barrier;
+use std::sync::Condvar;
 use std::sync::Mutex;
 
 use super::worklist::StealQueue;
@@ -192,6 +193,122 @@ pub fn clear_overflow_queue() {
         }
     }
     OVERFLOW_QUEUE_CLEAR_GEN.fetch_add(1, Ordering::Release);
+}
+
+/// Worker registry for parallel marking coordination.
+///
+/// Follows Chez Scheme's pattern: workers register with the coordinator,
+/// and wait on a condition variable when no work is available.
+/// The coordinator signals workers when new work arrives or marking is complete.
+///
+/// # Lock Ordering
+///
+/// The registry uses a mutex for coordination. Workers should not hold
+/// any other locks (particularly `LocalHeap`) while waiting on the condvar.
+#[derive(Debug)]
+pub struct GcWorkerRegistry {
+    /// Mutex protecting worker state.
+    mutex: Mutex<GcWorkerState>,
+    /// Condvar for waking workers when work is available or complete.
+    cond: Condvar,
+    /// Total workers expected to complete.
+    total_workers: usize,
+    /// Workers that have completed their marking.
+    completed: AtomicUsize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GcWorkerState {
+    /// Whether marking is complete.
+    is_complete: bool,
+    /// Whether new work is available for processing.
+    work_available: bool,
+}
+
+impl GcWorkerRegistry {
+    /// Create a new worker registry for the given number of workers.
+    #[must_use]
+    pub fn new(total_workers: usize) -> Arc<Self> {
+        Arc::new(Self {
+            mutex: Mutex::new(GcWorkerState::default()),
+            cond: Condvar::new(),
+            total_workers,
+            completed: AtomicUsize::new(0),
+        })
+    }
+
+    /// Worker calls this when its local queue is empty.
+    ///
+    /// Returns `true` if work is available, `false` if marking is complete.
+    ///
+    /// # Chez Scheme Pattern
+    ///
+    /// Workers wait on the condition variable rather than spinning,
+    /// reducing CPU usage when no work is available.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
+    pub fn wait_for_work(&self) -> bool {
+        let mut state = self.mutex.lock().unwrap();
+
+        loop {
+            if state.is_complete {
+                return false;
+            }
+            if state.work_available {
+                state.work_available = false;
+                return true;
+            }
+
+            state = self.cond.wait(state).unwrap();
+        }
+    }
+
+    /// Coordinator calls this to wake workers when new work is available.
+    ///
+    /// Workers will wake up and check their local queues for pushed work.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
+    pub fn notify_work_available(&self) {
+        let mut state = self.mutex.lock().unwrap();
+        state.work_available = true;
+        drop(state);
+        self.cond.notify_all();
+    }
+
+    /// Coordinator calls this when marking is complete.
+    ///
+    /// All waiting workers will wake up and exit.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
+    pub fn set_complete(&self) {
+        let mut state = self.mutex.lock().unwrap();
+        state.is_complete = true;
+        drop(state);
+        self.cond.notify_all();
+    }
+
+    /// Worker calls this when it has finished marking.
+    pub fn mark_completed(&self) {
+        self.completed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Check if all workers have completed.
+    #[must_use]
+    pub fn is_all_completed(&self) -> bool {
+        self.completed.load(Ordering::Relaxed) >= self.total_workers
+    }
+
+    /// Get the total number of workers.
+    #[must_use]
+    pub const fn total_workers(&self) -> usize {
+        self.total_workers
+    }
 }
 
 /// A per-thread mark queue that holds objects to be traced.
@@ -458,7 +575,6 @@ impl PerThreadMarkQueue {
     ///
     /// Chez Scheme uses simpler synchronization - workers spin or yield
     /// when waiting for work rather than using complex condition variables.
-    #[allow(dead_code)]
     pub fn wait_for_work(&self, timeout_ms: u64) -> bool {
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_millis(timeout_ms);
@@ -740,6 +856,23 @@ impl ParallelMarkCoordinator {
         }
     }
 
+    /// Create a new coordinator with worker registry for condvar-based coordination.
+    ///
+    /// This follows Chez Scheme's pattern where workers wait on condition variables
+    /// rather than spinning when no work is available.
+    #[must_use]
+    pub fn with_registry(num_workers: usize) -> (Self, Arc<GcWorkerRegistry>) {
+        let registry = GcWorkerRegistry::new(num_workers);
+        let coordinator = Self {
+            num_workers: num_workers.max(1),
+            barrier: Arc::new(Barrier::new(num_workers.max(1))),
+            pages_remaining: AtomicUsize::new(0),
+            marking_complete: AtomicUsize::new(0),
+            total_marked: AtomicUsize::new(0),
+        };
+        (coordinator, registry)
+    }
+
     /// Create a new coordinator with configuration.
     /// Uses single-threaded fallback if fewer than 2 workers requested.
     #[must_use]
@@ -799,9 +932,18 @@ impl ParallelMarkCoordinator {
     }
 
     /// Wait for all workers to complete marking.
+    ///
+    /// Uses exponential backoff: spin briefly, then yield.
+    /// This reduces CPU usage while waiting for workers.
     pub fn wait_for_completion(&self) {
+        let mut spin_count = 0;
         while self.marking_complete.load(Ordering::Acquire) < self.num_workers {
-            std::hint::spin_loop();
+            if spin_count < 8 {
+                std::hint::spin_loop();
+                spin_count += 1;
+            } else {
+                std::thread::yield_now();
+            }
         }
     }
 
@@ -890,8 +1032,142 @@ pub fn worker_mark_loop(
     marked
 }
 
-/// Try to steal work from other queues.
-/// Returns true if work was stolen or queued, false if all queues are empty.
+/// Try to steal work from other queues with exponential backoff.
+///
+/// # Chez Scheme Pattern
+///
+/// Workers spin briefly then yield, following the approach described
+/// in AGENTS.md: "Chez Scheme uses simpler synchronization - workers
+/// spin or yield when waiting for work rather than using complex
+/// condition variables."
+///
+/// # Arguments
+///
+/// * `queue` - The worker's own queue
+/// * `all_queues` - All worker queues for stealing
+///
+/// # Returns
+///
+/// Some(stolen object) if work was stolen, None otherwise.
+#[inline]
+pub fn try_steal_with_backoff(
+    queue: &Arc<PerThreadMarkQueue>,
+    all_queues: &[Arc<PerThreadMarkQueue>],
+) -> Option<*const GcBox<()>> {
+    const MAX_STEAL_ATTEMPTS: usize = 16;
+    const SPIN_THRESHOLD: usize = 8;
+
+    for attempt in 0..MAX_STEAL_ATTEMPTS {
+        // First try the overflow queue
+        if let Some(obj) = pop_overflow_work() {
+            return Some(obj);
+        }
+
+        // Then try stealing from other queues
+        for other in all_queues {
+            if other.worker_idx() == queue.worker_idx() {
+                continue;
+            }
+            if let Some(obj) = other.steal() {
+                return Some(obj);
+            }
+        }
+
+        // Backoff: spin briefly, then yield
+        if attempt < SPIN_THRESHOLD {
+            std::hint::spin_loop();
+        } else {
+            std::thread::yield_now();
+        }
+    }
+    None
+}
+
+/// Execute the mark phase of garbage collection on a work queue using worker registry.
+///
+/// This function follows Chez Scheme's pattern of worker coordination:
+/// 1. Workers register with the coordinator
+/// 2. Workers wait on condvar when no work available
+/// 3. Coordinator signals when work is available or complete
+///
+/// # Algorithm
+/// 1. Process owned pages
+/// 2. Process local queue (LIFO)
+/// 3. Try to steal with backoff
+/// 4. Wait on condvar if still no work
+/// 5. Repeat until marking is complete
+///
+/// # Arguments
+///
+/// * `queue` - This worker's mark queue
+/// * `registry` - Worker registry for coordination
+/// * `kind` - Major or Minor collection
+///
+/// # Returns
+///
+/// Number of objects marked by this worker.
+#[allow(clippy::needless_pass_by_value)]
+pub fn worker_mark_loop_with_registry(
+    queue: Arc<PerThreadMarkQueue>,
+    registry: &Arc<GcWorkerRegistry>,
+    all_queues: &[Arc<PerThreadMarkQueue>],
+    kind: VisitorKind,
+) -> usize {
+    let mut marked = 0;
+    let mut visitor = GcVisitor::new(kind);
+
+    loop {
+        // 1. Process local queue
+        while let Some(obj) = queue.pop() {
+            unsafe {
+                let ptr_addr = obj.cast::<GcBox<()>>().cast::<u8>();
+                let header = crate::heap::ptr_to_page_header(ptr_addr);
+
+                if header.as_ref().magic != crate::heap::MAGIC_GC_PAGE {
+                    continue;
+                }
+
+                let Some(idx) = crate::heap::ptr_to_object_index(obj.cast()) else {
+                    continue;
+                };
+
+                if (*header.as_ptr()).is_marked(idx) {
+                    continue;
+                }
+
+                (*header.as_ptr()).set_mark(idx);
+                marked += 1;
+
+                let gc_box_ptr = obj.cast_mut();
+                ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
+            }
+        }
+
+        // 2. Try to steal with backoff
+        if let Some(obj) = try_steal_with_backoff(&queue, all_queues) {
+            if queue.push(obj) {
+                continue;
+            }
+            // Push failed, try other queues
+            for other in all_queues {
+                if other.worker_idx() == queue.worker_idx() {
+                    continue;
+                }
+                if other.push(obj) {
+                    // Pushed to another queue
+                }
+            }
+        }
+
+        // 3. Wait for work or completion
+        if !registry.wait_for_work() {
+            break;
+        }
+    }
+
+    registry.mark_completed();
+    marked
+}
 fn try_steal_work(queue: &Arc<PerThreadMarkQueue>, all_queues: &[Arc<PerThreadMarkQueue>]) -> bool {
     if let Some(obj) = pop_overflow_work() {
         if queue.push(obj) {

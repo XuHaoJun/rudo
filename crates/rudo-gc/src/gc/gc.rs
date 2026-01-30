@@ -10,7 +10,10 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::PoisonError;
 
-use crate::gc::marker::{worker_mark_loop, ParallelMarkConfig, PerThreadMarkQueue};
+use crate::gc::marker::{
+    worker_mark_loop, worker_mark_loop_with_registry, GcWorkerRegistry, ParallelMarkConfig,
+    ParallelMarkCoordinator, PerThreadMarkQueue,
+};
 use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
 use crate::trace::{GcVisitor, Trace, Visitor, VisitorKind};
@@ -859,20 +862,27 @@ fn mark_minor_roots_parallel(
     let all_queues: Vec<Arc<PerThreadMarkQueue>> =
         worker_queues.into_iter().map(Arc::new).collect();
     let num_queues = all_queues.len();
+
+    let (coordinator, registry) = ParallelMarkCoordinator::with_registry(num_queues);
+
     let mut handles = Vec::new();
     for i in 0..num_queues {
         let queues = all_queues.clone();
         let queue = all_queues[i].clone();
-        let handle =
-            std::thread::spawn(move || worker_mark_loop(queue, &queues, VisitorKind::Minor));
+        let registry = registry.clone();
+        let handle = std::thread::spawn(move || {
+            worker_mark_loop_with_registry(queue, &registry, &queues, VisitorKind::Minor)
+        });
         handles.push(handle);
     }
 
     for handle in handles {
         let marked = handle.join().unwrap();
         coordinator.record_marked(marked);
-        coordinator.worker_completed();
     }
+
+    registry.set_complete();
+    coordinator.wait_for_completion();
 
     for page in &dirty_pages {
         unsafe {
@@ -1012,20 +1022,27 @@ fn mark_major_roots_parallel(
     let all_queues: Vec<Arc<PerThreadMarkQueue>> =
         worker_queues.into_iter().map(Arc::new).collect();
     let num_queues = all_queues.len();
+
+    let (coordinator, registry) = ParallelMarkCoordinator::with_registry(num_queues);
+
     let mut handles = Vec::new();
     for i in 0..num_queues {
         let queues = all_queues.clone();
         let queue = all_queues[i].clone();
-        let handle =
-            std::thread::spawn(move || worker_mark_loop(queue, &queues, VisitorKind::Major));
+        let registry = registry.clone();
+        let handle = std::thread::spawn(move || {
+            worker_mark_loop_with_registry(queue, &registry, &queues, VisitorKind::Major)
+        });
         handles.push(handle);
     }
 
     for handle in handles {
         let marked = handle.join().unwrap();
         coordinator.record_marked(marked);
-        coordinator.worker_completed();
     }
+
+    registry.set_complete();
+    coordinator.wait_for_completion();
 
     crate::gc::marker::clear_overflow_queue();
 }
