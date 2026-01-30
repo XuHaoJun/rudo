@@ -123,6 +123,31 @@ pub mod test_util {
         // values needed by the calling code.
         unsafe { crate::stack::clear_registers() };
     }
+
+    /// Reset all global GC state for test isolation.
+    ///
+    /// This function clears:
+    /// - Thread registry (unregisters all threads)
+    /// - Segment manager (frees all pages)
+    /// - GC requested flag
+    /// - Page size cache
+    /// - Test roots
+    ///
+    /// Call this at the start of each test to ensure clean state:
+    ///
+    /// ```ignore
+    /// use rudo_gc::test_util::reset;
+    ///
+    /// #[test]
+    /// fn my_test() {
+    ///     reset();
+    ///     // Test code with clean GC state
+    /// }
+    /// ```
+    pub fn reset() {
+        unsafe { crate::heap::reset_for_testing() };
+        clear_test_roots();
+    }
 }
 
 #[cfg(test)]

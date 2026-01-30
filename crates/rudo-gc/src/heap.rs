@@ -1999,3 +1999,98 @@ pub unsafe fn find_gc_box_from_ptr(
         ))
     }
 }
+
+// ============================================================================
+// Test Isolation Support
+// ============================================================================
+
+/// Clear all pages in the current thread's local heap.
+/// This is used internally by `reset_for_testing`.
+#[allow(dead_code)]
+fn clear_local_heap() {
+    HEAP.with(|local| unsafe {
+        let heap = &mut *local.tcb.heap.get();
+
+        // Reset all page headers before clearing the pages vector
+        for page_ptr in &heap.pages {
+            let header = page_ptr.as_ptr();
+            // Reset free list head
+            (*header).free_list_head = None;
+            // Clear allocated bitmap
+            for word in &mut (*header).allocated_bitmap {
+                *word = 0;
+            }
+            // Clear mark bitmap
+            for word in &mut (*header).mark_bitmap {
+                word.store(0, Ordering::Release);
+            }
+            // Clear dirty bitmap
+            for word in &mut (*header).dirty_bitmap {
+                word.store(0, Ordering::Release);
+            }
+        }
+
+        heap.pages.clear();
+        heap.small_pages.clear();
+        heap.large_object_map.clear();
+        heap.young_allocated = 0;
+        heap.old_allocated = 0;
+        heap.min_addr = usize::MAX;
+        heap.max_addr = 0;
+    });
+}
+
+/// Reset all global GC state for testing purposes.
+///
+/// This function clears:
+/// - Thread registry (unregisters all threads)
+/// - Segment manager (frees all pages)
+/// - GC requested flag
+/// - Current thread's local heap
+///
+/// # Safety
+///
+/// This function is intended for use in tests only. It must not be called
+/// while other threads are actively using the GC heap, as this will cause
+/// undefined behavior.
+///
+/// # Example
+///
+/// ```ignore
+/// use rudo_gc::test_util::reset;
+///
+/// #[test]
+/// fn my_test() {
+///     reset();
+///     // Test code with clean GC state
+/// }
+/// ```
+#[allow(dead_code)]
+pub unsafe fn reset_for_testing() {
+    // Clear GC requested flag
+    GC_REQUESTED.store(false, Ordering::SeqCst);
+
+    // Clear thread registry (handle PoisonError gracefully)
+    if let Some(registry) = THREAD_REGISTRY.get() {
+        let result = registry.lock();
+        if let Ok(mut guard) = result {
+            guard.threads.clear();
+            guard.active_count.store(0, Ordering::SeqCst);
+            guard.gc_in_progress.store(false, Ordering::SeqCst);
+        }
+    }
+
+    // Clear segment manager (handle PoisonError gracefully)
+    if let Some(manager) = SEGMENT_MANAGER.get() {
+        let result = manager.lock();
+        if let Ok(mut guard) = result {
+            guard.free_pages.clear();
+            guard.quarantined.clear();
+            guard.large_object_map.clear();
+            guard.orphan_pages.clear();
+        }
+    }
+
+    // Clear current thread's local heap
+    clear_local_heap();
+}
