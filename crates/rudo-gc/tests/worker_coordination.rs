@@ -3,7 +3,7 @@
 //! These tests verify the correctness of the `GcWorkerRegistry` implementation
 //! and the new `worker_mark_loop_with_registry` function.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -145,4 +145,31 @@ fn test_notify_work_available() {
     // but we can verify the method doesn't panic
     registry.notify_work_available();
     registry.set_complete();
+}
+
+#[test]
+fn test_notify_work_available_wakes_waiter() {
+    let registry = GcWorkerRegistry::new(1);
+    let woken = Arc::new(AtomicBool::new(false));
+
+    let registry_clone = registry.clone();
+    let woken_clone = woken.clone();
+
+    let handle = thread::spawn(move || {
+        let result = registry_clone.wait_for_work();
+        woken_clone.store(true, Ordering::SeqCst);
+        result
+    });
+
+    thread::sleep(Duration::from_millis(50));
+
+    registry.notify_work_available();
+
+    let result = handle.join().unwrap();
+
+    assert!(
+        woken.load(Ordering::SeqCst),
+        "Waiter should have been woken"
+    );
+    assert!(result, "Should return true (work available, not complete)");
 }

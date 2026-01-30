@@ -1154,7 +1154,9 @@ pub fn worker_mark_loop_with_registry(
                     continue;
                 }
                 if other.push(obj) {
-                    // Pushed to another queue
+                    // Pushed to another queue - wake the target worker
+                    registry.notify_work_available();
+                    break;
                 }
             }
         }
