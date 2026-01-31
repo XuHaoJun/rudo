@@ -19,9 +19,12 @@ pub mod worklist;
 // Re-exports from gc
 pub use gc::{
     clear_test_roots, collect, collect_full, default_collect_condition, is_collecting, mark_object,
-    mark_object_minor, notify_created_gc, notify_dropped_gc, pending_sweep_count,
-    register_test_root, safepoint, set_collect_condition, sweep_pending, CollectInfo,
+    mark_object_minor, notify_created_gc, notify_dropped_gc, register_test_root, safepoint,
+    set_collect_condition, CollectInfo,
 };
+
+#[cfg(feature = "lazy-sweep")]
+pub use gc::{pending_sweep_count, sweep_pending};
 
 // Re-exports from marker
 pub use marker::{
