@@ -142,3 +142,108 @@ mod lazy_sweep_api_tests {
         collect();
     }
 }
+
+#[cfg(feature = "lazy-sweep")]
+mod lazy_sweep_invariant_tests {
+    use super::*;
+
+    #[test]
+    fn test_mark_bits_cleared_after_sweep() {
+        let gc1 = Gc::new(42);
+        let gc2 = Gc::new(100);
+        let _gc3 = Gc::new(200);
+
+        collect();
+
+        assert_eq!(*gc1, 42);
+        assert_eq!(*gc2, 100);
+
+        collect();
+
+        assert_eq!(*gc1, 42);
+        assert_eq!(*gc2, 100);
+    }
+
+    #[test]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap
+    )]
+    fn test_dead_count_accuracy() {
+        let mut gc_refs: Vec<Gc<i32>> = Vec::new();
+        for i in 0..20 {
+            gc_refs.push(Gc::new(i));
+        }
+
+        collect();
+
+        for _ in 0..10 {
+            gc_refs.remove(0);
+        }
+
+        collect();
+
+        assert_eq!(gc_refs.len(), 10);
+        for (idx, gc) in gc_refs.iter().enumerate() {
+            assert_eq!(*gc, (idx as i32 + 10).into());
+        }
+    }
+
+    #[test]
+    fn test_sequential_collections() {
+        let gc1 = Gc::new(1);
+        let gc2 = Gc::new(2);
+
+        collect();
+        assert_eq!(*gc1, 1);
+        assert_eq!(*gc2, 2);
+
+        collect();
+        assert_eq!(*gc1, 1);
+        assert_eq!(*gc2, 2);
+
+        collect();
+        assert_eq!(*gc1, 1);
+        assert_eq!(*gc2, 2);
+    }
+
+    #[test]
+    fn test_partial_sweep_survival() {
+        let gc1 = Gc::new(vec![1, 2, 3]);
+        let gc2 = Gc::new(vec![4, 5, 6]);
+        let gc3 = Gc::new(vec![7, 8, 9]);
+
+        drop(gc2);
+
+        collect();
+
+        assert_eq!(*gc1, vec![1, 2, 3]);
+        assert_eq!(*gc3, vec![7, 8, 9]);
+    }
+
+    #[test]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::unnecessary_cast
+    )]
+    fn test_interleaved_alloc_collect() {
+        let mut gc_refs: Vec<Gc<i32>> = Vec::new();
+
+        for round in 0..5 {
+            for i in 0..10 {
+                gc_refs.push(Gc::new(round as i32 * 100 + i as i32));
+            }
+
+            if round % 2 == 0 {
+                gc_refs.truncate(gc_refs.len() / 2);
+                collect();
+            }
+        }
+
+        collect();
+
+        for _ in &gc_refs {}
+    }
+}

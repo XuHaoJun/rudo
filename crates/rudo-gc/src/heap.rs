@@ -1162,6 +1162,7 @@ impl LocalHeap {
     fn alloc_from_pending_sweep(&mut self, class_index: usize) -> Option<NonNull<u8>> {
         let block_size = SIZE_CLASSES[class_index];
 
+        // TODO: Use a per-size-class index or cursor to avoid O(N) scan
         let page_needing_sweep = self.pages.iter().find(|&&page_ptr| unsafe {
             let header = page_ptr.as_ptr();
             (header.read().flags & PAGE_FLAG_LARGE) == 0

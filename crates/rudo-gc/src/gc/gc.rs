@@ -1624,9 +1624,6 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
 // ============================================================================
 
 #[cfg(feature = "lazy-sweep")]
-const SWEEP_BATCH_SIZE: usize = 16;
-
-#[cfg(feature = "lazy-sweep")]
 #[allow(unsafe_op_in_unsafe_fn)]
 /// Performs lazy sweep on a single page, processing up to `SWEEP_BATCH_SIZE` objects.
 ///
@@ -1703,6 +1700,10 @@ unsafe fn lazy_sweep_page(
 /// - The `PAGE_FLAG_ALL_DEAD` flag must be set on this page
 /// - The page must not be concurrently accessed by other threads during sweep
 /// - Caller must ensure no new allocations occur on this page during sweep
+/// - After this function returns, the caller is responsible for:
+///   - Clearing `PAGE_FLAG_ALL_DEAD` (via `clear_all_dead()`)
+///   - Clearing `PAGE_FLAG_NEEDS_SWEEP` (via `clear_needs_sweep()`)
+///   - Resetting `dead_count` to 0 (via `set_dead_count(0)`)
 unsafe fn lazy_sweep_page_all_dead(
     page_ptr: NonNull<PageHeader>,
     block_size: usize,
@@ -1799,6 +1800,7 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
                     } else {
                         #[allow(clippy::cast_possible_truncation)]
                         (*header).set_dead_count((*header).dead_count() - reclaimed as u16);
+                        (*header).clear_all_dead();
                     }
                     swept += 1;
                 } else if (*header).is_fully_marked() {
