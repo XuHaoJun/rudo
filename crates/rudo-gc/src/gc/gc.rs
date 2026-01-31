@@ -317,7 +317,7 @@ fn perform_multi_threaded_collect() {
                     let heap = &*tcb.heap.get();
                     for page_ptr in heap.all_pages() {
                         let header = page_ptr.as_ptr();
-                        if (header.read().flags & crate::heap::PAGE_FLAG_LARGE) == 0 {
+                        if !header.read().is_large_object() {
                             let block_size = (*header).block_size as usize;
                             let obj_count = (*header).obj_count as usize;
 
@@ -753,7 +753,7 @@ fn mark_minor_roots_multi(
             if (*header).generation == 0 {
                 continue;
             }
-            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+            if (*header).is_large_object() {
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
@@ -898,7 +898,7 @@ fn mark_minor_roots_parallel(
             if (*header).generation == 0 {
                 continue;
             }
-            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+            if (*header).is_large_object() {
                 continue;
             }
             dirty_pages.push(header);
@@ -1221,7 +1221,7 @@ fn mark_minor_roots(heap: &LocalHeap) {
             if (*header).generation == 0 {
                 continue;
             }
-            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+            if (*header).is_large_object() {
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
@@ -1332,7 +1332,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
         unsafe {
             let header = page_ptr.as_ptr();
 
-            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+            if (*header).is_large_object() {
                 continue;
             }
 
@@ -1413,7 +1413,7 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
         unsafe {
             let header = page_ptr.as_ptr();
 
-            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+            if (*header).is_large_object() {
                 continue;
             }
 
@@ -1896,7 +1896,7 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
         .filter(|&&page_ptr| unsafe {
             let header = page_ptr.as_ptr();
             let hdr = header.read();
-            (hdr.flags & crate::heap::PAGE_FLAG_LARGE) == 0 && hdr.needs_sweep()
+            !hdr.is_large_object() && hdr.needs_sweep()
         })
         .copied()
         .take(num_pages)
@@ -1912,6 +1912,7 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
             if header.read().all_dead() {
                 lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
                 (*header).clear_all_dead();
+                std::sync::atomic::fence(Ordering::Release);
                 (*header).clear_needs_sweep();
                 (*header).set_dead_count(0);
                 swept += 1;
@@ -1923,6 +1924,7 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
                         (*header).set_all_dead();
                     }
                     if reclaimed == obj_count {
+                        std::sync::atomic::fence(Ordering::Release);
                         (*header).clear_needs_sweep();
                         (*header).set_dead_count(0);
                         (*header).clear_all_dead();
@@ -1938,6 +1940,7 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
                     }
                     swept += 1;
                 } else if (*header).is_fully_marked() {
+                    std::sync::atomic::fence(Ordering::Release);
                     (*header).clear_needs_sweep();
                     (*header).set_dead_count(0);
                 }
@@ -1979,6 +1982,7 @@ pub unsafe fn sweep_specific_page(
         if header.read().all_dead() {
             lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
             (*header).clear_all_dead();
+            std::sync::atomic::fence(Ordering::Release);
             (*header).clear_needs_sweep();
             (*header).set_dead_count(0);
             reclaimed = obj_count;
@@ -1990,6 +1994,7 @@ pub unsafe fn sweep_specific_page(
                     (*header).set_all_dead();
                 }
                 if reclaimed_count == obj_count {
+                    std::sync::atomic::fence(Ordering::Release);
                     (*header).clear_needs_sweep();
                     (*header).set_dead_count(0);
                     (*header).clear_all_dead();
@@ -2005,6 +2010,7 @@ pub unsafe fn sweep_specific_page(
                 }
                 reclaimed = reclaimed_count;
             } else if (*header).is_fully_marked() {
+                std::sync::atomic::fence(Ordering::Release);
                 (*header).clear_needs_sweep();
                 (*header).set_dead_count(0);
             }
@@ -2028,8 +2034,8 @@ pub fn pending_sweep_count(heap: &LocalHeap) -> usize {
         .iter()
         .filter(|&&page_ptr| unsafe {
             let header = page_ptr.as_ptr();
-            (header.read().flags & crate::heap::PAGE_FLAG_LARGE) == 0
-                && (header.read().flags & crate::heap::PAGE_FLAG_NEEDS_SWEEP) != 0
+            let hdr = header.read();
+            !hdr.is_large_object() && hdr.needs_sweep()
         })
         .count()
 }

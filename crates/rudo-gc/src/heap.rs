@@ -12,7 +12,7 @@ use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
 
 use sys_alloc::{Mmap, MmapOptions};
@@ -465,7 +465,7 @@ pub struct PageHeader {
     /// Generation index (for future generational GC).
     pub generation: u8,
     /// Bitflags (`is_large_object`, `is_dirty`, etc.).
-    pub flags: u8,
+    pub flags: AtomicU8,
     /// Thread ID of the owner thread (for work-stealing).
     pub owner_thread: u64,
     /// Count of dead objects in this page (for "all-dead" fast path).
@@ -653,38 +653,79 @@ impl PageHeader {
 
     #[cfg(feature = "lazy-sweep")]
     /// Check if page needs lazy sweep.
-    pub const fn needs_sweep(&self) -> bool {
-        (self.flags & PAGE_FLAG_NEEDS_SWEEP) != 0
+    /// Uses Acquire ordering to synchronize with `dead_count` reads.
+    pub fn needs_sweep(&self) -> bool {
+        (self.flags.load(Ordering::Acquire) & PAGE_FLAG_NEEDS_SWEEP) != 0
     }
 
     #[cfg(feature = "lazy-sweep")]
     /// Set the `needs_sweep` flag.
-    pub const fn set_needs_sweep(&mut self) {
-        self.flags |= PAGE_FLAG_NEEDS_SWEEP;
+    /// Uses Release ordering to ensure prior writes are visible to readers.
+    pub fn set_needs_sweep(&self) {
+        self.flags
+            .fetch_or(PAGE_FLAG_NEEDS_SWEEP, Ordering::Release);
     }
 
     #[cfg(feature = "lazy-sweep")]
     /// Clear the `needs_sweep` flag.
-    pub const fn clear_needs_sweep(&mut self) {
-        self.flags &= !PAGE_FLAG_NEEDS_SWEEP;
+    /// Uses Release ordering. Callers must ensure proper synchronization
+    /// (e.g., atomic fence) before this if synchronizing with `dead_count` reads.
+    pub fn clear_needs_sweep(&self) {
+        self.flags
+            .fetch_and(!PAGE_FLAG_NEEDS_SWEEP, Ordering::Release);
     }
 
     #[cfg(feature = "lazy-sweep")]
     /// Check if all objects in page are dead.
-    pub const fn all_dead(&self) -> bool {
-        (self.flags & PAGE_FLAG_ALL_DEAD) != 0
+    /// Uses Acquire ordering for consistency with other lazy-sweep operations.
+    pub fn all_dead(&self) -> bool {
+        (self.flags.load(Ordering::Acquire) & PAGE_FLAG_ALL_DEAD) != 0
     }
 
     #[cfg(feature = "lazy-sweep")]
     /// Set the `all_dead` flag.
-    pub const fn set_all_dead(&mut self) {
-        self.flags |= PAGE_FLAG_ALL_DEAD;
+    /// Uses Release ordering to ensure prior writes are visible.
+    pub fn set_all_dead(&self) {
+        self.flags.fetch_or(PAGE_FLAG_ALL_DEAD, Ordering::Release);
     }
 
     #[cfg(feature = "lazy-sweep")]
     /// Clear the `all_dead` flag.
-    pub const fn clear_all_dead(&mut self) {
-        self.flags &= !PAGE_FLAG_ALL_DEAD;
+    /// Uses Release ordering.
+    pub fn clear_all_dead(&self) {
+        self.flags.fetch_and(!PAGE_FLAG_ALL_DEAD, Ordering::Release);
+    }
+
+    /// Get the raw flags value (for internal use).
+    /// Uses Relaxed ordering since `PAGE_FLAG_LARGE` is set once at creation
+    /// and `PAGE_FLAG_ORPHAN` is set during controlled cleanup.
+    pub fn flags(&self) -> u8 {
+        self.flags.load(Ordering::Relaxed)
+    }
+
+    /// Check if this is a large object page.
+    /// Uses Relaxed ordering since `PAGE_FLAG_LARGE` is set once at creation
+    /// and `PAGE_FLAG_ORPHAN` is set during controlled cleanup.
+    pub fn is_large_object(&self) -> bool {
+        (self.flags() & PAGE_FLAG_LARGE) != 0
+    }
+
+    /// Set the large object flag.
+    /// Uses Relaxed ordering since this is set once at page creation.
+    pub fn set_large_object(&self) {
+        self.flags.fetch_or(PAGE_FLAG_LARGE, Ordering::Relaxed);
+    }
+
+    /// Check if this page is orphaned (waiting to be freed).
+    /// Uses Relaxed ordering for single-threaded cleanup operations.
+    pub fn is_orphan(&self) -> bool {
+        (self.flags() & PAGE_FLAG_ORPHAN) != 0
+    }
+
+    /// Set the orphan flag.
+    /// Uses Relaxed ordering for single-threaded cleanup operations.
+    pub fn set_orphan(&self) {
+        self.flags.fetch_or(PAGE_FLAG_ORPHAN, Ordering::Relaxed);
     }
 
     #[cfg(feature = "lazy-sweep")]
@@ -1235,7 +1276,7 @@ impl LocalHeap {
             .filter(|&&page_ptr| unsafe {
                 let header = page_ptr.as_ptr();
                 let hdr = header.read();
-                (hdr.flags & PAGE_FLAG_LARGE) == 0
+                !hdr.is_large_object()
                     && hdr.block_size as usize == block_size
                     && hdr.needs_sweep()
                     && hdr.dead_count() > 0
@@ -1269,8 +1310,7 @@ impl LocalHeap {
         for page_ptr in &self.pages {
             unsafe {
                 let header = page_ptr.as_ptr();
-                // We only care about regular pages (not large objects)
-                if ((*header).flags & PAGE_FLAG_LARGE) == 0
+                if !(*header).is_large_object()
                     && (*header).block_size as usize == block_size
                     && (*header).free_list_head().is_some()
                 {
@@ -1397,7 +1437,7 @@ impl LocalHeap {
                 #[allow(clippy::cast_possible_truncation)]
                 header_size: h_size as u16,
                 generation: 0,
-                flags: 0,
+                flags: AtomicU8::new(0),
                 owner_thread: get_thread_id(),
                 #[cfg(feature = "lazy-sweep")]
                 dead_count: AtomicU16::new(0),
@@ -1498,7 +1538,7 @@ impl LocalHeap {
                 #[allow(clippy::cast_possible_truncation)]
                 header_size: h_size as u16,
                 generation: 0,
-                flags: PAGE_FLAG_LARGE,
+                flags: AtomicU8::new(PAGE_FLAG_LARGE),
                 owner_thread: get_thread_id(),
                 #[cfg(feature = "lazy-sweep")]
                 dead_count: AtomicU16::new(0),
@@ -1602,7 +1642,7 @@ impl LocalHeap {
     pub fn large_object_pages(&self) -> Vec<NonNull<PageHeader>> {
         self.pages
             .iter()
-            .filter(|p| unsafe { (p.as_ptr().read().flags & PAGE_FLAG_LARGE) != 0 })
+            .filter(|p| unsafe { p.as_ptr().read().is_large_object() })
             .copied()
             .collect()
     }
@@ -1618,7 +1658,7 @@ impl LocalHeap {
     pub fn large_object_pages_mut(&mut self) -> Vec<NonNull<PageHeader>> {
         self.pages
             .iter()
-            .filter(|p| unsafe { (p.as_ptr().read().flags & PAGE_FLAG_LARGE) != 0 })
+            .filter(|p| unsafe { p.as_ptr().read().is_large_object() })
             .copied()
             .collect()
     }
@@ -1718,7 +1758,7 @@ impl LocalHeap {
             for page_ptr in &self.pages {
                 if page_ptr.as_ptr() as usize == page_addr {
                     let header = page_ptr.as_ptr();
-                    let is_large = unsafe { ((*header).flags & PAGE_FLAG_LARGE) != 0 };
+                    let is_large = unsafe { (*header).is_large_object() };
                     if !is_large {
                         let block_size = unsafe { (*header).block_size as usize };
                         let header_size = PageHeader::header_size(block_size);
@@ -1793,7 +1833,7 @@ impl Drop for LocalHeap {
                     continue;
                 }
 
-                let is_large = ((*header).flags & PAGE_FLAG_LARGE) != 0;
+                let is_large = (*header).is_large_object();
                 let block_size = (*header).block_size as usize;
                 let header_size = (*header).header_size as usize;
 
@@ -1804,7 +1844,7 @@ impl Drop for LocalHeap {
                     page_size()
                 };
 
-                (*header).flags |= PAGE_FLAG_ORPHAN;
+                (*header).set_orphan();
 
                 manager.orphan_pages.push(OrphanPage {
                     addr: page_ptr.as_ptr() as usize,
@@ -1835,7 +1875,7 @@ pub fn sweep_orphan_pages() {
 
     manager.orphan_pages.retain(|orphan| unsafe {
         let header = orphan.addr as *mut PageHeader;
-        let is_large = ((*header).flags & PAGE_FLAG_LARGE) != 0;
+        let is_large = (*header).is_large_object();
 
         let has_survivors = if is_large {
             (*header).is_marked(0)
@@ -1884,7 +1924,7 @@ pub fn sweep_orphan_pages() {
     for &(addr, _size, _is_large, _header_addr) in &to_reclaim {
         unsafe {
             let header = addr as *mut PageHeader;
-            let is_large = ((*header).flags & PAGE_FLAG_LARGE) != 0;
+            let is_large = (*header).is_large_object();
 
             if is_large {
                 let header_size = (*header).header_size as usize;
@@ -2213,13 +2253,13 @@ pub unsafe fn find_gc_box_from_ptr(
         }
 
         // 5.1. Allocation check for small objects (Large objects are always allocated if in map)
-        if header.flags & PAGE_FLAG_LARGE == 0 && !header.is_allocated(index) {
+        if !header.is_large_object() && !header.is_allocated(index) {
             return None;
         }
 
         // 6. Large object handling: with the map, we now support interior pointers!
         // For large objects, we ensure the pointer is within the allocated bounds.
-        if header.flags & PAGE_FLAG_LARGE != 0 {
+        if header.is_large_object() {
             if offset_to_use >= block_size_to_use {
                 return None;
             }

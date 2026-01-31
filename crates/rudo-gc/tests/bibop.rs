@@ -218,7 +218,7 @@ fn test_page_header_validation() {
                 let block_size = (*header).block_size as usize;
                 let valid_sizes = [16, 32, 64, 128, 256, 512, 1024, 2048];
                 // Large objects may have arbitrary sizes
-                let is_large_object = (*header).flags & 0x01 != 0;
+                let is_large_object = (*header).is_large_object();
                 if !is_large_object {
                     assert!(
                         valid_sizes.contains(&block_size),

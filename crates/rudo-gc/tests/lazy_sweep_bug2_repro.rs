@@ -17,7 +17,7 @@ const fn objects_per_page() -> usize {
 #[cfg(feature = "lazy-sweep")]
 mod bug2_repro_tests {
     use super::*;
-    use rudo_gc::heap::{LocalHeap, PAGE_FLAG_NEEDS_SWEEP};
+    use rudo_gc::heap::LocalHeap;
 
     #[allow(dead_code)]
     fn count_pages_with_dead_objects(heap: &LocalHeap) -> usize {
@@ -26,7 +26,7 @@ mod bug2_repro_tests {
             .filter(|&&page_ptr| unsafe {
                 let header = page_ptr.as_ptr();
                 let header = header.as_ref().unwrap();
-                (header.flags & PAGE_FLAG_NEEDS_SWEEP) != 0 && header.dead_count() > 0
+                header.needs_sweep() && header.dead_count() > 0
             })
             .count()
     }
