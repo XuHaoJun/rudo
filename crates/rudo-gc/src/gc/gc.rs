@@ -1678,7 +1678,7 @@ unsafe fn lazy_sweep_page(
                 (*header).clear_allocated(i);
                 reclaimed += 1;
             }
-        } else if is_allocated && is_marked {
+        } else {
             (*header).clear_mark(i);
             all_dead = false;
         }
