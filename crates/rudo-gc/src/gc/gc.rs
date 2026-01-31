@@ -1138,7 +1138,7 @@ fn promote_young_pages(heap: &mut LocalHeap) {
                 let mut survivors_count = 0;
 
                 for i in 0..crate::heap::BITMAP_SIZE {
-                    let bits = (*header).allocated_bitmap[i];
+                    let bits = (*header).allocated_bitmap[i].load(Ordering::Acquire);
                     if bits != 0 {
                         has_survivors = true;
                         survivors_count += bits.count_ones() as usize;
@@ -1836,6 +1836,72 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
     }
 
     swept
+}
+
+#[cfg(feature = "lazy-sweep")]
+#[allow(unsafe_op_in_unsafe_fn)]
+/// Sweep a specific page, returning the number of reclaimed objects.
+///
+/// Unlike `sweep_pending` which sweeps arbitrary pages from the heap,
+/// this function sweeps the exact page specified. This is used by
+/// `alloc_from_pending_sweep` to ensure pages with dead objects are
+/// swept before attempting allocation.
+///
+/// # Safety
+///
+/// - `heap` must be a valid `LocalHeap` owned by the current thread
+/// - `page_ptr` must point to a valid `PageHeader` for a page owned by this heap
+/// - Only non-large pages are swept (large objects use eager sweep)
+/// - The heap's pages vector is not modified, only page metadata and free lists
+/// - Safe to call during allocation when pages need sweeping
+pub unsafe fn sweep_specific_page(
+    heap: &mut LocalHeap,
+    page_ptr: NonNull<crate::heap::PageHeader>,
+    _num_pages: usize,
+) -> usize {
+    let mut reclaimed = 0;
+    unsafe {
+        let header = page_ptr.as_ptr();
+        let block_size = (*header).block_size as usize;
+        let obj_count = (*header).obj_count as usize;
+        let header_size = crate::heap::PageHeader::header_size(block_size);
+
+        if (header.read().flags & crate::heap::PAGE_FLAG_ALL_DEAD) != 0 {
+            lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
+            (*header).clear_all_dead();
+            (*header).clear_needs_sweep();
+            (*header).set_dead_count(0);
+            reclaimed = obj_count;
+        } else {
+            let (reclaimed_count, all_dead) =
+                lazy_sweep_page(page_ptr, block_size, obj_count, header_size);
+            if reclaimed_count > 0 {
+                if all_dead && reclaimed_count == obj_count {
+                    (*header).set_all_dead();
+                }
+                if reclaimed_count == obj_count {
+                    (*header).clear_needs_sweep();
+                    (*header).set_dead_count(0);
+                    (*header).clear_all_dead();
+                } else {
+                    debug_assert!(
+                        reclaimed_count <= (*header).dead_count() as usize,
+                        "reclaimed {} objects but dead_count is {}",
+                        reclaimed_count,
+                        (*header).dead_count()
+                    );
+                    #[allow(clippy::cast_possible_truncation)]
+                    (*header).set_dead_count((*header).dead_count() - reclaimed_count as u16);
+                }
+                reclaimed = reclaimed_count;
+            } else if (*header).is_fully_marked() {
+                (*header).clear_needs_sweep();
+                (*header).set_dead_count(0);
+            }
+        }
+    }
+
+    reclaimed
 }
 
 #[cfg(feature = "lazy-sweep")]

@@ -478,8 +478,8 @@ pub struct PageHeader {
     pub mark_bitmap: [AtomicU64; BITMAP_SIZE],
     /// Bitmap of dirty objects (atomic for concurrent write barriers).
     pub dirty_bitmap: [AtomicU64; BITMAP_SIZE],
-    /// Bitmap of allocated objects (non-atomic, only modified by owner thread).
-    pub allocated_bitmap: [u64; BITMAP_SIZE],
+    /// Bitmap of allocated objects (atomic for proper synchronization during sweep).
+    pub allocated_bitmap: [AtomicU64; BITMAP_SIZE],
     /// Index of first free slot in free list.
     pub free_list_head: Option<u16>,
 }
@@ -562,7 +562,7 @@ impl PageHeader {
     pub fn is_fully_marked(&self) -> bool {
         for word_idx in 0..BITMAP_SIZE {
             let mark_word = self.mark_bitmap[word_idx].load(Ordering::Acquire);
-            let alloc_word = self.allocated_bitmap[word_idx];
+            let alloc_word = self.allocated_bitmap[word_idx].load(Ordering::Acquire);
             if (mark_word & alloc_word) != alloc_word {
                 return false;
             }
@@ -617,30 +617,31 @@ impl PageHeader {
 
     /// Check if an object at the given index is allocated.
     #[must_use]
-    pub const fn is_allocated(&self, index: usize) -> bool {
+    pub fn is_allocated(&self, index: usize) -> bool {
         let word = index / 64;
         let bit = index % 64;
-        (self.allocated_bitmap[word] & (1 << bit)) != 0
+        (self.allocated_bitmap[word].load(Ordering::Acquire) & (1 << bit)) != 0
     }
 
     /// Set the allocated bit for an object at the given index.
-    pub const fn set_allocated(&mut self, index: usize) {
+    pub fn set_allocated(&mut self, index: usize) {
         let word = index / 64;
         let bit = index % 64;
-        self.allocated_bitmap[word] |= 1 << bit;
+        self.allocated_bitmap[word].fetch_or(1u64 << bit, Ordering::AcqRel);
     }
 
     /// Clear the allocated bit for an object at the given index.
-    pub const fn clear_allocated(&mut self, index: usize) {
+    pub fn clear_allocated(&mut self, index: usize) {
         let word = index / 64;
         let bit = index % 64;
-        self.allocated_bitmap[word] &= !(1 << bit);
+        self.allocated_bitmap[word].fetch_and(!(1u64 << bit), Ordering::Release);
     }
 
     /// Clear all allocated bits.
-    #[allow(clippy::missing_const_for_fn)]
     pub fn clear_all_allocated(&mut self) {
-        self.allocated_bitmap = [0; BITMAP_SIZE];
+        for word in &self.allocated_bitmap {
+            word.store(0, Ordering::Release);
+        }
     }
 
     #[cfg(feature = "lazy-sweep")]
@@ -1180,7 +1181,7 @@ impl LocalHeap {
             .collect();
 
         for page_ptr in page_ptrs {
-            let reclaimed = crate::gc::sweep_pending(self, 1);
+            let reclaimed = unsafe { crate::gc::sweep_specific_page(self, page_ptr, 1) };
             if reclaimed > 0 {
                 if let Some(ptr) = self.alloc_from_free_list(class_index) {
                     return Some(ptr);
@@ -1316,7 +1317,7 @@ impl LocalHeap {
                 _padding: [0; 2],
                 mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
                 dirty_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
-                allocated_bitmap: [0; BITMAP_SIZE],
+                allocated_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
                 free_list_head: None,
             });
 
@@ -1414,7 +1415,7 @@ impl LocalHeap {
                 _padding: [0; 2],
                 mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
                 dirty_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
-                allocated_bitmap: [0; BITMAP_SIZE],
+                allocated_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
                 free_list_head: None,
             });
             // Mark the single object as allocated
@@ -2144,8 +2145,8 @@ fn clear_local_heap() {
             // Reset free list head
             (*header).free_list_head = None;
             // Clear allocated bitmap
-            for word in &mut (*header).allocated_bitmap {
-                *word = 0;
+            for word in &(*header).allocated_bitmap {
+                word.store(0, Ordering::Release);
             }
             // Clear mark bitmap
             for word in &mut (*header).mark_bitmap {
