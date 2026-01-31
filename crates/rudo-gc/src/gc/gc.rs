@@ -1460,7 +1460,7 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
                     // Slot is free - add to free list (if not already done above)
                     let obj_ptr = page_addr.add(header_size + i * block_size);
                     // Check if free list head was already written (for reclaimed slots)
-                    let current_head = (*header).free_list_head;
+                    let current_head = (*header).free_list_head();
                     let idx_as_u16 = u16::try_from(i).unwrap();
                     let head_written = current_head == Some(idx_as_u16);
 
@@ -1472,7 +1472,7 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
                     }
                 }
             }
-            (*header).free_list_head = free_head;
+            (*header).set_free_list_head(free_head);
         }
     }
 
@@ -1689,9 +1689,27 @@ unsafe fn lazy_sweep_page(
 
                 #[allow(clippy::cast_ptr_alignment)]
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
-                let current_free = (*header).free_list_head;
+                let mut current_free = (*header).free_list_head();
                 obj_cast.write_unaligned(current_free);
-                (*header).free_list_head = Some(u16::try_from(i).unwrap());
+                loop {
+                    let old = current_free.unwrap_or(u16::MAX);
+                    match (*header).free_list_head.compare_exchange(
+                        old,
+                        u16::try_from(i).unwrap(),
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => break,
+                        Err(actual) => {
+                            current_free = if actual == u16::MAX {
+                                None
+                            } else {
+                                Some(actual)
+                            };
+                            obj_cast.write_unaligned(current_free);
+                        }
+                    }
+                }
 
                 (*header).clear_allocated(i);
                 reclaimed += 1;
@@ -1752,9 +1770,27 @@ unsafe fn lazy_sweep_page_all_dead(
 
                 #[allow(clippy::cast_ptr_alignment)]
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
-                let current_free = (*header).free_list_head;
+                let mut current_free = (*header).free_list_head();
                 obj_cast.write_unaligned(current_free);
-                (*header).free_list_head = Some(u16::try_from(i).unwrap());
+                loop {
+                    let old = current_free.unwrap_or(u16::MAX);
+                    match (*header).free_list_head.compare_exchange(
+                        old,
+                        u16::try_from(i).unwrap(),
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => break,
+                        Err(actual) => {
+                            current_free = if actual == u16::MAX {
+                                None
+                            } else {
+                                Some(actual)
+                            };
+                            obj_cast.write_unaligned(current_free);
+                        }
+                    }
+                }
 
                 (*header).clear_allocated(i);
                 reclaimed += 1;
@@ -1785,8 +1821,8 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
         .iter()
         .filter(|&&page_ptr| unsafe {
             let header = page_ptr.as_ptr();
-            (header.read().flags & crate::heap::PAGE_FLAG_LARGE) == 0
-                && (header.read().flags & crate::heap::PAGE_FLAG_NEEDS_SWEEP) != 0
+            let hdr = header.read();
+            (hdr.flags & crate::heap::PAGE_FLAG_LARGE) == 0 && hdr.needs_sweep()
         })
         .copied()
         .take(num_pages)
@@ -1799,7 +1835,7 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
             let obj_count = (*header).obj_count as usize;
             let header_size = PageHeader::header_size(block_size);
 
-            if (header.read().flags & crate::heap::PAGE_FLAG_ALL_DEAD) != 0 {
+            if header.read().all_dead() {
                 lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
                 (*header).clear_all_dead();
                 (*header).clear_needs_sweep();
@@ -1866,7 +1902,7 @@ pub unsafe fn sweep_specific_page(
         let obj_count = (*header).obj_count as usize;
         let header_size = crate::heap::PageHeader::header_size(block_size);
 
-        if (header.read().flags & crate::heap::PAGE_FLAG_ALL_DEAD) != 0 {
+        if header.read().all_dead() {
             lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
             (*header).clear_all_dead();
             (*header).clear_needs_sweep();
