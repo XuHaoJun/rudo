@@ -234,6 +234,11 @@ pub fn collect() {
 }
 
 /// Perform collection as the collector thread.
+#[allow(
+    clippy::too_many_lines,
+    clippy::collapsible_else_if,
+    clippy::if_not_else
+)]
 fn perform_multi_threaded_collect() {
     crate::gc::marker::clear_overflow_queue();
 
@@ -299,10 +304,54 @@ fn perform_multi_threaded_collect() {
         // Phase 3: Sweep ALL heaps
         for tcb in &tcbs {
             unsafe {
-                let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
-                let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
-                objects_reclaimed += reclaimed + reclaimed_large;
-                promote_all_pages(&*tcb.heap.get());
+                #[cfg(feature = "lazy-sweep")]
+                {
+                    let heap = &*tcb.heap.get();
+                    for page_ptr in heap.all_pages() {
+                        let header = page_ptr.as_ptr();
+                        if (header.read().flags & crate::heap::PAGE_FLAG_LARGE) == 0 {
+                            let block_size = (*header).block_size as usize;
+                            let obj_count = (*header).obj_count as usize;
+
+                            let mut dead_count = 0u16;
+                            let mut allocated_count = 0u16;
+
+                            for i in 0..obj_count {
+                                if (*header).is_allocated(i) {
+                                    allocated_count += 1;
+                                    if !(*header).is_marked(i) {
+                                        dead_count += 1;
+                                    } else {
+                                        (*header).clear_mark(i);
+                                    }
+                                }
+                            }
+
+                            if allocated_count > 0 {
+                                if dead_count == allocated_count {
+                                    (*header).set_all_dead();
+                                }
+                                (*header).set_needs_sweep();
+                                (*header).set_dead_count(dead_count);
+                            }
+                        } else {
+                            if !(*header).is_fully_marked() {
+                                let reclaimed = sweep_large_objects(&mut *tcb.heap.get(), false);
+                                objects_reclaimed += reclaimed;
+                            } else {
+                                (*header).clear_all_marks();
+                            }
+                        }
+                    }
+                    promote_all_pages(&*tcb.heap.get());
+                }
+                #[cfg(not(feature = "lazy-sweep"))]
+                {
+                    let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
+                    let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
+                    objects_reclaimed += reclaimed + reclaimed_large;
+                    promote_all_pages(&*tcb.heap.get());
+                }
             }
         }
 
@@ -1568,6 +1617,185 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
     // See sweep_phase2_reclaim for explanation.
 
     reclaimed
+}
+
+// ============================================================================
+// Lazy Sweep - Incremental sweep during allocation
+// ============================================================================
+
+#[cfg(feature = "lazy-sweep")]
+const SWEEP_BATCH_SIZE: usize = 16;
+
+#[cfg(feature = "lazy-sweep")]
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn lazy_sweep_page(
+    page_ptr: NonNull<PageHeader>,
+    block_size: usize,
+    obj_count: usize,
+    header_size: usize,
+) -> (usize, bool) {
+    let header = page_ptr.as_ptr();
+    let page_addr = page_ptr.as_ptr().cast::<u8>();
+    let mut reclaimed = 0;
+    let mut all_dead = true;
+
+    for i in 0..obj_count {
+        let is_allocated = (*header).is_allocated(i);
+        let is_marked = (*header).is_marked(i);
+
+        if is_allocated && !is_marked {
+            let obj_ptr = page_addr.add(header_size + i * block_size);
+            #[allow(clippy::cast_ptr_alignment)]
+            let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+            let weak_count = (*gc_box_ptr).weak_count();
+
+            if weak_count > 0 {
+                if !(*gc_box_ptr).is_value_dead() {
+                    ((*gc_box_ptr).drop_fn)(obj_ptr);
+                    (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                    (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
+                    (*gc_box_ptr).set_dead();
+                }
+                all_dead = false;
+            } else {
+                ((*gc_box_ptr).drop_fn)(obj_ptr);
+                (*gc_box_ptr).set_dead();
+
+                #[allow(clippy::cast_ptr_alignment)]
+                let obj_cast = obj_ptr.cast::<Option<u16>>();
+                let current_free = (*header).free_list_head;
+                obj_cast.write_unaligned(current_free);
+                (*header).free_list_head = Some(u16::try_from(i).unwrap());
+
+                (*header).clear_allocated(i);
+                reclaimed += 1;
+            }
+        } else if is_allocated && is_marked {
+            (*header).clear_mark(i);
+            all_dead = false;
+        }
+    }
+
+    (reclaimed, all_dead)
+}
+
+#[cfg(feature = "lazy-sweep")]
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn lazy_sweep_page_all_dead(
+    page_ptr: NonNull<PageHeader>,
+    block_size: usize,
+    obj_count: usize,
+    header_size: usize,
+) -> usize {
+    let header = page_ptr.as_ptr();
+    let page_addr = page_ptr.as_ptr().cast::<u8>();
+    let mut reclaimed = 0;
+
+    for i in 0..obj_count {
+        if (*header).is_allocated(i) {
+            let obj_ptr = page_addr.add(header_size + i * block_size);
+            #[allow(clippy::cast_ptr_alignment)]
+            let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+            let weak_count = (*gc_box_ptr).weak_count();
+
+            if weak_count > 0 {
+                if !(*gc_box_ptr).is_value_dead() {
+                    ((*gc_box_ptr).drop_fn)(obj_ptr);
+                    (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                    (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
+                    (*gc_box_ptr).set_dead();
+                }
+            } else {
+                ((*gc_box_ptr).drop_fn)(obj_ptr);
+
+                #[allow(clippy::cast_ptr_alignment)]
+                let obj_cast = obj_ptr.cast::<Option<u16>>();
+                let current_free = (*header).free_list_head;
+                obj_cast.write_unaligned(current_free);
+                (*header).free_list_head = Some(u16::try_from(i).unwrap());
+
+                (*header).clear_allocated(i);
+                reclaimed += 1;
+            }
+            (*header).clear_mark(i);
+        }
+    }
+
+    reclaimed
+}
+
+#[cfg(feature = "lazy-sweep")]
+#[must_use]
+/// Sweep up to `num_pages` pages that need lazy sweeping.
+///
+/// Returns the number of pages actually swept.
+pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
+    let mut swept = 0;
+    let mut pages_to_sweep: Vec<NonNull<PageHeader>> = heap
+        .pages
+        .iter()
+        .filter(|&&page_ptr| unsafe {
+            let header = page_ptr.as_ptr();
+            (header.read().flags & crate::heap::PAGE_FLAG_LARGE) == 0
+                && (header.read().flags & crate::heap::PAGE_FLAG_NEEDS_SWEEP) != 0
+        })
+        .copied()
+        .take(num_pages)
+        .collect();
+
+    for page_ptr in pages_to_sweep {
+        unsafe {
+            let header = page_ptr.as_ptr();
+            let block_size = (*header).block_size as usize;
+            let obj_count = (*header).obj_count as usize;
+            let header_size = PageHeader::header_size(block_size);
+
+            if (header.read().flags & crate::heap::PAGE_FLAG_ALL_DEAD) != 0 {
+                lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
+                (*header).clear_all_dead();
+                (*header).clear_needs_sweep();
+                (*header).set_dead_count(0);
+                swept += 1;
+            } else {
+                let (reclaimed, all_dead) =
+                    lazy_sweep_page(page_ptr, block_size, obj_count, header_size);
+                if reclaimed > 0 {
+                    if all_dead && reclaimed == obj_count {
+                        (*header).set_all_dead();
+                    }
+                    if reclaimed == obj_count {
+                        (*header).clear_needs_sweep();
+                        (*header).set_dead_count(0);
+                    } else {
+                        #[allow(clippy::cast_possible_truncation)]
+                        (*header).set_dead_count((*header).dead_count() - reclaimed as u16);
+                    }
+                    swept += 1;
+                } else if (*header).is_fully_marked() {
+                    (*header).clear_needs_sweep();
+                    (*header).set_dead_count(0);
+                }
+            }
+        }
+    }
+
+    swept
+}
+
+#[cfg(feature = "lazy-sweep")]
+#[must_use]
+/// Returns the number of pages currently awaiting lazy sweep.
+pub fn pending_sweep_count(heap: &LocalHeap) -> usize {
+    heap.pages
+        .iter()
+        .filter(|&&page_ptr| unsafe {
+            let header = page_ptr.as_ptr();
+            (header.read().flags & crate::heap::PAGE_FLAG_LARGE) == 0
+                && (header.read().flags & crate::heap::PAGE_FLAG_NEEDS_SWEEP) != 0
+        })
+        .count()
 }
 
 // ============================================================================

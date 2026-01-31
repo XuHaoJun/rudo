@@ -19,8 +19,8 @@
 
 **Purpose**: Configure feature flag and basic infrastructure for lazy sweep
 
-- [ ] T001 Add `lazy-sweep` feature flag to crates/rudo-gc/Cargo.toml with default enabled
-- [ ] T002 Update Cargo.toml default features to include `lazy-sweep` and `derive`
+- [X] T001 Add `lazy-sweep` feature flag to crates/rudo-gc/Cargo.toml with default enabled
+- [X] T002 Update Cargo.toml default features to include `lazy-sweep` and `derive`
 
 ---
 
@@ -30,12 +30,12 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T003 [P] Add PAGE_FLAG_NEEDS_SWEEP constant (0x04) in crates/rudo-gc/src/heap.rs
-- [ ] T004 [P] Add PAGE_FLAG_ALL_DEAD constant (0x08) in crates/rudo-gc/src/heap.rs
-- [ ] T005 [P] Add helper methods to PageHeader for sweep flag management in crates/rudo-gc/src/heap.rs:
+- [X] T003 [P] Add PAGE_FLAG_NEEDS_SWEEP constant (0x04) in crates/rudo-gc/src/heap.rs
+- [X] T004 [P] Add PAGE_FLAG_ALL_DEAD constant (0x08) in crates/rudo-gc/src/heap.rs
+- [X] T005 [P] Add helper methods to PageHeader for sweep flag management in crates/rudo-gc/src/heap.rs:
   - `needs_sweep()`, `set_needs_sweep()`, `clear_needs_sweep()`
   - `all_dead()`, `set_all_dead()`, `clear_all_dead()`
-- [ ] T006 Replace `_padding: [u8; 2]` with `dead_count: Cell<u16>` in PageHeader struct in crates/rudo-gc/src/heap.rs
+- [X] T006 Replace `_padding: [u8; 2]` with `dead_count: Cell<u16>` in PageHeader struct in crates/rudo-gc/src/heap.rs
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -51,22 +51,22 @@
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T007 [P] [US1] Add test `test_lazy_sweep_frees_dead_objects` in crates/rudo-gc/tests/lazy_sweep.rs
-- [ ] T008 [P] [US1] Add test `test_lazy_sweep_preserves_live_objects` in crates/rudo-gc/tests/lazy_sweep.rs
-- [ ] T009 [P] [US1] Add test `test_lazy_sweep_eliminates_stw_pause` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T007 [P] [US1] Add test `test_lazy_sweep_frees_dead_objects` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T008 [P] [US1] Add test `test_lazy_sweep_preserves_live_objects` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T009 [P] [US1] Add test `test_lazy_sweep_eliminates_stw_pause` in crates/rudo-gc/tests/lazy_sweep.rs
 
 ### Implementation for User Story 1
 
-- [ ] T010 [P] [US1] Add SWEEP_BATCH_SIZE constant (= 16) in crates/rudo-gc/src/gc/gc.rs
-- [ ] T011 [P] [US1] Implement `lazy_sweep_page()` function in crates/rudo-gc/src/gc/gc.rs:
+- [X] T010 [P] [US1] Add SWEEP_BATCH_SIZE constant (= 16) in crates/rudo-gc/src/gc/gc.rs
+- [X] T011 [P] [US1] Implement `lazy_sweep_page()` function in crates/rudo-gc/src/gc/gc.rs:
   - Processes up to 16 objects per call
   - Handles regular objects (non-large, non-orphan)
   - Reclaims dead objects to free list
   - Clears mark bits for surviving objects
-- [ ] T012 [US1] Implement `lazy_sweep_page_all_dead()` fast path in crates/rudo-gc/src/gc/gc.rs:
+- [X] T012 [US1] Implement `lazy_sweep_page_all_dead()` fast path in crates/rudo-gc/src/gc/gc.rs:
   - Handles pages where all objects are dead
   - Rebuilds free list without individual object scanning
-- [ ] T013 [US1] Modify mark phase in `perform_multi_threaded_collect()` in crates/rudo-gc/src/gc/gc.rs:
+- [X] T013 [US1] Modify mark phase in `perform_multi_threaded_collect()` in crates/rudo-gc/src/gc/gc.rs:
   - Set PAGE_FLAG_NEEDS_SWEEP on pages with allocated objects
   - Do NOT perform STW sweep - return immediately
 
@@ -82,16 +82,16 @@
 
 ### Tests for User Story 2
 
-- [ ] T014 [P] [US2] Add test `test_allocated_memory_reused_after_sweep` in crates/rudo-gc/tests/lazy_sweep.rs
-- [ ] T015 [P] [US2] Add test `test_heap_size_bounded_under_workload` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T014 [P] [US2] Add test `test_allocated_memory_reused_after_sweep` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T015 [P] [US2] Add test `test_heap_size_bounded_under_workload` in crates/rudo-gc/tests/lazy_sweep.rs
 
 ### Implementation for User Story 2
 
-- [ ] T016 [P] [US2] Add `alloc_from_pending_sweep()` helper method in crates/rudo-gc/src/heap.rs:
+- [X] T016 [P] [US2] Add `alloc_from_pending_sweep()` helper method in crates/rudo-gc/src/heap.rs:
   - Scans pages for one needing sweep
   - Calls lazy_sweep_page to reclaim objects
   - Returns allocation from reclaimed free list if available
-- [ ] T017 [US2] Modify `alloc<T>()` method in crates/rudo-gc/src/heap.rs:
+- [X] T017 [US2] Modify `alloc<T>()` method in crates/rudo-gc/src/heap.rs:
   - Add lazy sweep attempt before alloc_slow (new page)
   - Call alloc_from_pending_sweep with proper size class matching
 
@@ -107,15 +107,15 @@
 
 ### Tests for User Story 3
 
-- [ ] T018 [P] [US3] Add test `test_lazy_sweep_enabled_by_default` in crates/rudo-gc/tests/lazy_sweep.rs
-- [ ] T019 [P] [US3] Add test `test_eager_sweep_when_feature_disabled` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T018 [P] [US3] Add test `test_lazy_sweep_enabled_by_default` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T019 [P] [US3] Add test `test_eager_sweep_when_feature_disabled` in crates/rudo-gc/tests/lazy_sweep.rs
 
 ### Implementation for User Story 3
 
-- [ ] T020 [P] [US3] Add cfg attributes to existing sweep code in crates/rudo-gc/src/gc/gc.rs:
+- [X] T020 [P] [US3] Add cfg attributes to existing sweep code in crates/rudo-gc/src/gc/gc.rs:
   - Lazy sweep: modify mark phase to skip STW sweep
   - Eager sweep (feature disabled): keep existing STW sweep behavior
-- [ ] T021 [P] [US3] Add cfg attributes to check_safepoint() in crates/rudo-gc/src/heap.rs:
+- [X] T021 [P] [US3] Add cfg attributes to check_safepoint() in crates/rudo-gc/src/heap.rs:
   - Lazy sweep: include lazy sweep trigger
   - Eager sweep: no changes needed
 
@@ -131,16 +131,16 @@
 
 ### Tests for User Story 4
 
-- [ ] T022 [P] [US4] Add test `test_large_object_still_eager` in crates/rudo-gc/tests/lazy_sweep.rs
-- [ ] T023 [P] [US4] Add test `test_orphan_page_still_eager` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T022 [P] [US4] Add test `test_large_object_still_eager` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T023 [P] [US4] Add test `test_orphan_page_still_eager` in crates/rudo-gc/tests/lazy_sweep.rs
 
 ### Implementation for User Story 4
 
-- [ ] T024 [P] [US4] Modify lazy_sweep_page() in crates/rudo-gc/src/gc/gc.rs:
+- [X] T024 [P] [US4] Modify lazy_sweep_page() in crates/rudo-gc/src/gc/gc.rs:
   - Skip pages with PAGE_FLAG_LARGE set (return false, don't sweep)
-- [ ] T025 [US4] Ensure large object pages are swept eagerly during mark phase completion:
+- [X] T025 [US4] Ensure large object pages are swept eagerly during mark phase completion:
   - In perform_multi_threaded_collect(), sweep large object pages immediately
-- [ ] T026 [US4] Ensure orphan pages are swept eagerly:
+- [X] T026 [US4] Ensure orphan pages are swept eagerly:
   - Orphan pages continue using existing eager sweep behavior
 
 **Checkpoint**: User Story 4 complete - large objects and orphans use eager sweep
@@ -155,16 +155,16 @@
 
 ### Tests for User Story 5
 
-- [ ] T027 [P] [US5] Add test `test_lazy_sweep_weak_refs` in crates/rudo-gc/tests/lazy_sweep.rs
-- [ ] T028 [P] [US5] Add test `test_weak_ref_value_dropped_but_allocation_preserved` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T027 [P] [US5] Add test `test_lazy_sweep_weak_refs` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T028 [P] [US5] Add test `test_weak_ref_value_dropped_but_allocation_preserved` in crates/rudo-gc/tests/lazy_sweep.rs
 
 ### Implementation for User Story 5
 
-- [ ] T029 [P] [US5] Modify lazy_sweep_page() in crates/rudo-gc/src/gc/gc.rs:
+- [X] T029 [P] [US5] Modify lazy_sweep_page() in crates/rudo-gc/src/gc/gc.rs:
   - Check weak_count() on each dead object
   - If weak_count > 0: only drop value, keep allocation (set dead flag)
   - If weak_count == 0: fully reclaim to free list
-- [ ] T030 [US5] Ensure GcBox::weak_count() and related methods are available for lazy sweep check
+- [X] T030 [US5] Ensure GcBox::weak_count() and related methods are available for lazy sweep check
 
 **Checkpoint**: User Story 5 complete - weak references work correctly with lazy sweep
 
@@ -178,17 +178,17 @@
 
 ### Tests for User Story 6
 
-- [ ] T031 [P] [US6] Add test `test_sweep_pending_returns_correct_count` in crates/rudo-gc/tests/lazy_sweep.rs
-- [ ] T032 [P] [US6] Add test `test_pending_sweep_pages_returns_accurate_count` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T031 [P] [US6] Add test `test_sweep_pending_returns_correct_count` in crates/rudo-gc/tests/lazy_sweep.rs
+- [X] T032 [P] [US6] Add test `test_pending_sweep_pages_returns_accurate_count` in crates/rudo-gc/tests/lazy_sweep.rs
 
 ### Implementation for User Story 6
 
-- [ ] T033 [P] [US6] Implement `sweep_pending()` function in crates/rudo-gc/src/gc/gc.rs:
+- [X] T033 [P] [US6] Implement `sweep_pending()` function in crates/rudo-gc/src/gc/gc.rs:
   - Sweeps up to specified number of pages
   - Returns count of pages actually swept
-- [ ] T034 [P] [US6] Implement `pending_sweep_count()` function in crates/rudo-gc/src/gc/gc.rs:
+- [X] T034 [P] [US6] Implement `pending_sweep_count()` function in crates/rudo-gc/src/gc/gc.rs:
   - Counts pages with PAGE_FLAG_NEEDS_SWEEP set
-- [ ] T035 [US6] Export public API functions in crates/rudo-gc/src/lib.rs:
+- [X] T035 [US6] Export public API functions in crates/rudo-gc/src/lib.rs:
   - `sweep_pending(num_pages: usize) -> usize`
   - `pending_sweep_pages() -> usize`
   - Add cfg(feature = "lazy-sweep") conditional compilation

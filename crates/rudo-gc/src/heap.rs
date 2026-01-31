@@ -8,7 +8,7 @@
 //! Memory is divided into 4KB pages. Each page contains objects of a single
 //! size class. This allows O(1) lookup of object metadata from its address.
 
-use std::cell::UnsafeCell;
+use std::cell::{Cell, UnsafeCell};
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 
@@ -426,6 +426,12 @@ pub const MAGIC_GC_PAGE: u32 = 0x5255_4447;
 pub const PAGE_FLAG_LARGE: u8 = 0x01;
 /// Flag: Page is an orphan (owner thread has terminated).
 pub const PAGE_FLAG_ORPHAN: u8 = 0x02;
+/// Flag: Page needs lazy sweep (has dead objects to reclaim).
+#[cfg(feature = "lazy-sweep")]
+pub const PAGE_FLAG_NEEDS_SWEEP: u8 = 0x04;
+/// Flag: All objects in page are dead (fast path for lazy sweep).
+#[cfg(feature = "lazy-sweep")]
+pub const PAGE_FLAG_ALL_DEAD: u8 = 0x08;
 
 /// Maximum number of u64 words in a bitmap to support 64KB pages with 16-byte blocks.
 pub const BITMAP_SIZE: usize = 64;
@@ -462,7 +468,11 @@ pub struct PageHeader {
     pub flags: u8,
     /// Thread ID of the owner thread (for work-stealing).
     pub owner_thread: u64,
-    /// Padding for alignment.
+    /// Count of dead objects in this page (for "all-dead" fast path).
+    #[cfg(feature = "lazy-sweep")]
+    pub dead_count: Cell<u16>,
+    /// Padding for alignment (used for dead_count when lazy-sweep is disabled).
+    #[cfg(not(feature = "lazy-sweep"))]
     _padding: [u8; 2],
     /// Bitmap of marked objects (atomic for concurrent marking).
     pub mark_bitmap: [AtomicU64; BITMAP_SIZE],
@@ -628,8 +638,66 @@ impl PageHeader {
     }
 
     /// Clear all allocated bits.
-    pub const fn clear_all_allocated(&mut self) {
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn clear_all_allocated(&mut self) {
         self.allocated_bitmap = [0; BITMAP_SIZE];
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Check if page needs lazy sweep.
+    pub const fn needs_sweep(&self) -> bool {
+        (self.flags & PAGE_FLAG_NEEDS_SWEEP) != 0
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Set the `needs_sweep` flag.
+    pub const fn set_needs_sweep(&mut self) {
+        self.flags |= PAGE_FLAG_NEEDS_SWEEP;
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Clear the `needs_sweep` flag.
+    pub const fn clear_needs_sweep(&mut self) {
+        self.flags &= !PAGE_FLAG_NEEDS_SWEEP;
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Check if all objects in page are dead.
+    pub const fn all_dead(&self) -> bool {
+        (self.flags & PAGE_FLAG_ALL_DEAD) != 0
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Set the `all_dead` flag.
+    pub const fn set_all_dead(&mut self) {
+        self.flags |= PAGE_FLAG_ALL_DEAD;
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Clear the `all_dead` flag.
+    pub const fn clear_all_dead(&mut self) {
+        self.flags &= !PAGE_FLAG_ALL_DEAD;
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Get the `dead_count`.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn dead_count(&self) -> u16 {
+        self.dead_count.get()
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Set the `dead_count`.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_dead_count(&self, count: u16) {
+        self.dead_count.set(count);
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Increment the `dead_count`.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn increment_dead_count(&self) {
+        self.dead_count.set(self.dead_count.get() + 1);
     }
 }
 
@@ -1078,10 +1146,37 @@ impl LocalHeap {
             return ptr;
         }
 
+        #[cfg(feature = "lazy-sweep")]
+        if let Some(ptr) = self.alloc_from_pending_sweep(class_index) {
+            self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
+            return ptr;
+        }
+
         let ptr = self.alloc_slow(size, class_index);
 
         self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
         ptr
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    fn alloc_from_pending_sweep(&mut self, class_index: usize) -> Option<NonNull<u8>> {
+        let block_size = SIZE_CLASSES[class_index];
+
+        let page_needing_sweep = self.pages.iter().find(|&&page_ptr| unsafe {
+            let header = page_ptr.as_ptr();
+            (header.read().flags & PAGE_FLAG_LARGE) == 0
+                && header.read().block_size as usize == block_size
+                && header.read().needs_sweep()
+        });
+
+        if page_needing_sweep.is_some() {
+            let reclaimed = crate::gc::sweep_pending(self, 1);
+            if reclaimed > 0 {
+                return self.alloc_from_free_list(class_index);
+            }
+        }
+
+        None
     }
 
     /// Try to allocate from the free list of an existing page.
@@ -1190,6 +1285,9 @@ impl LocalHeap {
                 generation: 0,
                 flags: 0,
                 owner_thread: get_thread_id(),
+                #[cfg(feature = "lazy-sweep")]
+                dead_count: Cell::new(0),
+                #[cfg(not(feature = "lazy-sweep"))]
                 _padding: [0; 2],
                 mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
                 dirty_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
@@ -1285,6 +1383,9 @@ impl LocalHeap {
                 generation: 0,
                 flags: PAGE_FLAG_LARGE,
                 owner_thread: get_thread_id(),
+                #[cfg(feature = "lazy-sweep")]
+                dead_count: Cell::new(0),
+                #[cfg(not(feature = "lazy-sweep"))]
                 _padding: [0; 2],
                 mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
                 dirty_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),

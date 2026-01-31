@@ -11,8 +11,9 @@ keywords = ["garbage-collection", "gc", "memory", "smart-pointer", "cycle-detect
 categories = ["memory-management", "rust-patterns"]
 
 [features]
-default = ["derive"]
+default = ["lazy-sweep", "derive"]
 derive = ["dep:rudo-gc-derive"]
+lazy-sweep = []
 test-util = []
 tokio = ["dep:tokio", "dep:tokio-util", "dep:rudo-gc-tokio-derive"]
 
