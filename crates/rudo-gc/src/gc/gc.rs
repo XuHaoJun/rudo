@@ -1187,6 +1187,7 @@ fn clear_all_marks_and_dirty(heap: &LocalHeap) {
             let header = page_ptr.as_ptr();
             (*header).clear_all_marks();
             (*header).clear_all_dirty();
+            #[cfg(feature = "lazy-sweep")]
             (*header).set_dead_count(0);
         }
     }
@@ -1389,10 +1390,6 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
     pending
 }
 
-/// Phase 2: Reclaim memory and rebuild free lists.
-///
-/// This phase runs AFTER all Drop functions have completed,
-/// so it's safe to reclaim memory.
 /// Phase 2: Reclaim memory and rebuild free lists.
 ///
 /// This phase runs AFTER all Drop functions have completed,
