@@ -130,7 +130,7 @@ As a developer, I want programmatic access to sweep operations, so that I can tr
 - **FR-009**: System MUST correctly handle weak references during lazy sweep, preserving allocation until weak ref is dropped.
 - **FR-010**: System MUST provide a public API function `sweep_pending(num_pages)` that sweeps up to the specified number of pages.
 - **FR-011**: System MUST provide a public API function `pending_sweep_pages()` that returns the count of pages awaiting sweep.
-- **FR-012**: System MUST use a batch size of up to 16 objects per page during lazy sweep to bound per-allocation overhead.
+- **FR-012**: ~~System MUST use a batch size of up to 16 objects per page during lazy sweep to bound per-allocation overhead.~~ **(REMOVED: Batch limit mechanism was removed due to excessive bugs in breakpoint recovery logic. Lazy sweep now processes entire pages at once.)**
 - **FR-013**: System MUST track which pages need sweep using per-page flags (PAGE_FLAG_NEEDS_SWEEP and PAGE_FLAG_ALL_DEAD).
 - **FR-014**: System MUST periodically perform lazy sweep work during safepoint checks to prevent unbounded heap growth.
 - **FR-015**: System MUST process "all dead" pages using a fast path that rebuilds free lists without examining individual objects.
@@ -141,7 +141,7 @@ As a developer, I want programmatic access to sweep operations, so that I can tr
 - **Sweep Flags**: Bit flags (PAGE_FLAG_NEEDS_SWEEP, PAGE_FLAG_ALL_DEAD) indicating page sweep status.
 - **Dead Object Counter**: Per-page counter tracking number of dead objects to enable "all-dead" optimization.
 - **Free List**: Per-page linked list of reclaimed objects available for allocation.
-- **Lazy Sweep Batch**: Fixed-size batch (16 objects) of sweep work performed during each lazy sweep operation.
+- **Lazy Sweep Batch**: ~~Fixed-size batch (16 objects) of sweep work performed during each lazy sweep operation.~~ **(REMOVED: Batch limit mechanism was removed due to bugs in breakpoint recovery. Pages are now swept completely in one operation.)**
 
 ## Success Criteria *(mandatory)*
 

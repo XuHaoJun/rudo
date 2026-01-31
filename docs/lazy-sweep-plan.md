@@ -160,7 +160,7 @@ for tcb in &tcbs {
 // Lazy Sweep Implementation
 // ============================================================================
 
-pub const SWEEP_BATCH_SIZE: usize = 16;
+pub const ~~SWEEP_BATCH_SIZE~~: usize = ~~16~~; **(REMOVED: Batch limit removed due to bugs in breakpoint recovery)**
 
 /// Lazily sweep dead objects from a page during allocation.
 /// Returns true if any objects were reclaimed.
@@ -189,9 +189,7 @@ pub unsafe fn lazy_sweep_page(
     let mut found_dead = false;
 
     for i in 0..obj_count {
-        if reclaimed >= SWEEP_BATCH_SIZE {
-            break;
-        }
+        // ~~if reclaimed >= SWEEP_BATCH_SIZE { break; }~~ (REMOVED: Batch limit removed)
 
         let is_alloc = (*header).is_allocated(i);
         let is_marked = (*header).is_marked(i);

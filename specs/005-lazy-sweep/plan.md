@@ -101,7 +101,7 @@ The following technical decisions need research before implementation:
 2. **Sweep Flags**: PAGE_FLAG_NEEDS_SWEEP, PAGE_FLAG_ALL_DEAD bit flags
 3. **Dead Object Counter**: u16 count per page for "all-dead" optimization
 4. **Free List**: Per-page linked list of reclaimed objects
-5. **Lazy Sweep Batch**: Fixed batch of 16 objects per sweep operation
+5. **~~Lazy Sweep Batch~~**: ~~Fixed batch of 16 objects per sweep operation~~ **(REMOVED: Batch limit removed due to bugs in breakpoint recovery)**
 
 ### API Contracts
 
