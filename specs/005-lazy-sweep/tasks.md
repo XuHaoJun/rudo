@@ -201,16 +201,16 @@
 
 **Purpose**: Performance validation, benchmarks, and documentation
 
-- [ ] T036 [P] Add benchmarks in crates/rudo-gc/tests/benchmarks/sweep_comparison.rs:
+- [X] T036 [P] Add benchmarks in crates/rudo-gc/tests/benchmarks/sweep_comparison.rs:
   - bench_sweep_eager_pause_time
   - bench_sweep_lazy_pause_time
   - bench_sweep_eager_throughput
   - bench_sweep_lazy_throughput
-- [ ] T037 [P] Run `./test.sh` to verify all tests pass including lazy_sweep tests
-- [ ] T038 Run `./clippy.sh` to verify zero warnings
-- [ ] T039 Run `./miri-test.sh` to verify unsafe code passes memory safety checks
-- [ ] T040 [P] Add SAFETY comments to all unsafe blocks in lazy sweep implementation
-- [ ] T041 Verify all acceptance scenarios from spec.md are tested
+- [X] T037 [P] Run `./test.sh` to verify all tests pass including lazy_sweep tests
+- [X] T038 Run `./clippy.sh` to verify zero warnings
+- [X] T039 Run `./miri-test.sh` to verify unsafe code passes memory safety checks
+- [X] T040 [P] Add SAFETY comments to all unsafe blocks in lazy sweep implementation
+- [X] T041 Verify all acceptance scenarios from spec.md are tested
 
 ---
 

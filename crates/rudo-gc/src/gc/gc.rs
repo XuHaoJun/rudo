@@ -1628,6 +1628,16 @@ const SWEEP_BATCH_SIZE: usize = 16;
 
 #[cfg(feature = "lazy-sweep")]
 #[allow(unsafe_op_in_unsafe_fn)]
+/// Performs lazy sweep on a single page, processing up to `SWEEP_BATCH_SIZE` objects.
+///
+/// # Safety
+///
+/// - `page_ptr` must point to a valid `PageHeader` for a page that needs sweeping
+/// - `block_size` must match the page's object size class
+/// - `obj_count` must match the page's maximum object count
+/// - `header_size` must be correctly calculated for the block size
+/// - The page must not be concurrently accessed by other threads during sweep
+/// - Caller must ensure no new allocations occur on this page during sweep
 unsafe fn lazy_sweep_page(
     page_ptr: NonNull<PageHeader>,
     block_size: usize,
@@ -1682,6 +1692,17 @@ unsafe fn lazy_sweep_page(
 
 #[cfg(feature = "lazy-sweep")]
 #[allow(unsafe_op_in_unsafe_fn)]
+/// Fast-path sweep for pages where all objects are dead.
+///
+/// # Safety
+///
+/// - `page_ptr` must point to a valid `PageHeader` for a page with all-dead objects
+/// - `block_size` must match the page's object size class
+/// - `obj_count` must match the page's maximum object count
+/// - `header_size` must be correctly calculated for the block size
+/// - The `PAGE_FLAG_ALL_DEAD` flag must be set on this page
+/// - The page must not be concurrently accessed by other threads during sweep
+/// - Caller must ensure no new allocations occur on this page during sweep
 unsafe fn lazy_sweep_page_all_dead(
     page_ptr: NonNull<PageHeader>,
     block_size: usize,
@@ -1731,6 +1752,13 @@ unsafe fn lazy_sweep_page_all_dead(
 /// Sweep up to `num_pages` pages that need lazy sweeping.
 ///
 /// Returns the number of pages actually swept.
+///
+/// # Safety
+///
+/// - `heap` must be a valid `LocalHeap` owned by the current thread
+/// - Only pages owned by this heap are swept (`PAGE_FLAG_LARGE` pages are skipped)
+/// - The heap's pages vector is not modified, only page metadata and free lists
+/// - Safe to call during allocation when pages need sweeping
 pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
     let mut swept = 0;
     let mut pages_to_sweep: Vec<NonNull<PageHeader>> = heap
@@ -1787,6 +1815,12 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
 #[cfg(feature = "lazy-sweep")]
 #[must_use]
 /// Returns the number of pages currently awaiting lazy sweep.
+///
+/// # Safety
+///
+/// - `heap` must be a valid `LocalHeap` owned by the current thread
+/// - This function only reads page metadata, no modifications are made
+/// - Safe to call from any context
 pub fn pending_sweep_count(heap: &LocalHeap) -> usize {
     heap.pages
         .iter()
