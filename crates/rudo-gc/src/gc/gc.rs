@@ -1801,11 +1801,11 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
                     if reclaimed == obj_count {
                         (*header).clear_needs_sweep();
                         (*header).set_dead_count(0);
+                        (*header).clear_all_dead();
                     } else {
                         #[allow(clippy::cast_possible_truncation)]
                         (*header).set_dead_count((*header).dead_count() - reclaimed as u16);
                     }
-                    (*header).clear_all_dead();
                     swept += 1;
                 } else if (*header).is_fully_marked() {
                     (*header).clear_needs_sweep();
