@@ -8,11 +8,11 @@
 //! Memory is divided into 4KB pages. Each page contains objects of a single
 //! size class. This allows O(1) lookup of object metadata from its address.
 
-use std::cell::{Cell, UnsafeCell};
+use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
 
 use sys_alloc::{Mmap, MmapOptions};
@@ -470,7 +470,7 @@ pub struct PageHeader {
     pub owner_thread: u64,
     /// Count of dead objects in this page (for "all-dead" fast path).
     #[cfg(feature = "lazy-sweep")]
-    pub dead_count: Cell<u16>,
+    pub dead_count: AtomicU16,
     /// Padding for alignment (used for dead_count when lazy-sweep is disabled).
     #[cfg(not(feature = "lazy-sweep"))]
     _padding: [u8; 2],
@@ -684,21 +684,21 @@ impl PageHeader {
     /// Get the `dead_count`.
     #[allow(clippy::missing_const_for_fn)]
     pub fn dead_count(&self) -> u16 {
-        self.dead_count.get()
+        self.dead_count.load(Ordering::Relaxed)
     }
 
     #[cfg(feature = "lazy-sweep")]
     /// Set the `dead_count`.
     #[allow(clippy::missing_const_for_fn)]
     pub fn set_dead_count(&self, count: u16) {
-        self.dead_count.set(count);
+        self.dead_count.store(count, Ordering::Relaxed);
     }
 
     #[cfg(feature = "lazy-sweep")]
     /// Increment the `dead_count`.
     #[allow(clippy::missing_const_for_fn)]
     pub fn increment_dead_count(&self) {
-        self.dead_count.set(self.dead_count.get() + 1);
+        let _ = self.dead_count.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -1312,7 +1312,7 @@ impl LocalHeap {
                 flags: 0,
                 owner_thread: get_thread_id(),
                 #[cfg(feature = "lazy-sweep")]
-                dead_count: Cell::new(0),
+                dead_count: AtomicU16::new(0),
                 #[cfg(not(feature = "lazy-sweep"))]
                 _padding: [0; 2],
                 mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
@@ -1410,7 +1410,7 @@ impl LocalHeap {
                 flags: PAGE_FLAG_LARGE,
                 owner_thread: get_thread_id(),
                 #[cfg(feature = "lazy-sweep")]
-                dead_count: Cell::new(0),
+                dead_count: AtomicU16::new(0),
                 #[cfg(not(feature = "lazy-sweep"))]
                 _padding: [0; 2],
                 mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
