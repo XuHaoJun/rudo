@@ -1176,7 +1176,7 @@ fn collect_major(heap: &mut LocalHeap) -> usize {
     reclaimed + reclaimed_large
 }
 
-/// Clear all mark bits and dirty bits in the heap.
+/// Clear all mark bits, dirty bits, and reset `dead_count` in the heap.
 fn clear_all_marks_and_dirty(heap: &LocalHeap) {
     for page_ptr in heap.all_pages() {
         // SAFETY: Page pointers in the heap are always valid
@@ -1184,6 +1184,7 @@ fn clear_all_marks_and_dirty(heap: &LocalHeap) {
             let header = page_ptr.as_ptr();
             (*header).clear_all_marks();
             (*header).clear_all_dirty();
+            (*header).set_dead_count(0);
         }
     }
 }
