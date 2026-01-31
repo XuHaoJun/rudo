@@ -1242,6 +1242,9 @@ impl LocalHeap {
                     // This prevents lazy_sweep_page_all_dead from incorrectly reclaiming it
                     if (*header).flags & PAGE_FLAG_ALL_DEAD != 0 {
                         (*header).clear_all_dead();
+                        // Reset dead_count since we just made an object live.
+                        // The page is no longer "all dead".
+                        (*header).set_dead_count(0);
                     }
 
                     return Some(NonNull::new_unchecked(obj_ptr));
