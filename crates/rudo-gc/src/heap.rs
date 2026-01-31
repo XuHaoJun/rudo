@@ -1166,18 +1166,32 @@ impl LocalHeap {
 
         let block_size = SIZE_CLASSES[class_index];
 
-        // TODO: Use a per-size-class index or cursor to avoid O(N) scan
-        let page_needing_sweep = self.pages.iter().find(|&&page_ptr| unsafe {
-            let header = page_ptr.as_ptr();
-            (header.read().flags & PAGE_FLAG_LARGE) == 0
-                && header.read().block_size as usize == block_size
-                && header.read().needs_sweep()
-        });
+        let page_ptrs: Vec<NonNull<PageHeader>> = self
+            .pages
+            .iter()
+            .filter(|&&page_ptr| unsafe {
+                let header = page_ptr.as_ptr();
+                (header.read().flags & PAGE_FLAG_LARGE) == 0
+                    && header.read().block_size as usize == block_size
+                    && header.read().needs_sweep()
+                    && header.read().dead_count() > 0
+            })
+            .copied()
+            .collect();
 
-        if page_needing_sweep.is_some() {
+        for page_ptr in page_ptrs {
             let reclaimed = crate::gc::sweep_pending(self, 1);
             if reclaimed > 0 {
-                return self.alloc_from_free_list(class_index);
+                if let Some(ptr) = self.alloc_from_free_list(class_index) {
+                    return Some(ptr);
+                }
+            }
+
+            unsafe {
+                let header = page_ptr.as_ptr();
+                if header.read().dead_count() == 0 {
+                    break;
+                }
             }
         }
 

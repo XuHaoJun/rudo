@@ -1813,6 +1813,12 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
                         (*header).set_dead_count(0);
                         (*header).clear_all_dead();
                     } else {
+                        debug_assert!(
+                            reclaimed <= (*header).dead_count() as usize,
+                            "reclaimed {} objects but dead_count is {}",
+                            reclaimed,
+                            (*header).dead_count()
+                        );
                         #[allow(clippy::cast_possible_truncation)]
                         (*header).set_dead_count((*header).dead_count() - reclaimed as u16);
                     }
