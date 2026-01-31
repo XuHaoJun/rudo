@@ -336,6 +336,7 @@ fn perform_multi_threaded_collect() {
                                 }
                                 (*header).set_needs_sweep();
                                 (*header).set_dead_count(total_dead);
+                                (*header).clear_all_marks();
                             }
                         } else {
                             if !(*header).is_fully_marked() {

@@ -315,4 +315,20 @@ mod lazy_sweep_invariant_tests {
             }
         }
     }
+
+    #[test]
+    fn test_mark_bits_not_persistent_on_unallocated_slots() {
+        let gc1 = Gc::new(1);
+        let gc2 = Gc::new(2);
+
+        collect();
+
+        assert_eq!(*gc1, 1);
+        assert_eq!(*gc2, 2);
+
+        collect();
+
+        assert_eq!(*gc1, 1);
+        assert_eq!(*gc2, 2);
+    }
 }
