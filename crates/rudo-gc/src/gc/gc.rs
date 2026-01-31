@@ -303,6 +303,12 @@ fn perform_multi_threaded_collect() {
         }
         super::sync::GC_MARK_IN_PROGRESS.store(false, std::sync::atomic::Ordering::Release);
 
+        // SAFETY: This fence ensures all mark bitmap writes from the marking phase
+        // are visible before any sweeping thread clears marks. Without this fence,
+        // a thread could start sweeping and clear marks that haven't yet propagated
+        // from a slow marking thread, causing live objects to be swept.
+        std::sync::atomic::fence(std::sync::atomic::Ordering::AcqRel);
+
         // Phase 3: Sweep ALL heaps
         for tcb in &tcbs {
             unsafe {
@@ -618,6 +624,10 @@ fn perform_multi_threaded_collect_full() {
             mark_major_roots_multi(&mut *tcb.heap.get(), &all_stack_roots);
         }
     }
+
+    // SAFETY: Fence ensures all mark bitmap writes are visible before sweeping.
+    // This is the same race condition as perform_multi_threaded_collect.
+    std::sync::atomic::fence(std::sync::atomic::Ordering::AcqRel);
 
     // Phase 3: Sweep ALL heaps
     for tcb in &tcbs {

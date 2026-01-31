@@ -146,12 +146,12 @@ mod lazy_sweep_api_tests {
     fn test_mark_phase_blocks_lazy_sweep() {
         use std::sync::atomic::Ordering;
 
-        rudo_gc::gc::sync::GC_MARK_IN_PROGRESS.store(true, Ordering::Relaxed);
+        rudo_gc::gc::sync::GC_MARK_IN_PROGRESS.store(true, Ordering::Release);
 
         let gc = Gc::new(42);
         assert_eq!(*gc, 42);
 
-        rudo_gc::gc::sync::GC_MARK_IN_PROGRESS.store(false, Ordering::Relaxed);
+        rudo_gc::gc::sync::GC_MARK_IN_PROGRESS.store(false, Ordering::Release);
 
         collect();
     }
