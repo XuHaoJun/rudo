@@ -282,6 +282,28 @@ mod lazy_sweep_invariant_tests {
     }
 
     #[test]
+    fn test_new_allocation_on_all_dead_page_survives() {
+        let mut gc_refs: Vec<Gc<i32>> = Vec::new();
+
+        for i in 0..20 {
+            gc_refs.push(Gc::new(i));
+        }
+
+        collect();
+
+        drop(gc_refs);
+
+        collect();
+
+        let gc = Gc::new(42);
+        assert_eq!(*gc, 42);
+
+        collect();
+
+        assert_eq!(*gc, 42);
+    }
+
+    #[test]
     fn test_dead_count_accumulates_across_collections() {
         let mut gc_refs: Vec<Gc<i32>> = Vec::new();
 

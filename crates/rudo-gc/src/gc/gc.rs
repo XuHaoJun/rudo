@@ -345,6 +345,9 @@ fn perform_multi_threaded_collect() {
                                 (*header).clear_all_marks();
                             }
                         } else {
+                            (*header).clear_needs_sweep();
+                            (*header).clear_all_dead();
+                            (*header).set_dead_count(0);
                             if !(*header).is_fully_marked() {
                                 let reclaimed = sweep_large_objects(&mut *tcb.heap.get(), false);
                                 objects_reclaimed += reclaimed;
@@ -1640,7 +1643,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
 
 #[cfg(feature = "lazy-sweep")]
 #[allow(unsafe_op_in_unsafe_fn)]
-/// Performs lazy sweep on a single page, processing up to `SWEEP_BATCH_SIZE` objects.
+/// Performs lazy sweep on a single page, reclaiming all dead objects.
 ///
 /// # Safety
 ///

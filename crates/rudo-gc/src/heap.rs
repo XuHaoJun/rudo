@@ -1237,6 +1237,12 @@ impl LocalHeap {
                     // Mark as allocated so it's tracked during sweep
                     (*header).set_allocated(idx as usize);
 
+                    // Clear ALL_DEAD flag since we're allocating a new live object
+                    // This prevents lazy_sweep_page_all_dead from incorrectly reclaiming it
+                    if (*header).flags & PAGE_FLAG_ALL_DEAD != 0 {
+                        (*header).clear_all_dead();
+                    }
+
                     return Some(NonNull::new_unchecked(obj_ptr));
                 }
             }
