@@ -25,6 +25,7 @@ The library is built on a **BiBOP (Big Bag of Pages)** memory layout, which allo
 - **ZST Optimization**: Zero-Sized Types (like `()`) are handled with zero heap allocation overhead.
 - **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`, enabling safe multi-threaded data sharing.
 - **Parallel Marking**: Work-stealing based parallel marking for multi-core scalability.
+- **Lazy Sweep**: Defers memory reclamation to allocation time, reducing STW pause times (enabled by default).
 - **Tokio Async Integration**: Full support for async/await with `GcRootSet`, `GcRootGuard`, and `#[gc::main]` macro (requires `tokio` feature).
 
 ## Installation
@@ -49,6 +50,17 @@ For Tokio async/await integration:
 [dependencies]
 rudo-gc = { version = "0.1.0", features = ["derive", "tokio"] }
 ```
+
+### Lazy Sweep (Enabled by Default)
+
+The `lazy-sweep` feature (enabled by default) defers memory reclamation to allocation time, reducing STW pause times. To disable:
+
+```toml
+[dependencies]
+rudo-gc = { version = "0.1.0", default-features = false }
+```
+
+Lazy sweep is recommended for applications where latency matters more than peak throughput. The eager sweep path (when disabled) may perform better in batch processing workloads.
 
 ## Quick Start
 
@@ -187,7 +199,8 @@ async fn main() {
 
 1.  **Allocation**: Uses thread-local bump-pointer allocation (TLAB) within size-class segments.
 2.  **Marking**: Employs a parallel-ready mark-sweep algorithm with work-stealing.
-3.  **Sweeping**: Reclaims memory into free lists for small objects or deallocates pages for large ones.
+3.  **Sweeping**: By default, uses lazy sweep to defer reclamation to allocation time, reducing STW pauses. Eager sweeping is available when the `lazy-sweep` feature is disabled.
+4.  **Lazy Sweep**: Pages with dead objects are marked during collection but swept lazily during subsequent allocations. This amortizes sweep work across allocations, reducing pause times.
 4.  **Generations**: Objects start in "Generation 0" and are promoted to "Generation 1" if they survive a Minor GC.
 5.  **Interior Mutability**: `GcCell<T>` provides a `RefCell`-like API with integrated write barriers to track old-to-young pointers.
 6.  **Safe Points**: Cooperative rendezvous protocol for multi-threaded GC coordination. Use `safepoint()` in long-running loops.
