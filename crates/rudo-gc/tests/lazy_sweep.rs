@@ -141,6 +141,20 @@ mod lazy_sweep_api_tests {
         }
         collect();
     }
+
+    #[test]
+    fn test_mark_phase_blocks_lazy_sweep() {
+        use std::sync::atomic::Ordering;
+
+        rudo_gc::gc::sync::GC_MARK_IN_PROGRESS.store(true, Ordering::Relaxed);
+
+        let gc = Gc::new(42);
+        assert_eq!(*gc, 42);
+
+        rudo_gc::gc::sync::GC_MARK_IN_PROGRESS.store(false, Ordering::Relaxed);
+
+        collect();
+    }
 }
 
 #[cfg(feature = "lazy-sweep")]
@@ -245,5 +259,60 @@ mod lazy_sweep_invariant_tests {
         collect();
 
         for _ in &gc_refs {}
+    }
+
+    #[test]
+    fn test_all_dead_flag_cleared_on_full_sweep() {
+        let mut gc_refs: Vec<Gc<i32>> = Vec::new();
+
+        for i in 0..10 {
+            gc_refs.push(Gc::new(i));
+        }
+
+        collect();
+
+        drop(gc_refs);
+
+        collect();
+        collect();
+        collect();
+
+        let gc = Gc::new(42);
+        assert_eq!(*gc, 42);
+    }
+
+    #[test]
+    fn test_dead_count_accumulates_across_collections() {
+        let mut gc_refs: Vec<Gc<i32>> = Vec::new();
+
+        for i in 0..20 {
+            gc_refs.push(Gc::new(i));
+        }
+
+        collect();
+
+        for _ in 0..5 {
+            gc_refs.remove(0);
+        }
+
+        collect();
+
+        for _ in 0..5 {
+            gc_refs.remove(0);
+        }
+
+        collect();
+
+        assert_eq!(gc_refs.len(), 10);
+        for (idx, gc) in gc_refs.iter().enumerate() {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_possible_wrap
+            )]
+            {
+                assert_eq!(*gc, (idx as i32 + 10).into());
+            }
+        }
     }
 }

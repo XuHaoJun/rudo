@@ -295,11 +295,13 @@ fn perform_multi_threaded_collect() {
 
         // Phase 2: Mark all reachable objects (tracing across all heaps)
         // We mark from each heap's perspective to ensure we find all cross-heap references
+        super::sync::GC_MARK_IN_PROGRESS.store(true, std::sync::atomic::Ordering::Release);
         for tcb in &tcbs {
             unsafe {
                 mark_major_roots_multi(&mut *tcb.heap.get(), &all_stack_roots);
             }
         }
+        super::sync::GC_MARK_IN_PROGRESS.store(false, std::sync::atomic::Ordering::Release);
 
         // Phase 3: Sweep ALL heaps
         for tcb in &tcbs {
@@ -328,11 +330,12 @@ fn perform_multi_threaded_collect() {
                             }
 
                             if allocated_count > 0 {
-                                if dead_count == allocated_count {
+                                let total_dead = (*header).dead_count() + dead_count;
+                                if total_dead == allocated_count {
                                     (*header).set_all_dead();
                                 }
                                 (*header).set_needs_sweep();
-                                (*header).set_dead_count(dead_count);
+                                (*header).set_dead_count(total_dead);
                             }
                         } else {
                             if !(*header).is_fully_marked() {
@@ -1800,8 +1803,8 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
                     } else {
                         #[allow(clippy::cast_possible_truncation)]
                         (*header).set_dead_count((*header).dead_count() - reclaimed as u16);
-                        (*header).clear_all_dead();
                     }
+                    (*header).clear_all_dead();
                     swept += 1;
                 } else if (*header).is_fully_marked() {
                     (*header).clear_needs_sweep();

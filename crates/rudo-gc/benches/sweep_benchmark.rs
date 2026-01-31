@@ -3,6 +3,12 @@
 //! Measures GC pause time, throughput and latency distribution
 //! to quantify the improvement from lazy sweep.
 
+#![allow(
+    clippy::use_self,
+    clippy::collection_is_never_read,
+    clippy::unreadable_literal
+)]
+
 use criterion::{criterion_group, criterion_main, Criterion};
 use rudo_gc::{collect, Gc, Trace};
 use std::hint::black_box;
@@ -92,7 +98,8 @@ fn bench_throughput_alloc(c: &mut Criterion) {
             for i in 0..10000 {
                 let _gc = Gc::new(i);
             }
-            black_box(collect());
+            collect();
+            black_box(());
         });
     });
 }
@@ -107,7 +114,8 @@ fn bench_throughput_alloc_dealloc(c: &mut Criterion) {
                     refs.remove(0);
                 }
             }
-            black_box(collect());
+            collect();
+            black_box(());
         });
     });
 }
@@ -116,6 +124,7 @@ fn bench_latency_distribution(c: &mut Criterion) {
     c.bench_function("latency_distribution_5000", |b| {
         b.iter_custom(|iterations| {
             let mut latencies = Vec::new();
+            #[allow(clippy::cast_possible_truncation)]
             let iter_count = iterations as usize;
             for _ in 0..iter_count {
                 let mut nodes = Vec::new();
@@ -137,6 +146,7 @@ fn bench_latency_distribution(c: &mut Criterion) {
             let p50 = latencies[idx50];
             let p95 = latencies[idx95];
             let p99 = latencies[idx99];
+            #[allow(clippy::cast_possible_truncation)]
             Duration::from_nanos(((p50.as_nanos() + p95.as_nanos() + p99.as_nanos()) / 3) as u64)
         });
     });

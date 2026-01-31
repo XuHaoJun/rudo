@@ -23,8 +23,15 @@
 //! - Use `try_lock()` when lock ordering is unclear
 
 use std::cell::RefCell;
+use std::sync::atomic::AtomicBool;
 
 const MAX_LOCK_DEPTH: usize = 16;
+
+/// Flag indicating whether the GC mark phase is currently in progress.
+///
+/// Used to prevent lazy sweeping during marking, which could cause race conditions
+/// where marked objects are swept before the mark phase completes.
+pub static GC_MARK_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static MIN_LOCK_ORDER_STACK: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(MAX_LOCK_DEPTH));

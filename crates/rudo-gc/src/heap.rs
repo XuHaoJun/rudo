@@ -1160,6 +1160,10 @@ impl LocalHeap {
 
     #[cfg(feature = "lazy-sweep")]
     fn alloc_from_pending_sweep(&mut self, class_index: usize) -> Option<NonNull<u8>> {
+        if crate::gc::sync::GC_MARK_IN_PROGRESS.load(std::sync::atomic::Ordering::Acquire) {
+            return None;
+        }
+
         let block_size = SIZE_CLASSES[class_index];
 
         // TODO: Use a per-size-class index or cursor to avoid O(N) scan
