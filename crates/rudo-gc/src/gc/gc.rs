@@ -1699,7 +1699,44 @@ unsafe fn lazy_sweep_page(
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     ) {
-                        Ok(_) => break,
+                        Ok(_) => {
+                            if (*header).is_allocated(i) {
+                                let next_head = current_free;
+                                if (*header)
+                                    .free_list_head
+                                    .compare_exchange(
+                                        u16::try_from(i).unwrap(),
+                                        old,
+                                        Ordering::AcqRel,
+                                        Ordering::Acquire,
+                                    )
+                                    .is_err()
+                                {
+                                    current_free = (*header).free_list_head();
+                                    if current_free == Some(u16::try_from(i).unwrap()) {
+                                        let next = obj_cast.read_unaligned();
+                                        let _ = (*header).free_list_head.compare_exchange(
+                                            u16::try_from(i).unwrap(),
+                                            next.unwrap_or(u16::MAX),
+                                            Ordering::AcqRel,
+                                            Ordering::Acquire,
+                                        );
+                                    }
+                                    current_free = if (*header).free_list_head()
+                                        == Some(u16::try_from(i).unwrap())
+                                    {
+                                        None
+                                    } else {
+                                        (*header).free_list_head()
+                                    };
+                                    obj_cast.write_unaligned(current_free);
+                                } else {
+                                    current_free = next_head;
+                                }
+                                continue;
+                            }
+                            break;
+                        }
                         Err(actual) => {
                             current_free = if actual == u16::MAX {
                                 None
@@ -1780,7 +1817,44 @@ unsafe fn lazy_sweep_page_all_dead(
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     ) {
-                        Ok(_) => break,
+                        Ok(_) => {
+                            if (*header).is_allocated(i) {
+                                let next_head = current_free;
+                                if (*header)
+                                    .free_list_head
+                                    .compare_exchange(
+                                        u16::try_from(i).unwrap(),
+                                        old,
+                                        Ordering::AcqRel,
+                                        Ordering::Acquire,
+                                    )
+                                    .is_err()
+                                {
+                                    current_free = (*header).free_list_head();
+                                    if current_free == Some(u16::try_from(i).unwrap()) {
+                                        let next = obj_cast.read_unaligned();
+                                        let _ = (*header).free_list_head.compare_exchange(
+                                            u16::try_from(i).unwrap(),
+                                            next.unwrap_or(u16::MAX),
+                                            Ordering::AcqRel,
+                                            Ordering::Acquire,
+                                        );
+                                    }
+                                    current_free = if (*header).free_list_head()
+                                        == Some(u16::try_from(i).unwrap())
+                                    {
+                                        None
+                                    } else {
+                                        (*header).free_list_head()
+                                    };
+                                    obj_cast.write_unaligned(current_free);
+                                } else {
+                                    current_free = next_head;
+                                }
+                                continue;
+                            }
+                            break;
+                        }
                         Err(actual) => {
                             current_free = if actual == u16::MAX {
                                 None

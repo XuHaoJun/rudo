@@ -691,21 +691,21 @@ impl PageHeader {
     /// Get the `dead_count`.
     #[allow(clippy::missing_const_for_fn)]
     pub fn dead_count(&self) -> u16 {
-        self.dead_count.load(Ordering::Relaxed)
+        self.dead_count.load(Ordering::Acquire)
     }
 
     #[cfg(feature = "lazy-sweep")]
     /// Set the `dead_count`.
     #[allow(clippy::missing_const_for_fn)]
     pub fn set_dead_count(&self, count: u16) {
-        self.dead_count.store(count, Ordering::Relaxed);
+        self.dead_count.store(count, Ordering::Release);
     }
 
     #[cfg(feature = "lazy-sweep")]
     /// Increment the `dead_count`.
     #[allow(clippy::missing_const_for_fn)]
     pub fn increment_dead_count(&self) {
-        let _ = self.dead_count.fetch_add(1, Ordering::Relaxed);
+        let _ = self.dead_count.fetch_add(1, Ordering::AcqRel);
     }
 
     #[cfg(feature = "lazy-sweep")]
@@ -1239,6 +1239,7 @@ impl LocalHeap {
                     && hdr.block_size as usize == block_size
                     && hdr.needs_sweep()
                     && hdr.dead_count() > 0
+                    && !hdr.all_dead()
             })
             .copied()
             .collect();
