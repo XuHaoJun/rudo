@@ -23,6 +23,9 @@ pub use gc::{
     set_collect_condition, CollectInfo,
 };
 
+#[cfg(feature = "lazy-sweep")]
+pub use gc::{pending_sweep_count, sweep_pending, sweep_specific_page};
+
 // Re-exports from marker
 pub use marker::{
     worker_mark_loop_with_registry, GcWorkerRegistry, ParallelMarkConfig, PerThreadMarkQueue,

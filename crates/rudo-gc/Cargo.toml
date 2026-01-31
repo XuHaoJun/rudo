@@ -11,8 +11,9 @@ keywords = ["garbage-collection", "gc", "memory", "smart-pointer", "cycle-detect
 categories = ["memory-management", "rust-patterns"]
 
 [features]
-default = ["derive"]
+default = ["lazy-sweep", "derive"]
 derive = ["dep:rudo-gc-derive"]
+lazy-sweep = []
 test-util = []
 tokio = ["dep:tokio", "dep:tokio-util", "dep:rudo-gc-tokio-derive"]
 
@@ -28,18 +29,14 @@ tokio-util = { version = "0.7", optional = true, features = ["rt"] }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
-# For benchmarking (future)
-# criterion = "0.5"
+# For benchmarking
+criterion = "0.8.1"
 # For atomic ordering verification
 loom = "0.7"
 
 [lints]
 workspace = true
 
-# [[bench]]
-# name = "alloc"
-# harness = false
-
-# [[bench]]
-# name = "collect"
-# harness = false
+[[bench]]
+name = "sweep_benchmark"
+harness = false

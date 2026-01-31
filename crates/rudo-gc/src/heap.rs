@@ -12,7 +12,7 @@ use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
 
 use sys_alloc::{Mmap, MmapOptions};
@@ -426,6 +426,12 @@ pub const MAGIC_GC_PAGE: u32 = 0x5255_4447;
 pub const PAGE_FLAG_LARGE: u8 = 0x01;
 /// Flag: Page is an orphan (owner thread has terminated).
 pub const PAGE_FLAG_ORPHAN: u8 = 0x02;
+/// Flag: Page needs lazy sweep (has dead objects to reclaim).
+#[cfg(feature = "lazy-sweep")]
+pub const PAGE_FLAG_NEEDS_SWEEP: u8 = 0x04;
+/// Flag: All objects in page are dead (fast path for lazy sweep).
+#[cfg(feature = "lazy-sweep")]
+pub const PAGE_FLAG_ALL_DEAD: u8 = 0x08;
 
 /// Maximum number of u64 words in a bitmap to support 64KB pages with 16-byte blocks.
 pub const BITMAP_SIZE: usize = 64;
@@ -459,22 +465,33 @@ pub struct PageHeader {
     /// Generation index (for future generational GC).
     pub generation: u8,
     /// Bitflags (`is_large_object`, `is_dirty`, etc.).
-    pub flags: u8,
+    pub flags: AtomicU8,
     /// Thread ID of the owner thread (for work-stealing).
     pub owner_thread: u64,
-    /// Padding for alignment.
+    /// Count of dead objects in this page (for "all-dead" fast path).
+    #[cfg(feature = "lazy-sweep")]
+    pub dead_count: AtomicU16,
+    /// Padding for alignment (used for dead_count when lazy-sweep is disabled).
+    #[cfg(not(feature = "lazy-sweep"))]
     _padding: [u8; 2],
     /// Bitmap of marked objects (atomic for concurrent marking).
     pub mark_bitmap: [AtomicU64; BITMAP_SIZE],
     /// Bitmap of dirty objects (atomic for concurrent write barriers).
     pub dirty_bitmap: [AtomicU64; BITMAP_SIZE],
-    /// Bitmap of allocated objects (non-atomic, only modified by owner thread).
-    pub allocated_bitmap: [u64; BITMAP_SIZE],
-    /// Index of first free slot in free list.
-    pub free_list_head: Option<u16>,
+    /// Bitmap of allocated objects (atomic for proper synchronization during sweep).
+    pub allocated_bitmap: [AtomicU64; BITMAP_SIZE],
+    /// Index of first free slot in free list (atomic for concurrent access).
+    #[cfg(feature = "lazy-sweep")]
+    pub free_list_head: AtomicU16,
+    /// Index of first free slot in free list (non-atomic, single-threaded).
+    #[cfg(not(feature = "lazy-sweep"))]
+    pub free_list_head: u16,
 }
 
 impl PageHeader {
+    #[cfg(feature = "lazy-sweep")]
+    const FREE_LIST_NONE: u16 = u16::MAX;
+
     /// Calculate the header size, rounded up to block alignment.
     #[must_use]
     pub const fn header_size(block_size: usize) -> usize {
@@ -552,7 +569,7 @@ impl PageHeader {
     pub fn is_fully_marked(&self) -> bool {
         for word_idx in 0..BITMAP_SIZE {
             let mark_word = self.mark_bitmap[word_idx].load(Ordering::Acquire);
-            let alloc_word = self.allocated_bitmap[word_idx];
+            let alloc_word = self.allocated_bitmap[word_idx].load(Ordering::Acquire);
             if (mark_word & alloc_word) != alloc_word {
                 return false;
             }
@@ -571,7 +588,7 @@ impl PageHeader {
     /// Clear all mark bits.
     pub fn clear_all_marks(&mut self) {
         for word in &self.mark_bitmap {
-            word.store(0, Ordering::Release);
+            word.store(0u64, Ordering::Release);
         }
     }
 
@@ -601,35 +618,190 @@ impl PageHeader {
     /// Clear all dirty bits.
     pub fn clear_all_dirty(&mut self) {
         for word in &self.dirty_bitmap {
-            word.store(0, Ordering::Release);
+            word.store(0u64, Ordering::Release);
         }
     }
 
     /// Check if an object at the given index is allocated.
     #[must_use]
-    pub const fn is_allocated(&self, index: usize) -> bool {
+    pub fn is_allocated(&self, index: usize) -> bool {
         let word = index / 64;
         let bit = index % 64;
-        (self.allocated_bitmap[word] & (1 << bit)) != 0
+        (self.allocated_bitmap[word].load(Ordering::Acquire) & (1 << bit)) != 0
     }
 
     /// Set the allocated bit for an object at the given index.
-    pub const fn set_allocated(&mut self, index: usize) {
+    pub fn set_allocated(&mut self, index: usize) {
         let word = index / 64;
         let bit = index % 64;
-        self.allocated_bitmap[word] |= 1 << bit;
+        self.allocated_bitmap[word].fetch_or(1u64 << bit, Ordering::AcqRel);
     }
 
     /// Clear the allocated bit for an object at the given index.
-    pub const fn clear_allocated(&mut self, index: usize) {
+    pub fn clear_allocated(&mut self, index: usize) {
         let word = index / 64;
         let bit = index % 64;
-        self.allocated_bitmap[word] &= !(1 << bit);
+        self.allocated_bitmap[word].fetch_and(!(1u64 << bit), Ordering::Release);
     }
 
     /// Clear all allocated bits.
-    pub const fn clear_all_allocated(&mut self) {
-        self.allocated_bitmap = [0; BITMAP_SIZE];
+    pub fn clear_all_allocated(&mut self) {
+        for word in &self.allocated_bitmap {
+            word.store(0u64, Ordering::Release);
+        }
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Check if page needs lazy sweep.
+    /// Uses Acquire ordering to synchronize with `dead_count` reads.
+    pub fn needs_sweep(&self) -> bool {
+        (self.flags.load(Ordering::Acquire) & PAGE_FLAG_NEEDS_SWEEP) != 0
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Set the `needs_sweep` flag.
+    /// Uses Release ordering to ensure prior writes are visible to readers.
+    pub fn set_needs_sweep(&self) {
+        self.flags
+            .fetch_or(PAGE_FLAG_NEEDS_SWEEP, Ordering::Release);
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Clear the `needs_sweep` flag.
+    /// Uses Release ordering. Callers must ensure proper synchronization
+    /// (e.g., atomic fence) before this if synchronizing with `dead_count` reads.
+    pub fn clear_needs_sweep(&self) {
+        self.flags
+            .fetch_and(!PAGE_FLAG_NEEDS_SWEEP, Ordering::Release);
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Check if all objects in page are dead.
+    /// Uses Acquire ordering for consistency with other lazy-sweep operations.
+    pub fn all_dead(&self) -> bool {
+        (self.flags.load(Ordering::Acquire) & PAGE_FLAG_ALL_DEAD) != 0
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Set the `all_dead` flag.
+    /// Uses Release ordering to ensure prior writes are visible.
+    pub fn set_all_dead(&self) {
+        self.flags.fetch_or(PAGE_FLAG_ALL_DEAD, Ordering::Release);
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Clear the `all_dead` flag.
+    /// Uses Release ordering.
+    pub fn clear_all_dead(&self) {
+        self.flags.fetch_and(!PAGE_FLAG_ALL_DEAD, Ordering::Release);
+    }
+
+    /// Get the raw flags value (for internal use).
+    /// Uses Relaxed ordering since `PAGE_FLAG_LARGE` is set once at creation
+    /// and `PAGE_FLAG_ORPHAN` is set during controlled cleanup.
+    pub fn flags(&self) -> u8 {
+        self.flags.load(Ordering::Relaxed)
+    }
+
+    /// Check if this is a large object page.
+    /// Uses Relaxed ordering since `PAGE_FLAG_LARGE` is set once at creation
+    /// and `PAGE_FLAG_ORPHAN` is set during controlled cleanup.
+    pub fn is_large_object(&self) -> bool {
+        (self.flags() & PAGE_FLAG_LARGE) != 0
+    }
+
+    /// Set the large object flag.
+    /// Uses Relaxed ordering since this is set once at page creation.
+    pub fn set_large_object(&self) {
+        self.flags.fetch_or(PAGE_FLAG_LARGE, Ordering::Relaxed);
+    }
+
+    /// Check if this page is orphaned (waiting to be freed).
+    /// Uses Relaxed ordering for single-threaded cleanup operations.
+    pub fn is_orphan(&self) -> bool {
+        (self.flags() & PAGE_FLAG_ORPHAN) != 0
+    }
+
+    /// Set the orphan flag.
+    /// Uses Relaxed ordering for single-threaded cleanup operations.
+    pub fn set_orphan(&self) {
+        self.flags.fetch_or(PAGE_FLAG_ORPHAN, Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Get the `dead_count`.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn dead_count(&self) -> u16 {
+        self.dead_count.load(Ordering::Acquire)
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Set the `dead_count`.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_dead_count(&self, count: u16) {
+        self.dead_count.store(count, Ordering::Release);
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Increment the `dead_count`.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn increment_dead_count(&self) {
+        let _ = self.dead_count.fetch_add(1, Ordering::AcqRel);
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Get the current free list head, returning `None` if empty.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn free_list_head(&self) -> Option<u16> {
+        let val = self.free_list_head.load(Ordering::Acquire);
+        if val == Self::FREE_LIST_NONE {
+            None
+        } else {
+            Some(val)
+        }
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Try to update the free list head atomically using CAS.
+    ///
+    /// Returns `Ok(Some(new))` on success, `Err(actual)` if CAS failed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(actual)` where `actual` is the current value of `free_list_head`
+    /// if another thread modified the free list concurrently.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn compare_exchange_free_list(
+        &self,
+        current: Option<u16>,
+        new: Option<u16>,
+    ) -> Result<Option<u16>, Option<u16>> {
+        let current_val = current.unwrap_or(Self::FREE_LIST_NONE);
+        let new_val = new.unwrap_or(Self::FREE_LIST_NONE);
+        self.free_list_head
+            .compare_exchange(current_val, new_val, Ordering::AcqRel, Ordering::Acquire)
+            .map(|v| {
+                if v == Self::FREE_LIST_NONE {
+                    None
+                } else {
+                    Some(v)
+                }
+            })
+            .map_err(|v| {
+                if v == Self::FREE_LIST_NONE {
+                    None
+                } else {
+                    Some(v)
+                }
+            })
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    /// Set the free list head directly (for initialization).
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_free_list_head(&self, head: Option<u16>) {
+        let val = head.unwrap_or(Self::FREE_LIST_NONE);
+        self.free_list_head.store(val, Ordering::Release);
     }
 }
 
@@ -1078,10 +1250,58 @@ impl LocalHeap {
             return ptr;
         }
 
+        #[cfg(feature = "lazy-sweep")]
+        if let Some(ptr) = self.alloc_from_pending_sweep(class_index) {
+            self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
+            return ptr;
+        }
+
         let ptr = self.alloc_slow(size, class_index);
 
         self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
         ptr
+    }
+
+    #[cfg(feature = "lazy-sweep")]
+    fn alloc_from_pending_sweep(&mut self, class_index: usize) -> Option<NonNull<u8>> {
+        if crate::gc::sync::GC_MARK_IN_PROGRESS.load(std::sync::atomic::Ordering::Acquire) {
+            return None;
+        }
+
+        let block_size = SIZE_CLASSES[class_index];
+
+        let page_ptrs: Vec<NonNull<PageHeader>> = self
+            .pages
+            .iter()
+            .filter(|&&page_ptr| unsafe {
+                let header = page_ptr.as_ptr();
+                let hdr = header.read();
+                !hdr.is_large_object()
+                    && hdr.block_size as usize == block_size
+                    && hdr.needs_sweep()
+                    && hdr.dead_count() > 0
+                    && !hdr.all_dead()
+            })
+            .copied()
+            .collect();
+
+        for page_ptr in page_ptrs {
+            let reclaimed = unsafe { crate::gc::sweep_specific_page(self, page_ptr, 1) };
+            if reclaimed > 0 {
+                if let Some(ptr) = self.alloc_from_free_list(class_index) {
+                    return Some(ptr);
+                }
+            }
+
+            unsafe {
+                let header = page_ptr.as_ptr();
+                if header.read().dead_count() == 0 {
+                    break;
+                }
+            }
+        }
+
+        None
     }
 
     /// Try to allocate from the free list of an existing page.
@@ -1090,14 +1310,16 @@ impl LocalHeap {
         for page_ptr in &self.pages {
             unsafe {
                 let header = page_ptr.as_ptr();
-                // We only care about regular pages (not large objects)
-                if ((*header).flags & PAGE_FLAG_LARGE) == 0
+                if !(*header).is_large_object()
                     && (*header).block_size as usize == block_size
-                    && (*header).free_list_head.is_some()
+                    && (*header).free_list_head().is_some()
                 {
-                    let idx = (*header).free_list_head.unwrap();
+                    let Some(idx) = (*header).free_list_head() else {
+                        continue;
+                    };
                     // Sanity check: ensure slot is not already allocated
                     // This can happen if free list and allocated_bitmap are out of sync
+                    // due to concurrent sweep/allocate operations.
                     if (*header).is_allocated(idx as usize) {
                         // Skip this slot - pop from free list and continue
                         let obj_ptr = page_ptr
@@ -1105,7 +1327,15 @@ impl LocalHeap {
                             .cast::<u8>()
                             .add((*header).header_size as usize + (idx as usize * block_size));
                         let next_head = obj_ptr.cast::<Option<u16>>().read_unaligned();
-                        (*header).free_list_head = next_head;
+                        // Pop from free list atomically using CAS
+                        if (*header)
+                            .compare_exchange_free_list(Some(idx), next_head)
+                            .is_err()
+                        {
+                            // CAS failed, another thread modified the free list
+                            // Retry with new head value
+                            continue;
+                        }
                         continue;
                     }
                     let h_size = (*header).header_size as usize;
@@ -1118,10 +1348,29 @@ impl LocalHeap {
                     // SAFETY: sweep_page (copy_sweep_logic) ensures this is a valid Option<u16>.
                     // We use read_unaligned to avoid potential alignment issues with the cast.
                     let next_head = obj_ptr.cast::<Option<u16>>().read_unaligned();
-                    (*header).free_list_head = next_head;
+                    // Pop from free list atomically using CAS
+                    loop {
+                        if (*header)
+                            .compare_exchange_free_list(Some(idx), next_head)
+                            .is_ok()
+                        {
+                            break;
+                        }
+                        // CAS failed - head changed, retry with new value
+                        // The loop naturally retries
+                    }
 
                     // Mark as allocated so it's tracked during sweep
                     (*header).set_allocated(idx as usize);
+
+                    // Clear ALL_DEAD flag since we're allocating a new live object
+                    // This prevents lazy_sweep_page_all_dead from incorrectly reclaiming it
+                    if (*header).all_dead() {
+                        (*header).clear_all_dead();
+                        // Reset dead_count since we just made an object live.
+                        // The page is no longer "all dead".
+                        (*header).set_dead_count(0);
+                    }
 
                     return Some(NonNull::new_unchecked(obj_ptr));
                 }
@@ -1188,13 +1437,19 @@ impl LocalHeap {
                 #[allow(clippy::cast_possible_truncation)]
                 header_size: h_size as u16,
                 generation: 0,
-                flags: 0,
+                flags: AtomicU8::new(0),
                 owner_thread: get_thread_id(),
+                #[cfg(feature = "lazy-sweep")]
+                dead_count: AtomicU16::new(0),
+                #[cfg(not(feature = "lazy-sweep"))]
                 _padding: [0; 2],
                 mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
                 dirty_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
-                allocated_bitmap: [0; BITMAP_SIZE],
-                free_list_head: None,
+                allocated_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
+                #[cfg(feature = "lazy-sweep")]
+                free_list_head: AtomicU16::new(PageHeader::FREE_LIST_NONE),
+                #[cfg(not(feature = "lazy-sweep"))]
+                free_list_head: 0,
             });
 
             // Initialize all slots with no-op drop
@@ -1283,13 +1538,19 @@ impl LocalHeap {
                 #[allow(clippy::cast_possible_truncation)]
                 header_size: h_size as u16,
                 generation: 0,
-                flags: PAGE_FLAG_LARGE,
+                flags: AtomicU8::new(PAGE_FLAG_LARGE),
                 owner_thread: get_thread_id(),
+                #[cfg(feature = "lazy-sweep")]
+                dead_count: AtomicU16::new(0),
+                #[cfg(not(feature = "lazy-sweep"))]
                 _padding: [0; 2],
                 mark_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
                 dirty_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
-                allocated_bitmap: [0; BITMAP_SIZE],
-                free_list_head: None,
+                allocated_bitmap: core::array::from_fn(|_| AtomicU64::new(0)),
+                #[cfg(feature = "lazy-sweep")]
+                free_list_head: AtomicU16::new(PageHeader::FREE_LIST_NONE),
+                #[cfg(not(feature = "lazy-sweep"))]
+                free_list_head: 0,
             });
             // Mark the single object as allocated
             (*header.as_ptr()).set_allocated(0);
@@ -1381,7 +1642,7 @@ impl LocalHeap {
     pub fn large_object_pages(&self) -> Vec<NonNull<PageHeader>> {
         self.pages
             .iter()
-            .filter(|p| unsafe { (p.as_ptr().read().flags & PAGE_FLAG_LARGE) != 0 })
+            .filter(|p| unsafe { p.as_ptr().read().is_large_object() })
             .copied()
             .collect()
     }
@@ -1397,7 +1658,7 @@ impl LocalHeap {
     pub fn large_object_pages_mut(&mut self) -> Vec<NonNull<PageHeader>> {
         self.pages
             .iter()
-            .filter(|p| unsafe { (p.as_ptr().read().flags & PAGE_FLAG_LARGE) != 0 })
+            .filter(|p| unsafe { p.as_ptr().read().is_large_object() })
             .copied()
             .collect()
     }
@@ -1497,7 +1758,7 @@ impl LocalHeap {
             for page_ptr in &self.pages {
                 if page_ptr.as_ptr() as usize == page_addr {
                     let header = page_ptr.as_ptr();
-                    let is_large = unsafe { ((*header).flags & PAGE_FLAG_LARGE) != 0 };
+                    let is_large = unsafe { (*header).is_large_object() };
                     if !is_large {
                         let block_size = unsafe { (*header).block_size as usize };
                         let header_size = PageHeader::header_size(block_size);
@@ -1515,9 +1776,30 @@ impl LocalHeap {
 
                             // Add back to free list
                             unsafe {
-                                let next_head = (*header).free_list_head;
+                                let mut next_head = (*header).free_list_head();
                                 obj_ptr.cast::<Option<u16>>().write_unaligned(next_head);
-                                (*header).free_list_head = Some(u16::try_from(idx).unwrap());
+                                // Push to free list atomically using CAS
+                                loop {
+                                    let old = next_head.unwrap_or(u16::MAX);
+                                    match (*header).free_list_head.compare_exchange(
+                                        old,
+                                        u16::try_from(idx).unwrap(),
+                                        Ordering::AcqRel,
+                                        Ordering::Acquire,
+                                    ) {
+                                        Ok(_) => break,
+                                        Err(actual) => {
+                                            next_head = if actual == u16::MAX {
+                                                None
+                                            } else {
+                                                Some(actual)
+                                            };
+                                            obj_ptr
+                                                .cast::<Option<u16>>()
+                                                .write_unaligned(next_head);
+                                        }
+                                    }
+                                }
                                 (*header).clear_allocated(idx);
                             }
                         }
@@ -1551,7 +1833,7 @@ impl Drop for LocalHeap {
                     continue;
                 }
 
-                let is_large = ((*header).flags & PAGE_FLAG_LARGE) != 0;
+                let is_large = (*header).is_large_object();
                 let block_size = (*header).block_size as usize;
                 let header_size = (*header).header_size as usize;
 
@@ -1562,7 +1844,7 @@ impl Drop for LocalHeap {
                     page_size()
                 };
 
-                (*header).flags |= PAGE_FLAG_ORPHAN;
+                (*header).set_orphan();
 
                 manager.orphan_pages.push(OrphanPage {
                     addr: page_ptr.as_ptr() as usize,
@@ -1593,7 +1875,7 @@ pub fn sweep_orphan_pages() {
 
     manager.orphan_pages.retain(|orphan| unsafe {
         let header = orphan.addr as *mut PageHeader;
-        let is_large = ((*header).flags & PAGE_FLAG_LARGE) != 0;
+        let is_large = (*header).is_large_object();
 
         let has_survivors = if is_large {
             (*header).is_marked(0)
@@ -1642,7 +1924,7 @@ pub fn sweep_orphan_pages() {
     for &(addr, _size, _is_large, _header_addr) in &to_reclaim {
         unsafe {
             let header = addr as *mut PageHeader;
-            let is_large = ((*header).flags & PAGE_FLAG_LARGE) != 0;
+            let is_large = (*header).is_large_object();
 
             if is_large {
                 let header_size = (*header).header_size as usize;
@@ -1971,13 +2253,13 @@ pub unsafe fn find_gc_box_from_ptr(
         }
 
         // 5.1. Allocation check for small objects (Large objects are always allocated if in map)
-        if header.flags & PAGE_FLAG_LARGE == 0 && !header.is_allocated(index) {
+        if !header.is_large_object() && !header.is_allocated(index) {
             return None;
         }
 
         // 6. Large object handling: with the map, we now support interior pointers!
         // For large objects, we ensure the pointer is within the allocated bounds.
-        if header.flags & PAGE_FLAG_LARGE != 0 {
+        if header.is_large_object() {
             if offset_to_use >= block_size_to_use {
                 return None;
             }
@@ -2016,18 +2298,18 @@ fn clear_local_heap() {
         for page_ptr in &heap.pages {
             let header = page_ptr.as_ptr();
             // Reset free list head
-            (*header).free_list_head = None;
+            (*header).set_free_list_head(None);
             // Clear allocated bitmap
-            for word in &mut (*header).allocated_bitmap {
-                *word = 0;
+            for word in &(*header).allocated_bitmap {
+                word.store(0u64, Ordering::Release);
             }
             // Clear mark bitmap
             for word in &mut (*header).mark_bitmap {
-                word.store(0, Ordering::Release);
+                word.store(0u64, Ordering::Release);
             }
             // Clear dirty bitmap
             for word in &mut (*header).dirty_bitmap {
-                word.store(0, Ordering::Release);
+                word.store(0u64, Ordering::Release);
             }
         }
 

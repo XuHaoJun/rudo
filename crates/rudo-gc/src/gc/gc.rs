@@ -234,6 +234,11 @@ pub fn collect() {
 }
 
 /// Perform collection as the collector thread.
+#[allow(
+    clippy::too_many_lines,
+    clippy::collapsible_else_if,
+    clippy::if_not_else
+)]
 fn perform_multi_threaded_collect() {
     crate::gc::marker::clear_overflow_queue();
 
@@ -290,19 +295,76 @@ fn perform_multi_threaded_collect() {
 
         // Phase 2: Mark all reachable objects (tracing across all heaps)
         // We mark from each heap's perspective to ensure we find all cross-heap references
+        super::sync::GC_MARK_IN_PROGRESS.store(true, std::sync::atomic::Ordering::Release);
         for tcb in &tcbs {
             unsafe {
                 mark_major_roots_multi(&mut *tcb.heap.get(), &all_stack_roots);
             }
         }
+        super::sync::GC_MARK_IN_PROGRESS.store(false, std::sync::atomic::Ordering::Release);
+
+        // SAFETY: This fence ensures all mark bitmap writes from the marking phase
+        // are visible before any sweeping thread clears marks. Without this fence,
+        // a thread could start sweeping and clear marks that haven't yet propagated
+        // from a slow marking thread, causing live objects to be swept.
+        std::sync::atomic::fence(std::sync::atomic::Ordering::AcqRel);
 
         // Phase 3: Sweep ALL heaps
         for tcb in &tcbs {
             unsafe {
-                let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
-                let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
-                objects_reclaimed += reclaimed + reclaimed_large;
-                promote_all_pages(&*tcb.heap.get());
+                #[cfg(feature = "lazy-sweep")]
+                {
+                    let heap = &*tcb.heap.get();
+                    for page_ptr in heap.all_pages() {
+                        let header = page_ptr.as_ptr();
+                        if !header.read().is_large_object() {
+                            let block_size = (*header).block_size as usize;
+                            let obj_count = (*header).obj_count as usize;
+
+                            let mut dead_count = 0u16;
+                            let mut allocated_count = 0u16;
+
+                            for i in 0..obj_count {
+                                if (*header).is_allocated(i) {
+                                    allocated_count += 1;
+                                    if !(*header).is_marked(i) {
+                                        dead_count += 1;
+                                    } else {
+                                        (*header).clear_mark(i);
+                                    }
+                                }
+                            }
+
+                            if allocated_count > 0 {
+                                let total_dead = (*header).dead_count() + dead_count;
+                                if total_dead == allocated_count {
+                                    (*header).set_all_dead();
+                                }
+                                (*header).set_needs_sweep();
+                                (*header).set_dead_count(total_dead);
+                                (*header).clear_all_marks();
+                            }
+                        } else {
+                            (*header).clear_needs_sweep();
+                            (*header).clear_all_dead();
+                            (*header).set_dead_count(0);
+                            if !(*header).is_fully_marked() {
+                                let reclaimed = sweep_large_objects(&mut *tcb.heap.get(), false);
+                                objects_reclaimed += reclaimed;
+                            } else {
+                                (*header).clear_all_marks();
+                            }
+                        }
+                    }
+                    promote_all_pages(&*tcb.heap.get());
+                }
+                #[cfg(not(feature = "lazy-sweep"))]
+                {
+                    let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
+                    let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
+                    objects_reclaimed += reclaimed + reclaimed_large;
+                    promote_all_pages(&*tcb.heap.get());
+                }
             }
         }
 
@@ -566,6 +628,10 @@ fn perform_multi_threaded_collect_full() {
         }
     }
 
+    // SAFETY: Fence ensures all mark bitmap writes are visible before sweeping.
+    // This is the same race condition as perform_multi_threaded_collect.
+    std::sync::atomic::fence(std::sync::atomic::Ordering::AcqRel);
+
     // Phase 3: Sweep ALL heaps
     for tcb in &tcbs {
         unsafe {
@@ -687,7 +753,7 @@ fn mark_minor_roots_multi(
             if (*header).generation == 0 {
                 continue;
             }
-            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+            if (*header).is_large_object() {
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
@@ -832,7 +898,7 @@ fn mark_minor_roots_parallel(
             if (*header).generation == 0 {
                 continue;
             }
-            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+            if (*header).is_large_object() {
                 continue;
             }
             dirty_pages.push(header);
@@ -1072,7 +1138,7 @@ fn promote_young_pages(heap: &mut LocalHeap) {
                 let mut survivors_count = 0;
 
                 for i in 0..crate::heap::BITMAP_SIZE {
-                    let bits = (*header).allocated_bitmap[i];
+                    let bits = (*header).allocated_bitmap[i].load(Ordering::Acquire);
                     if bits != 0 {
                         has_survivors = true;
                         survivors_count += bits.count_ones() as usize;
@@ -1113,7 +1179,7 @@ fn collect_major(heap: &mut LocalHeap) -> usize {
     reclaimed + reclaimed_large
 }
 
-/// Clear all mark bits and dirty bits in the heap.
+/// Clear all mark bits, dirty bits, and reset `dead_count` in the heap.
 fn clear_all_marks_and_dirty(heap: &LocalHeap) {
     for page_ptr in heap.all_pages() {
         // SAFETY: Page pointers in the heap are always valid
@@ -1121,6 +1187,8 @@ fn clear_all_marks_and_dirty(heap: &LocalHeap) {
             let header = page_ptr.as_ptr();
             (*header).clear_all_marks();
             (*header).clear_all_dirty();
+            #[cfg(feature = "lazy-sweep")]
+            (*header).set_dead_count(0);
         }
     }
 }
@@ -1154,7 +1222,7 @@ fn mark_minor_roots(heap: &LocalHeap) {
             if (*header).generation == 0 {
                 continue;
             }
-            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+            if (*header).is_large_object() {
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
@@ -1265,7 +1333,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
         unsafe {
             let header = page_ptr.as_ptr();
 
-            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+            if (*header).is_large_object() {
                 continue;
             }
 
@@ -1326,10 +1394,6 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
 ///
 /// This phase runs AFTER all Drop functions have completed,
 /// so it's safe to reclaim memory.
-/// Phase 2: Reclaim memory and rebuild free lists.
-///
-/// This phase runs AFTER all Drop functions have completed,
-/// so it's safe to reclaim memory.
 ///
 /// Optimized: Uses bitmap checks instead of `PendingDrop` tracking
 /// to eliminate `HashMap` overhead and reduce GC pause time.
@@ -1346,7 +1410,7 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
         unsafe {
             let header = page_ptr.as_ptr();
 
-            if (*header).flags & crate::heap::PAGE_FLAG_LARGE != 0 {
+            if (*header).is_large_object() {
                 continue;
             }
 
@@ -1393,7 +1457,7 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
                     // Slot is free - add to free list (if not already done above)
                     let obj_ptr = page_addr.add(header_size + i * block_size);
                     // Check if free list head was already written (for reclaimed slots)
-                    let current_head = (*header).free_list_head;
+                    let current_head = (*header).free_list_head();
                     let idx_as_u16 = u16::try_from(i).unwrap();
                     let head_written = current_head == Some(idx_as_u16);
 
@@ -1405,7 +1469,7 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
                     }
                 }
             }
-            (*header).free_list_head = free_head;
+            (*header).set_free_list_head(free_head);
         }
     }
 
@@ -1568,6 +1632,409 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
     // See sweep_phase2_reclaim for explanation.
 
     reclaimed
+}
+
+// ============================================================================
+// Lazy Sweep - Incremental sweep during allocation
+// ============================================================================
+
+#[cfg(feature = "lazy-sweep")]
+#[allow(unsafe_op_in_unsafe_fn)]
+/// Performs lazy sweep on a single page, reclaiming all dead objects.
+///
+/// # Safety
+///
+/// - `page_ptr` must point to a valid `PageHeader` for a page that needs sweeping
+/// - `block_size` must match the page's object size class
+/// - `obj_count` must match the page's maximum object count
+/// - `header_size` must be correctly calculated for the block size
+/// - The page must not be concurrently accessed by other threads during sweep
+/// - Caller must ensure no new allocations occur on this page during sweep
+unsafe fn lazy_sweep_page(
+    page_ptr: NonNull<PageHeader>,
+    block_size: usize,
+    obj_count: usize,
+    header_size: usize,
+) -> (usize, bool) {
+    let header = page_ptr.as_ptr();
+    let page_addr = page_ptr.as_ptr().cast::<u8>();
+    let mut reclaimed = 0;
+    let mut all_dead = true;
+
+    for i in 0..obj_count {
+        let is_allocated = (*header).is_allocated(i);
+        let is_marked = (*header).is_marked(i);
+
+        if is_allocated && !is_marked {
+            let obj_ptr = page_addr.add(header_size + i * block_size);
+            #[allow(clippy::cast_ptr_alignment)]
+            let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+            let weak_count = (*gc_box_ptr).weak_count();
+
+            if weak_count > 0 {
+                if !(*gc_box_ptr).is_value_dead() {
+                    ((*gc_box_ptr).drop_fn)(obj_ptr);
+                    (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                    (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
+                    (*gc_box_ptr).set_dead();
+                }
+                all_dead = false;
+            } else {
+                ((*gc_box_ptr).drop_fn)(obj_ptr);
+                (*gc_box_ptr).set_dead();
+
+                #[allow(clippy::cast_ptr_alignment)]
+                let obj_cast = obj_ptr.cast::<Option<u16>>();
+                let mut current_free = (*header).free_list_head();
+                obj_cast.write_unaligned(current_free);
+                loop {
+                    let old = current_free.unwrap_or(u16::MAX);
+                    match (*header).free_list_head.compare_exchange(
+                        old,
+                        u16::try_from(i).unwrap(),
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => {
+                            if (*header).is_allocated(i) {
+                                let next_head = current_free;
+                                if (*header)
+                                    .free_list_head
+                                    .compare_exchange(
+                                        u16::try_from(i).unwrap(),
+                                        old,
+                                        Ordering::AcqRel,
+                                        Ordering::Acquire,
+                                    )
+                                    .is_err()
+                                {
+                                    current_free = (*header).free_list_head();
+                                    if current_free == Some(u16::try_from(i).unwrap()) {
+                                        let next = obj_cast.read_unaligned();
+                                        let _ = (*header).free_list_head.compare_exchange(
+                                            u16::try_from(i).unwrap(),
+                                            next.unwrap_or(u16::MAX),
+                                            Ordering::AcqRel,
+                                            Ordering::Acquire,
+                                        );
+                                    }
+                                    current_free = if (*header).free_list_head()
+                                        == Some(u16::try_from(i).unwrap())
+                                    {
+                                        None
+                                    } else {
+                                        (*header).free_list_head()
+                                    };
+                                    obj_cast.write_unaligned(current_free);
+                                } else {
+                                    current_free = next_head;
+                                }
+                                continue;
+                            }
+                            break;
+                        }
+                        Err(actual) => {
+                            current_free = if actual == u16::MAX {
+                                None
+                            } else {
+                                Some(actual)
+                            };
+                            obj_cast.write_unaligned(current_free);
+                        }
+                    }
+                }
+
+                (*header).clear_allocated(i);
+                reclaimed += 1;
+            }
+        } else {
+            (*header).clear_mark(i);
+            all_dead = false;
+        }
+    }
+
+    (reclaimed, all_dead)
+}
+
+#[cfg(feature = "lazy-sweep")]
+#[allow(unsafe_op_in_unsafe_fn)]
+/// Fast-path sweep for pages where all objects are dead.
+///
+/// # Safety
+///
+/// - `page_ptr` must point to a valid `PageHeader` for a page with all-dead objects
+/// - `block_size` must match the page's object size class
+/// - `obj_count` must match the page's maximum object count
+/// - `header_size` must be correctly calculated for the block size
+/// - The `PAGE_FLAG_ALL_DEAD` flag must be set on this page
+/// - The page must not be concurrently accessed by other threads during sweep
+/// - Caller must ensure no new allocations occur on this page during sweep
+/// - After this function returns, the caller is responsible for:
+///   - Clearing `PAGE_FLAG_ALL_DEAD` (via `clear_all_dead()`)
+///   - Clearing `PAGE_FLAG_NEEDS_SWEEP` (via `clear_needs_sweep()`)
+///   - Resetting `dead_count` to 0 (via `set_dead_count(0)`)
+unsafe fn lazy_sweep_page_all_dead(
+    page_ptr: NonNull<PageHeader>,
+    block_size: usize,
+    obj_count: usize,
+    header_size: usize,
+) -> usize {
+    let header = page_ptr.as_ptr();
+    let page_addr = page_ptr.as_ptr().cast::<u8>();
+    let mut reclaimed = 0;
+
+    for i in 0..obj_count {
+        if (*header).is_allocated(i) {
+            let obj_ptr = page_addr.add(header_size + i * block_size);
+            #[allow(clippy::cast_ptr_alignment)]
+            let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+
+            let weak_count = (*gc_box_ptr).weak_count();
+
+            if weak_count > 0 {
+                if !(*gc_box_ptr).is_value_dead() {
+                    ((*gc_box_ptr).drop_fn)(obj_ptr);
+                    (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                    (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
+                    (*gc_box_ptr).set_dead();
+                }
+            } else {
+                ((*gc_box_ptr).drop_fn)(obj_ptr);
+
+                #[allow(clippy::cast_ptr_alignment)]
+                let obj_cast = obj_ptr.cast::<Option<u16>>();
+                let mut current_free = (*header).free_list_head();
+                obj_cast.write_unaligned(current_free);
+                loop {
+                    let old = current_free.unwrap_or(u16::MAX);
+                    match (*header).free_list_head.compare_exchange(
+                        old,
+                        u16::try_from(i).unwrap(),
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => {
+                            if (*header).is_allocated(i) {
+                                let next_head = current_free;
+                                if (*header)
+                                    .free_list_head
+                                    .compare_exchange(
+                                        u16::try_from(i).unwrap(),
+                                        old,
+                                        Ordering::AcqRel,
+                                        Ordering::Acquire,
+                                    )
+                                    .is_err()
+                                {
+                                    current_free = (*header).free_list_head();
+                                    if current_free == Some(u16::try_from(i).unwrap()) {
+                                        let next = obj_cast.read_unaligned();
+                                        let _ = (*header).free_list_head.compare_exchange(
+                                            u16::try_from(i).unwrap(),
+                                            next.unwrap_or(u16::MAX),
+                                            Ordering::AcqRel,
+                                            Ordering::Acquire,
+                                        );
+                                    }
+                                    current_free = if (*header).free_list_head()
+                                        == Some(u16::try_from(i).unwrap())
+                                    {
+                                        None
+                                    } else {
+                                        (*header).free_list_head()
+                                    };
+                                    obj_cast.write_unaligned(current_free);
+                                } else {
+                                    current_free = next_head;
+                                }
+                                continue;
+                            }
+                            break;
+                        }
+                        Err(actual) => {
+                            current_free = if actual == u16::MAX {
+                                None
+                            } else {
+                                Some(actual)
+                            };
+                            obj_cast.write_unaligned(current_free);
+                        }
+                    }
+                }
+
+                (*header).clear_allocated(i);
+                reclaimed += 1;
+            }
+            (*header).clear_mark(i);
+        }
+    }
+
+    reclaimed
+}
+
+#[cfg(feature = "lazy-sweep")]
+#[must_use]
+/// Sweep up to `num_pages` pages that need lazy sweeping.
+///
+/// Returns the number of pages actually swept.
+///
+/// # Safety
+///
+/// - `heap` must be a valid `LocalHeap` owned by the current thread
+/// - Only pages owned by this heap are swept (`PAGE_FLAG_LARGE` pages are skipped)
+/// - The heap's pages vector is not modified, only page metadata and free lists
+/// - Safe to call during allocation when pages need sweeping
+pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
+    let mut swept = 0;
+    let mut pages_to_sweep: Vec<NonNull<PageHeader>> = heap
+        .pages
+        .iter()
+        .filter(|&&page_ptr| unsafe {
+            let header = page_ptr.as_ptr();
+            let hdr = header.read();
+            !hdr.is_large_object() && hdr.needs_sweep()
+        })
+        .copied()
+        .take(num_pages)
+        .collect();
+
+    for page_ptr in pages_to_sweep {
+        unsafe {
+            let header = page_ptr.as_ptr();
+            let block_size = (*header).block_size as usize;
+            let obj_count = (*header).obj_count as usize;
+            let header_size = PageHeader::header_size(block_size);
+
+            if header.read().all_dead() {
+                lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
+                (*header).clear_all_dead();
+                std::sync::atomic::fence(Ordering::Release);
+                (*header).clear_needs_sweep();
+                (*header).set_dead_count(0);
+                swept += 1;
+            } else {
+                let (reclaimed, all_dead) =
+                    lazy_sweep_page(page_ptr, block_size, obj_count, header_size);
+                if reclaimed > 0 {
+                    if all_dead && reclaimed == obj_count {
+                        (*header).set_all_dead();
+                    }
+                    if reclaimed == obj_count {
+                        std::sync::atomic::fence(Ordering::Release);
+                        (*header).clear_needs_sweep();
+                        (*header).set_dead_count(0);
+                        (*header).clear_all_dead();
+                    } else {
+                        debug_assert!(
+                            reclaimed <= (*header).dead_count() as usize,
+                            "reclaimed {} objects but dead_count is {}",
+                            reclaimed,
+                            (*header).dead_count()
+                        );
+                        #[allow(clippy::cast_possible_truncation)]
+                        (*header).set_dead_count((*header).dead_count() - reclaimed as u16);
+                    }
+                    swept += 1;
+                } else if (*header).is_fully_marked() {
+                    std::sync::atomic::fence(Ordering::Release);
+                    (*header).clear_needs_sweep();
+                    (*header).set_dead_count(0);
+                }
+            }
+        }
+    }
+
+    swept
+}
+
+#[cfg(feature = "lazy-sweep")]
+#[allow(unsafe_op_in_unsafe_fn)]
+/// Sweep a specific page, returning the number of reclaimed objects.
+///
+/// Unlike `sweep_pending` which sweeps arbitrary pages from the heap,
+/// this function sweeps the exact page specified. This is used by
+/// `alloc_from_pending_sweep` to ensure pages with dead objects are
+/// swept before attempting allocation.
+///
+/// # Safety
+///
+/// - `heap` must be a valid `LocalHeap` owned by the current thread
+/// - `page_ptr` must point to a valid `PageHeader` for a page owned by this heap
+/// - Only non-large pages are swept (large objects use eager sweep)
+/// - The heap's pages vector is not modified, only page metadata and free lists
+/// - Safe to call during allocation when pages need sweeping
+pub unsafe fn sweep_specific_page(
+    heap: &mut LocalHeap,
+    page_ptr: NonNull<crate::heap::PageHeader>,
+    _num_pages: usize,
+) -> usize {
+    let mut reclaimed = 0;
+    unsafe {
+        let header = page_ptr.as_ptr();
+        let block_size = (*header).block_size as usize;
+        let obj_count = (*header).obj_count as usize;
+        let header_size = crate::heap::PageHeader::header_size(block_size);
+
+        if header.read().all_dead() {
+            lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
+            (*header).clear_all_dead();
+            std::sync::atomic::fence(Ordering::Release);
+            (*header).clear_needs_sweep();
+            (*header).set_dead_count(0);
+            reclaimed = obj_count;
+        } else {
+            let (reclaimed_count, all_dead) =
+                lazy_sweep_page(page_ptr, block_size, obj_count, header_size);
+            if reclaimed_count > 0 {
+                if all_dead && reclaimed_count == obj_count {
+                    (*header).set_all_dead();
+                }
+                if reclaimed_count == obj_count {
+                    std::sync::atomic::fence(Ordering::Release);
+                    (*header).clear_needs_sweep();
+                    (*header).set_dead_count(0);
+                    (*header).clear_all_dead();
+                } else {
+                    debug_assert!(
+                        reclaimed_count <= (*header).dead_count() as usize,
+                        "reclaimed {} objects but dead_count is {}",
+                        reclaimed_count,
+                        (*header).dead_count()
+                    );
+                    #[allow(clippy::cast_possible_truncation)]
+                    (*header).set_dead_count((*header).dead_count() - reclaimed_count as u16);
+                }
+                reclaimed = reclaimed_count;
+            } else if (*header).is_fully_marked() {
+                std::sync::atomic::fence(Ordering::Release);
+                (*header).clear_needs_sweep();
+                (*header).set_dead_count(0);
+            }
+        }
+    }
+
+    reclaimed
+}
+
+#[cfg(feature = "lazy-sweep")]
+#[must_use]
+/// Returns the number of pages currently awaiting lazy sweep.
+///
+/// # Safety
+///
+/// - `heap` must be a valid `LocalHeap` owned by the current thread
+/// - This function only reads page metadata, no modifications are made
+/// - Safe to call from any context
+pub fn pending_sweep_count(heap: &LocalHeap) -> usize {
+    heap.pages
+        .iter()
+        .filter(|&&page_ptr| unsafe {
+            let header = page_ptr.as_ptr();
+            let hdr = header.read();
+            !hdr.is_large_object() && hdr.needs_sweep()
+        })
+        .count()
 }
 
 // ============================================================================
