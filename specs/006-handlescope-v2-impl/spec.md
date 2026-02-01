@@ -1,6 +1,6 @@
 # Feature Specification: HandleScope v2 Implementation
 
-**Feature Branch**: `001-handlescope-v2-impl`
+**Feature Branch**: `006-handlescope-v2-impl`
 **Created**: 2026-02-01
 **Status**: Draft
 **Input**: User description: "implement handlescope! ignore Interior pointer fix(already fixed), v8: @learn-projects/v8/ rudo-gc: @crates/rudo-gc/"

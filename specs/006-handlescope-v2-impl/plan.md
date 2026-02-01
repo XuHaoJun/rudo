@@ -1,7 +1,7 @@
 # Implementation Plan: HandleScope v2 Implementation
 
-**Branch**: `001-handlescope-v2-impl` | **Date**: 2026-02-01 | **Spec**: [link](../spec.md)
-**Input**: Feature specification from `/specs/001-handlescope-v2-impl/spec.md`
+**Branch**: `006-handlescope-v2-impl` | **Date**: 2026-02-01 | **Spec**: [link](../spec.md)
+**Input**: Feature specification from `/specs/006-handlescope-v2-impl/spec.md`
 
 ## Summary
 
@@ -69,7 +69,7 @@ The implementation follows V8's HandleScope design patterns while leveraging Rus
 ### Documentation (this feature)
 
 ```text
-specs/001-handlescope-v2-impl/
+specs/006-handlescope-v2-impl/
 ├── plan.md              # This file
 ├── research.md          # Phase 0 output
 ├── data-model.md        # Phase 1 output
