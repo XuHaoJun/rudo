@@ -295,3 +295,32 @@ fn test_spawn_with_gc_nested_async_operations() {
         assert_eq!(result.unwrap(), 15);
     });
 }
+
+#[test]
+fn test_spawn_with_gc_macro_complex_expression() {
+    #[derive(Trace, Debug, PartialEq)]
+    struct Container {
+        gc: Gc<AsyncTestData>,
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        rudo_gc::test_util::reset();
+
+        let _tcb = current_thread_control_block().expect("should have TCB");
+        let container = Container {
+            gc: Gc::new(AsyncTestData { value: 123 }),
+        };
+
+        let result: std::result::Result<i32, _> = rudo_gc::spawn_with_gc!(container.gc => |h| {
+            unsafe { h.get().value }
+        })
+        .await;
+
+        assert_eq!(result.unwrap(), 123);
+    });
+}

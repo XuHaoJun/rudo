@@ -534,6 +534,7 @@ impl<'env> EscapeableHandleScope<'env> {
     /// DO NOT remove this parameter even if unused at runtime.
     /// The return type's lifetime depends on it for soundness.
     #[inline]
+    #[allow(dead_code)]
     pub fn escape<'parent, T: Trace + 'static>(
         &self,
         _parent: &'parent HandleScope<'_>,

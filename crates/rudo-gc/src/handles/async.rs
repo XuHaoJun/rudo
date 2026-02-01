@@ -509,6 +509,11 @@ impl<T: Trace + 'static> AsyncHandle<T> {
     ///
     /// The `AsyncHandleScope` that created this handle must still be alive.
     /// The handle must not be used after the scope is dropped.
+    ///
+    /// **Undefined behavior will occur** if these constraints are violated:
+    /// the returned reference may be dangling, pointing to freed memory.
+    ///
+    /// In debug builds, use `scope.with_guard()` for checked handle access.
     #[inline]
     pub unsafe fn get(&self) -> &T {
         let slot = unsafe { &*self.slot };
