@@ -226,6 +226,26 @@ impl LocalHandles {
         &self.scope_data
     }
 
+    /// Returns the allocation boundaries (next, limit) pointing past the last
+    /// allocated slot. Used to preserve block chain continuity when nested
+    /// `HandleScopes` are created after a scope has been dropped.
+    ///
+    /// When a `HandleScope` is dropped, it restores the previous next/limit.
+    /// If no previous scope exists (next=null), we preserve the block chain
+    /// by returning (end, end) so subsequent allocations know where to continue.
+    #[inline]
+    pub fn last_allocation_bounds(&self) -> (*mut HandleSlot, *mut HandleSlot) {
+        self.blocks.map_or(
+            (std::ptr::null_mut(), std::ptr::null_mut()),
+            |block_ptr| unsafe {
+                let block = block_ptr.as_ref();
+                let start = block.slots.get() as *mut HandleSlot;
+                let end = start.add(HANDLE_BLOCK_SIZE);
+                (end, end)
+            },
+        )
+    }
+
     /// Adds a new block to the handle chain.
     ///
     /// # Returns

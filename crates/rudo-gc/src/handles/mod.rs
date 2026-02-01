@@ -139,10 +139,25 @@ impl<'env> HandleScope<'env> {
 
         // SAFETY: We have exclusive access via the borrow of tcb
         let (prev_next, prev_limit, prev_level) = unsafe {
+            // Read scope data while immutable to avoid stacked borrows conflict
+            let handles_ref = &*local_handles;
+            let prev_next = handles_ref.scope_data.next;
+            let prev_limit = handles_ref.scope_data.limit;
+
+            // Preserve block chain continuity when no active scope exists.
+            // This prevents block fragmentation: without this, each scope
+            // created after a scope is dropped would create a new block,
+            // orphaning the previous block's slots.
+            let (prev_next, prev_limit) = if prev_next.is_null() {
+                let bounds = handles_ref.last_allocation_bounds();
+                (bounds.0, bounds.1)
+            } else {
+                (prev_next, prev_limit)
+            };
+
+            // Now get mutable borrow for updating level
             let handles = &mut *local_handles;
             let scope_data = handles.scope_data_mut();
-            let prev_next = scope_data.next;
-            let prev_limit = scope_data.limit;
             let prev_level = scope_data.level;
             scope_data.level = prev_level
                 .checked_add(1)
