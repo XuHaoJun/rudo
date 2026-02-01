@@ -198,13 +198,13 @@
 **Purpose**: Improvements that affect multiple user stories
 
 - [X] T073 [P] Update lib.rs exports to include all new HandleScope types and macros
-- [ ] T074 Update GC collect_roots() to use iterate_all_handles() in `crates/rudo-gc/src/gc.rs`
-- [ ] T075 [P] Add comprehensive doc comments with examples for all public APIs in `crates/rudo-gc/src/handles/mod.rs`
-- [ ] T076 [P] Add comprehensive doc comments with examples for async types in `crates/rudo-gc/src/handles/async.rs`
-- [ ] T077 Add SAFETY comments for all unsafe operations in `crates/rudo-gc/src/handles/`
-- [ ] T078 Run quickstart.md examples validation
-- [ ] T079 [P] Miri tests for unsafe code validation in `crates/rudo-gc/src/tests/handlescope_miri.rs`
-- [ ] T080 GC integration tests to verify handles are correctly tracked as roots in `crates/rudo-gc/src/tests/handlescope_integration.rs`
+- [X] T074 Update GC collect_roots() to use iterate_all_handles() in `crates/rudo-gc/src/gc.rs`
+- [X] T075 [P] Add comprehensive doc comments with examples for all public APIs in `crates/rudo-gc/src/handles/mod.rs`
+- [X] T076 [P] Add comprehensive doc comments with examples for async types in `crates/rudo-gc/src/handles/async.rs`
+- [X] T077 Add SAFETY comments for all unsafe operations in `crates/rudo-gc/src/handles/`
+- [X] T078 Run quickstart.md examples validation
+- [X] T079 [P] Miri tests for unsafe code validation in `crates/rudo-gc/tests/handlescope_miri.rs`
+- [X] T080 GC integration tests to verify handles are correctly tracked as roots in `crates/rudo-gc/tests/handlescope_integration.rs`
 - [X] T081 [P] Run ./clippy.sh and fix all warnings
 - [X] T082 [P] Run ./test.sh and ensure all tests pass
 

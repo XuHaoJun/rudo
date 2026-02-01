@@ -734,6 +734,14 @@ fn mark_minor_roots_multi(
         }
     });
 
+    for (_, tcb) in stack_roots {
+        tcb.iterate_all_handles(|ptr| unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+                mark_object_minor(gc_box, &mut visitor);
+            }
+        });
+    }
+
     #[cfg(feature = "tokio")]
     #[allow(clippy::explicit_iter_loop)]
     {
@@ -994,6 +1002,14 @@ fn mark_major_roots_multi(
             }
         }
     });
+
+    for (_, tcb) in stack_roots {
+        tcb.iterate_all_handles(|ptr| unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+                mark_object(gc_box, &mut visitor);
+            }
+        });
+    }
 
     #[cfg(feature = "tokio")]
     #[allow(clippy::explicit_iter_loop)]

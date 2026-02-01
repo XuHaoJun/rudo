@@ -1,10 +1,10 @@
 //! Local handle storage for per-thread handle management.
 //!
 //! This module implements the core data structures for handle-based GC root tracking:
-//! - `HandleSlot`: Individual handle storage (single word)
-//! - `HandleBlock`: Fixed-size array of slots (256 slots)
-//! - `HandleScopeData`: Runtime state for scope management
-//! - `LocalHandles`: Per-thread handle storage manager
+//! - [`HandleSlot`]: Individual handle storage (single word)
+//! - [`HandleBlock`]: Fixed-size array of slots (256 slots)
+//! - [`HandleScopeData`]: Runtime state for scope management
+//! - [`LocalHandles`]: Per-thread handle storage manager
 
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::missing_const_for_fn)]
@@ -18,19 +18,28 @@ use std::ptr::NonNull;
 
 use crate::ptr::GcBox;
 
+/// The number of handle slots per block.
+///
+/// Each handle block contains this many slots for storing GC references.
 pub const HANDLE_BLOCK_SIZE: usize = 256;
 
+/// A single slot for storing a GC handle.
+///
+/// Each slot holds a pointer to a `GcBox`. Handles are allocated by
+/// claiming a slot and storing the `GcBox` pointer in it.
 #[repr(C)]
 pub struct HandleSlot {
     gc_box_ptr: *const GcBox<()>,
 }
 
 impl HandleSlot {
+    /// Creates a new slot with the given `GcBox` pointer.
     #[inline]
     pub const fn new(gc_box_ptr: *const GcBox<()>) -> Self {
         Self { gc_box_ptr }
     }
 
+    /// Creates a null (empty) slot.
     #[inline]
     pub const fn null() -> Self {
         Self {
@@ -38,16 +47,19 @@ impl HandleSlot {
         }
     }
 
+    /// Returns the `GcBox` pointer stored in this slot.
     #[inline]
     pub const fn as_ptr(&self) -> *const GcBox<()> {
         self.gc_box_ptr
     }
 
+    /// Returns `true` if this slot is null (empty).
     #[inline]
     pub fn is_null(&self) -> bool {
         self.gc_box_ptr.is_null()
     }
 
+    /// Sets the `GcBox` pointer for this slot.
     #[inline]
     pub fn set(&mut self, ptr: *const GcBox<()>) {
         self.gc_box_ptr = ptr;
@@ -60,12 +72,17 @@ impl Default for HandleSlot {
     }
 }
 
+/// A block of handle slots.
+///
+/// Handle blocks are linked together to form a growing pool of slots.
+/// Each block contains [`HANDLE_BLOCK_SIZE`] slots plus a pointer to the next block.
 pub struct HandleBlock {
     pub(crate) slots: [HandleSlot; HANDLE_BLOCK_SIZE],
     next: Option<NonNull<HandleBlock>>,
 }
 
 impl HandleBlock {
+    /// Creates a new handle block with all slots initialized to null.
     pub fn new() -> Box<Self> {
         Box::new(Self {
             slots: std::array::from_fn(|_| HandleSlot::null()),
@@ -73,21 +90,25 @@ impl HandleBlock {
         })
     }
 
+    /// Returns a pointer to the start of the slots array.
     #[inline]
     pub fn slots_ptr(&mut self) -> *mut HandleSlot {
         self.slots.as_mut_ptr()
     }
 
+    /// Returns a pointer past the end of the slots array.
     #[inline]
     pub fn slots_end(&mut self) -> *mut HandleSlot {
         unsafe { self.slots.as_mut_ptr().add(HANDLE_BLOCK_SIZE) }
     }
 
+    /// Returns the next block in the chain, if any.
     #[inline]
     pub fn next(&self) -> Option<NonNull<HandleBlock>> {
         self.next
     }
 
+    /// Sets the next block in the chain.
     #[inline]
     pub fn set_next(&mut self, next: Option<NonNull<HandleBlock>>) {
         self.next = next;
@@ -103,6 +124,10 @@ impl Default for HandleBlock {
     }
 }
 
+/// Tracks the current state of handle scope nesting.
+///
+/// This structure maintains the allocation pointer, limit, and nesting level
+/// for the current handle scope.
 #[derive(Debug)]
 pub struct HandleScopeData {
     pub(crate) next: *mut HandleSlot,
@@ -113,6 +138,7 @@ pub struct HandleScopeData {
 }
 
 impl HandleScopeData {
+    /// Creates a new scope data structure with level 0 (inactive).
     pub const fn new() -> Self {
         Self {
             next: std::ptr::null_mut(),
@@ -123,11 +149,16 @@ impl HandleScopeData {
         }
     }
 
+    /// Returns `true` if handles are being allocated (level > 0).
     #[inline]
     pub const fn is_active(&self) -> bool {
         self.level > 0
     }
 
+    /// Returns `true` if handle creation is sealed at the current level.
+    ///
+    /// In debug builds, this prevents handles from being created in sealed scopes.
+    /// In release builds, this always returns `false`.
     #[cfg(debug_assertions)]
     #[inline]
     pub const fn is_sealed(&self) -> bool {
@@ -147,6 +178,10 @@ impl Default for HandleScopeData {
     }
 }
 
+/// Thread-local handle storage.
+///
+/// `LocalHandles` manages a linked list of handle blocks and tracks
+/// the current scope state. It provides allocation and iteration facilities.
 pub struct LocalHandles {
     blocks: Option<NonNull<HandleBlock>>,
     current_block: Option<NonNull<HandleBlock>>,
@@ -154,6 +189,7 @@ pub struct LocalHandles {
 }
 
 impl LocalHandles {
+    /// Creates a new empty handle storage.
     pub fn new() -> Self {
         Self {
             blocks: None,
@@ -162,16 +198,23 @@ impl LocalHandles {
         }
     }
 
+    /// Returns mutable access to the scope data.
     #[inline]
     pub fn scope_data_mut(&mut self) -> &mut HandleScopeData {
         &mut self.scope_data
     }
 
+    /// Returns immutable access to the scope data.
     #[inline]
     pub fn scope_data(&self) -> &HandleScopeData {
         &self.scope_data
     }
 
+    /// Adds a new block to the handle chain.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (next, limit) pointers for the new block
     pub fn add_block(&mut self) -> (*mut HandleSlot, *mut HandleSlot) {
         let new_block = HandleBlock::new();
         let new_block_ptr = NonNull::from(Box::leak(new_block));
@@ -196,6 +239,15 @@ impl LocalHandles {
         }
     }
 
+    /// Allocates a new handle slot.
+    ///
+    /// # Returns
+    ///
+    /// A pointer to the allocated slot
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug mode if the scope is sealed
     #[inline]
     pub fn allocate(&mut self) -> *mut HandleSlot {
         #[cfg(debug_assertions)]
@@ -218,6 +270,13 @@ impl LocalHandles {
         slot
     }
 
+    /// Iterates over all allocated handles, calling the visitor for each.
+    ///
+    /// Only visits slots that have been allocated (up to the current next pointer).
+    ///
+    /// # Arguments
+    ///
+    /// * `visitor` - A closure that receives a pointer to each `GcBox`
     pub fn iterate<F>(&self, mut visitor: F)
     where
         F: FnMut(*const GcBox<()>),
