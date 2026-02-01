@@ -49,13 +49,17 @@ pub struct AsyncHandleScope {
 }
 
 impl AsyncHandleScope {
-    pub fn new(tcb: &Arc<ThreadControlBlock>) -> Self {
+    #[allow(clippy::unused_self)]
+    pub fn new(_tcb: &ThreadControlBlock) -> Self {
         let id = ASYNC_SCOPE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
         let block = HandleBlock::new();
 
+        let tcb_arc = crate::heap::current_thread_control_block()
+            .expect("AsyncHandleScope::new called outside GC thread");
+
         let scope = Self {
             id,
-            tcb: Arc::clone(tcb),
+            tcb: tcb_arc,
             block,
             used: AtomicUsize::new(0),
             dropped: AtomicBool::new(false),

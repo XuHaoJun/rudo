@@ -18,6 +18,9 @@
 mod r#async;
 mod local_handles;
 
+#[cfg(test)]
+mod tests;
+
 pub use local_handles::{
     HandleBlock, HandleScopeData, HandleSlot, LocalHandles, HANDLE_BLOCK_SIZE,
 };
@@ -207,7 +210,7 @@ impl<'env> EscapeableHandleScope<'env> {
 
     pub fn escape<'parent, T: Trace + 'static>(
         &self,
-        parent: &'parent HandleScope<'_>,
+        _parent: &'parent HandleScope<'_>,
         handle: Handle<'_, T>,
     ) -> Handle<'parent, T> {
         if self.escaped.get() {
@@ -216,7 +219,7 @@ impl<'env> EscapeableHandleScope<'env> {
 
         #[cfg(debug_assertions)]
         {
-            if parent.level() + 1 != self.inner.level() {
+            if self.parent_level + 1 != self.inner.level() {
                 panic!("escape() called with incorrect parent scope");
             }
         }

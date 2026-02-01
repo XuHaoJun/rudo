@@ -22,7 +22,7 @@
 - [X] T001 Create handles module directory structure at `crates/rudo-gc/src/handles/`
 - [X] T002 [P] Create handles submodule files: mod.rs, local_handles.rs, async.rs, tests/mod.rs
 - [X] T003 [P] Initialize handles module exports in `crates/rudo-gc/src/handles/mod.rs`
-- [ ] T004 [P] Create integration test files at `crates/rudo-gc/src/tests/handlescope_*.rs`
+- [X] T004 [P] Create integration test files at `crates/rudo-gc/tests/handlescope_*.rs`
 
 ---
 
@@ -51,11 +51,11 @@
 
 ### Foundational Tests
 
-- [ ] T016 [P] Unit tests for HandleSlot in `crates/rudo-gc/src/handles/tests/local_handles.rs`
-- [ ] T017 [P] Unit tests for HandleBlock in `crates/rudo-gc/src/handles/tests/local_handles.rs`
-- [ ] T018 [P] Unit tests for HandleScopeData in `crates/rudo-gc/src/handles/tests/local_handles.rs`
-- [ ] T019 [P] Unit tests for LocalHandles allocation in `crates/rudo-gc/src/handles/tests/local_handles.rs`
-- [ ] T020 [P] Unit tests for LocalHandles::iterate() in `crates/rudo-gc/src/handles/tests/local_handles.rs`
+- [X] T016 [P] Unit tests for HandleSlot in `crates/rudo-gc/src/handles/tests/local_handles.rs`
+- [X] T017 [P] Unit tests for HandleBlock in `crates/rudo-gc/src/handles/tests/local_handles.rs`
+- [X] T018 [P] Unit tests for HandleScopeData in `crates/rudo-gc/src/handles/tests/local_handles.rs`
+- [X] T019 [P] Unit tests for LocalHandles allocation in `crates/rudo-gc/src/handles/tests/local_handles.rs`
+- [X] T020 [P] Unit tests for LocalHandles::iterate() in `crates/rudo-gc/src/handles/tests/local_handles.rs`
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -81,10 +81,10 @@
 
 ### User Story 1 Tests
 
-- [ ] T030 [P] [US1] Unit tests for HandleScope creation and lifecycle in `crates/rudo-gc/src/tests/handlescope_basic.rs`
-- [ ] T031 [P] [US1] Unit tests for Handle creation from Gc<T> in `crates/rudo-gc/src/tests/handlescope_basic.rs`
-- [ ] T032 [US1] Integration test for nested HandleScopes in `crates/rudo-gc/src/tests/handlescope_basic.rs`
-- [ ] T033 [US1] Integration test for handle invalidation on scope drop in `crates/rudo-gc/src/tests/handlescope_basic.rs`
+- [X] T030 [P] [US1] Unit tests for HandleScope creation and lifecycle in `crates/rudo-gc/src/tests/handlescope_basic.rs`
+- [X] T031 [P] [US1] Unit tests for Handle creation from Gc<T> in `crates/rudo-gc/src/tests/handlescope_basic.rs`
+- [X] T032 [US1] Integration test for nested HandleScopes in `crates/rudo-gc/src/tests/handlescope_basic.rs`
+- [X] T033 [US1] Integration test for handle invalidation on scope drop in `crates/rudo-gc/src/tests/handlescope_basic.rs`
 
 **Checkpoint**: User Story 1 complete - basic HandleScope functionality is working
 
@@ -107,10 +107,10 @@
 
 ### User Story 2 Tests
 
-- [ ] T040 [P] [US2] Unit tests for EscapeableHandleScope creation in `crates/rudo-gc/src/tests/handlescope_escape.rs`
-- [ ] T041 [US2] Integration test for escape pattern returning handle to outer scope in `crates/rudo-gc/src/tests/handlescope_escape.rs`
-- [ ] T042 [US2] Integration test for double-escape panic in `crates/rudo-gc/src/tests/handlescope_escape.rs`
-- [ ] T043 [P] [US2] Unit tests for MaybeHandle pattern in `crates/rudo-gc/src/tests/handlescope_escape.rs`
+- [X] T040 [P] [US2] Unit tests for EscapeableHandleScope creation in `crates/rudo-gc/src/tests/handlescope_escape.rs`
+- [X] T041 [US2] Integration test for escape pattern returning handle to outer scope in `crates/rudo-gc/src/tests/handlescope_escape.rs`
+- [X] T042 [US2] Integration test for double-escape panic in `crates/rudo-gc/src/tests/handlescope_escape.rs`
+- [X] T043 [P] [US2] Unit tests for MaybeHandle pattern in `crates/rudo-gc/src/tests/handlescope_escape.rs`
 
 **Checkpoint**: User Story 2 complete - escape pattern is working
 
@@ -131,9 +131,9 @@
 
 ### User Story 3 Tests
 
-- [ ] T048 [P] [US3] Unit tests for SealedHandleScope in debug mode in `crates/rudo-gc/src/tests/handlescope_escape.rs`
-- [ ] T049 [US3] Integration test for handle creation panic in sealed scope in `crates/rudo-gc/src/tests/handlescope_escape.rs`
-- [ ] T050 [US3] Verification that SealedHandleScope is no-op in release mode in `crates/rudo-gc/src/tests/handlescope_escape.rs`
+- [X] T048 [P] [US3] Unit tests for SealedHandleScope in debug mode in `crates/rudo-gc/src/tests/handlescope_escape.rs`
+- [X] T049 [US3] Integration test for handle creation panic in sealed scope in `crates/rudo-gc/src/tests/handlescope_escape.rs`
+- [X] T050 [US3] Verification that SealedHandleScope is no-op in release mode in `crates/rudo-gc/src/tests/handlescope_escape.rs`
 
 **Checkpoint**: User Story 3 complete - sealed scope functionality is working
 
@@ -161,10 +161,10 @@
 
 ### User Story 4 Tests
 
-- [ ] T062 [P] [US4] Unit tests for AsyncHandleScope creation and lifecycle in `crates/rudo-gc/src/tests/handlescope_async.rs`
-- [ ] T063 [US4] Integration test for async handles across await points in `crates/rudo-gc/src/tests/handlescope_async.rs`
-- [ ] T064 [P] [US4] Unit tests for AsyncHandle creation in `crates/rudo-gc/src/tests/handlescope_async.rs`
-- [ ] T065 [US4] Integration test for AsyncHandleGuard safe access pattern in `crates/rudo-gc/src/tests/handlescope_async.rs`
+- [X] T062 [P] [US4] Unit tests for AsyncHandleScope creation and lifecycle in `crates/rudo-gc/src/tests/handlescope_async.rs`
+- [X] T063 [US4] Integration test for async handles across await points in `crates/rudo-gc/src/tests/handlescope_async.rs`
+- [X] T064 [P] [US4] Unit tests for AsyncHandle creation in `crates/rudo-gc/src/tests/handlescope_async.rs`
+- [X] T065 [US4] Integration test for AsyncHandleGuard safe access pattern in `crates/rudo-gc/src/tests/handlescope_async.rs`
 
 **Checkpoint**: User Story 4 complete - async handle functionality is working
 
@@ -185,9 +185,9 @@
 
 ### User Story 5 Tests
 
-- [ ] T070 [P] [US5] Unit test for spawn_with_gc! with single Gc in `crates/rudo-gc/src/tests/handlescope_async.rs`
-- [ ] T071 [US5] Integration test for spawn_with_gc! with multiple Gc objects in `crates/rudo-gc/src/tests/handlescope_async.rs`
-- [ ] T072 [US5] Integration test for GC during spawned task execution in `crates/rudo-gc/src/tests/handlescope_async.rs`
+- [X] T070 [P] [US5] Unit test for spawn_with_gc! with single Gc in `crates/rudo-gc/src/tests/handlescope_async.rs`
+- [X] T071 [US5] Integration test for spawn_with_gc! with multiple Gc objects in `crates/rudo-gc/src/tests/handlescope_async.rs`
+- [X] T072 [US5] Integration test for GC during spawned task execution in `crates/rudo-gc/src/tests/handlescope_async.rs`
 
 **Checkpoint**: User Story 5 complete - spawn_with_gc! macro is working
 
@@ -205,8 +205,8 @@
 - [ ] T078 Run quickstart.md examples validation
 - [ ] T079 [P] Miri tests for unsafe code validation in `crates/rudo-gc/src/tests/handlescope_miri.rs`
 - [ ] T080 GC integration tests to verify handles are correctly tracked as roots in `crates/rudo-gc/src/tests/handlescope_integration.rs`
-- [ ] T081 [P] Run ./clippy.sh and fix all warnings
-- [ ] T082 [P] Run ./test.sh and ensure all tests pass
+- [X] T081 [P] Run ./clippy.sh and fix all warnings
+- [X] T082 [P] Run ./test.sh and ensure all tests pass
 
 ---
 
