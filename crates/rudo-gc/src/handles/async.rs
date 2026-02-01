@@ -194,22 +194,19 @@ impl AsyncHandleScope {
     /// ```
     #[inline]
     #[allow(clippy::unused_self)]
-    pub fn new(_tcb: &ThreadControlBlock) -> Self {
+    pub fn new(tcb: &std::sync::Arc<ThreadControlBlock>) -> Self {
         let id = ASYNC_SCOPE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
         let block = HandleBlock::new();
 
-        let tcb_arc = crate::heap::current_thread_control_block()
-            .expect("AsyncHandleScope::new called outside GC thread");
-
         let scope = Self {
             id,
-            tcb: tcb_arc,
+            tcb: std::sync::Arc::clone(tcb),
             block,
             used: AtomicUsize::new(0),
             dropped: AtomicBool::new(false),
         };
 
-        scope.tcb.register_async_scope(
+        tcb.register_async_scope(
             scope.id,
             scope.block.as_ref() as *const HandleBlock,
             &scope.used as *const AtomicUsize,
@@ -490,12 +487,9 @@ impl<T: Trace + 'static> AsyncHandle<T> {
     #[inline]
     pub unsafe fn get(&self) -> &T {
         let slot = unsafe { &*self.slot };
-        let gc_box_ptr = slot.as_ptr() as *const u8;
-        let gc: Gc<T> = unsafe { Gc::<T>::from_raw(gc_box_ptr) };
-        let value_ref: &T = &*gc;
-        let result = unsafe { &*(value_ref as *const T) };
-        std::mem::forget(gc);
-        result
+        let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
+        let gc_box = unsafe { &*gc_box_ptr };
+        gc_box.value()
     }
 
     /// Converts this handle to a `Gc<T>`.

@@ -2127,6 +2127,19 @@ where
     HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get(), &local.tcb) })
 }
 
+/// Execute a function with access to the thread-local heap and Arc<ThreadControlBlock>.
+/// This is useful for creating `AsyncHandleScope` which requires `&Arc<TCB>`.
+#[allow(dead_code)]
+pub fn with_heap_and_tcb_arc<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut LocalHeap, &std::sync::Arc<ThreadControlBlock>) -> R,
+{
+    HEAP.with(|local| {
+        let tcb_arc = local.tcb.clone();
+        unsafe { f(&mut *local.tcb.heap.get(), &tcb_arc) }
+    })
+}
+
 /// Get the current thread's control block.
 /// Returns None if called outside a thread with GC heap.
 #[allow(dead_code)]

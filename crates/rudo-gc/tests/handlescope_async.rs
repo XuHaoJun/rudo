@@ -1,7 +1,7 @@
 //! Integration tests for `AsyncHandleScope` and async handle support.
 
 use rudo_gc::handles::AsyncHandleScope;
-use rudo_gc::heap::{current_thread_control_block, with_heap_and_tcb};
+use rudo_gc::heap::{current_thread_control_block, with_heap_and_tcb_arc};
 use rudo_gc::{Gc, Trace};
 
 #[derive(Trace, Debug, PartialEq)]
@@ -13,7 +13,7 @@ struct AsyncTestData {
 fn test_async_handlescope_creation() {
     rudo_gc::test_util::reset();
 
-    with_heap_and_tcb(|_, tcb| {
+    with_heap_and_tcb_arc(|_, tcb| {
         let scope = AsyncHandleScope::new(tcb);
         assert!(scope.id() > 0);
     });
@@ -23,7 +23,7 @@ fn test_async_handlescope_creation() {
 fn test_async_handlescope_handle() {
     rudo_gc::test_util::reset();
 
-    with_heap_and_tcb(|_, tcb| {
+    with_heap_and_tcb_arc(|_, tcb| {
         let scope = AsyncHandleScope::new(tcb);
         let gc = Gc::new(AsyncTestData { value: 42 });
         let handle = scope.handle(&gc);
@@ -36,7 +36,7 @@ fn test_async_handlescope_handle() {
 fn test_async_handle_get() {
     rudo_gc::test_util::reset();
 
-    with_heap_and_tcb(|_, tcb| {
+    with_heap_and_tcb_arc(|_, tcb| {
         let scope = AsyncHandleScope::new(tcb);
         let gc = Gc::new(100i32);
         let handle = scope.handle(&gc);
@@ -49,7 +49,7 @@ fn test_async_handle_get() {
 fn test_async_handle_to_gc() {
     rudo_gc::test_util::reset();
 
-    with_heap_and_tcb(|_, tcb| {
+    with_heap_and_tcb_arc(|_, tcb| {
         let scope = AsyncHandleScope::new(tcb);
         let gc = Gc::new(AsyncTestData { value: 99 });
         let handle = scope.handle(&gc);
@@ -63,7 +63,7 @@ fn test_async_handle_to_gc() {
 fn test_async_handle_copy_clone() {
     rudo_gc::test_util::reset();
 
-    with_heap_and_tcb(|_, tcb| {
+    with_heap_and_tcb_arc(|_, tcb| {
         let scope = AsyncHandleScope::new(tcb);
         let gc = Gc::new(55i32);
         let handle1 = scope.handle(&gc);
@@ -80,7 +80,7 @@ fn test_async_handle_copy_clone() {
 fn test_async_handle_scope_with_guard() {
     rudo_gc::test_util::reset();
 
-    with_heap_and_tcb(|_, tcb| {
+    with_heap_and_tcb_arc(|_, tcb| {
         let scope = AsyncHandleScope::new(tcb);
         let gc = Gc::new(AsyncTestData { value: 888 });
         let handle = scope.handle(&gc);
@@ -98,7 +98,7 @@ fn test_async_handle_scope_with_guard() {
 fn test_multiple_async_handles() {
     rudo_gc::test_util::reset();
 
-    with_heap_and_tcb(|_, tcb| {
+    with_heap_and_tcb_arc(|_, tcb| {
         let scope = AsyncHandleScope::new(tcb);
 
         let gc1 = Gc::new(1i32);
@@ -119,7 +119,7 @@ fn test_multiple_async_handles() {
 fn test_async_handle_scope_iterate() {
     rudo_gc::test_util::reset();
 
-    with_heap_and_tcb(|_, tcb| {
+    with_heap_and_tcb_arc(|_, tcb| {
         let scope = AsyncHandleScope::new(tcb);
 
         let gc1 = Gc::new(AsyncTestData { value: 10 });
@@ -141,7 +141,7 @@ fn test_async_handle_scope_iterate() {
 fn test_async_handle_scope_id_uniqueness() {
     rudo_gc::test_util::reset();
 
-    with_heap_and_tcb(|_, tcb| {
+    with_heap_and_tcb_arc(|_, tcb| {
         let scope1 = AsyncHandleScope::new(tcb);
         let scope2 = AsyncHandleScope::new(tcb);
         let scope3 = AsyncHandleScope::new(tcb);

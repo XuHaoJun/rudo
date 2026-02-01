@@ -280,13 +280,9 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
     pub fn get(&self) -> &T {
         unsafe {
             let slot = &*self.slot;
-            let gc_box_ptr = slot.as_ptr() as *const u8;
-            // SAFETY: The handle slot contains a valid GcBox<T> pointer.
-            let gc = Gc::<T>::from_raw(gc_box_ptr);
-            let value_ref: &T = &*gc;
-            let result = &*(value_ref as *const T);
-            std::mem::forget(gc);
-            result
+            let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
+            let gc_box = &*gc_box_ptr;
+            gc_box.value()
         }
     }
 
