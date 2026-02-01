@@ -90,12 +90,15 @@ use crate::ptr::GcBox;
 - Three crates: `rudo-gc` (main), `rudo-gc-derive` (proc macro), `sys_alloc` (system allocator)
 - Default features: `derive` for `#[derive(Trace)]` macro
 
-## Cursor Integration
-This project uses `.cursor/commands/` for custom speckit workflows:
-- `speckit.specify.md` - Define requirements
-- `speckit.plan.md` - Plan implementation
-- `speckit.implement.md` - Execute implementation
-- `speckit.analyze.md` - Analyze codebase
+## Agent Workflows
+This project uses custom agentic workflows defined in `.agent/workflows/` (previously `.cursor/commands/`):
+- `speckit.specify.md` - Define requirements and specifications
+- `speckit.plan.md` - Plan implementation architecture
+- `speckit.tasks.md` - Break down implementation into actionable tasks
+- `speckit.implement.md` - Execute implementation plan
+- `speckit.analyze.md` - Analyze codebase and artifacts for consistency
+- `speckit.checklist.md` - Generate checklists for features
+- `speckit.constitution.md` - Project constitution and principles
 
 ## Before Committing
 1. Run `./clippy.sh` and fix all warnings
@@ -104,21 +107,39 @@ This project uses `.cursor/commands/` for custom speckit workflows:
 4. For unsafe code changes, consider running `./miri-test.sh`
 
 ## Active Technologies
-- Rust 1.75+ + `std::sync::atomic` (Rust stdlib), no external crates (002-send-sync-trait)
-- N/A (in-memory garbage collector, heap managed internally) (002-send-sync-trait)
-- Rust 1.75+ (stable, with `std::sync::atomic` features) + `std::sync::atomic`, `std::thread`, `std::sync::Barrier`, `std::sync::Mutex` (003-parallel-marking)
-- Rust 1.75+ (as specified in AGENTS.md) + `std::sync::atomic`, `std::sync::Mutex`, `std::thread`, `std::sync::Barrier` (Rust stdlib only) (001-chez-gc-optimization)
-- In-memory heap (N/A for external storage) (001-chez-gc-optimization)
-- Rust 1.75+ (stable, with `std::sync::atomic` features) + tokio crate version 1.0+ (optional), tokio-util crate version 0.7+, rudo-gc-derive crate (004-tokio-async-integration)
-- Rust 1.75+ (standard library only, no external crates) + std::sync::atomic (for concurrent marking), std::thread (for parallelism), std::sync::Barrier, std::sync::Mutex (005-lazy-sweep)
+- **Core Language**: Rust 1.75+ (stable)
+- **Concurrency**: `std::sync::atomic`, `std::sync::Mutex`, `std::sync::Barrier`, `std::thread` (Standard Library only)
+- **Garbage Collection**: In-memory mark-sweep GC (no external heap storage dependencies)
+- **Async Support**: `tokio` (optional feature `tokio` for async integration)
 
-## Recent Changes
-- 002-send-sync-trait: Added Rust 1.75+ + `std::sync::atomic` (Rust stdlib), no external crates
-- 004-tokio-async-integration: Added tokio async/await support with GcRootSet, GcRootGuard, #[gc::main], and Gc::yield_now()
+## Recent Features & Changes
 
-## Tokio Async Integration (004-tokio-async-integration)
+### 005 - Lazy Sweep (In Progress)
+- Implements lazy sweeping to reduce pause times.
+- Two-phase sweep: fast initial sweep for availability, background/lazy sweep for reclamation.
 
-### Root Tracking
+### 004 - Tokio Async Integration
+- `GcRootSet` for tracking GC roots across async boundaries and tasks.
+- `GcTokioExt` trait adds `yield_now()` for cooperative GC scheduling.
+- `#[gc::main]` macro for async main function setup.
+
+### 003 - Parallel Marking
+- Concurrent marking using multiple worker threads.
+- `GlobalMarkState` and `WorkStealingQueue` for load balancing.
+
+### 002 - Send/Sync Trait Implementation
+- Ensuring GC pointers and structures are correctly `Send` and `Sync` where appropriate.
+- Usage of `Atomic` types for thread-safe internal state.
+
+### 001 - Optimized Mark-Sweep (Chez Scheme inspired)
+- **Lock Ordering**: Fixed global order (Heap -> GlobalMarkState -> Request) to prevent deadlocks.
+- **Push-Based Work Transfer**: Workers push overflow work to owners.
+- **Mark Bitmap**: Per-page bitmaps (`[AtomicU64; BITMAP_SIZE]`) reduce per-object overhead.
+- **Segment Ownership**: Tracks page ownership for cache locality (`OwnedPagesTracker`).
+
+## Major Feature Documentation
+
+### Tokio Async Integration
 The tokio integration uses a process-level singleton `GcRootSet` to track GC roots across async tasks:
 
 ```rust
@@ -134,54 +155,21 @@ fn example() {
 }
 ```
 
-### Cooperative GC Scheduling
-Use `Gc::yield_now()` to allow GC to run during long computations:
+**Cooperative GC Scheduling**: Use `Gc::yield_now()` to allow GC to run during long computations.
 
-```rust
-async fn process_large_dataset() {
-    let gc = Gc::new(LargeDataSet::new());
+### Concurrency Patterns
 
-    for item in dataset.iter() {
-        // Process item
-        gc.yield_now().await; // Allow GC to run
-    }
-}
-```
-
-## Concurrency Patterns (001-chez-gc-optimization)
-
-### Lock Ordering Discipline
-All locks must be acquired in a fixed global order to prevent deadlocks:
+**Lock Ordering Discipline**:
+All locks must be acquired in a fixed global order:
 1. `LocalHeap` lock (per-thread heap)
 2. `GlobalMarkState` lock (global marking state)
 3. `GcRequest` lock (GC request)
 
-Example:
-```rust
-let _heap_guard = self.heap.lock();
-let _state_guard = GlobalMarkState::get().lock();
-// Cannot acquire heap lock after state lock - violates order
-```
+**Work Stealing & Balancing**:
+- Workers have local work queues.
+- On overflow, work is pushed to `PerThreadMarkQueue::remote_work`.
+- Workers try to steal from remote queues when local is empty.
 
-### Push-Based Work Transfer
-Workers push completed work to owner's queue instead of all workers polling:
-- Each worker has `pending_work: Vec<GcPtr<T>>` (capacity 16)
-- On buffer full, worker pushes to owner's `PerThreadMarkQueue::remote_work`
-- Remote work is checked during steal attempts
-
-### Mark Bitmap
-Per-page mark bitmap replaces per-object overhead:
-- `PageHeader::mark_bitmap: [AtomicU64; BITMAP_SIZE]`
-- Each bit marks one object in the page
-- 98% reduction in per-object overhead
-
-### Segment Ownership
-Track page ownership for better cache locality:
-- `OwnedPagesTracker` maps page range to owner thread ID
-- Workers mark pages they allocate into
-- Helps prioritize marking local pages first
-
-### Dynamic Stack Growth
-Monitor work queue capacity to prevent stalls:
-- Track `local_capacity` and `remote_capacity`
-- Grow worklist when capacity threshold is reached
+**Mark Bitmap & Page Layout**:
+- Pages have headers with mark bitmaps.
+- This separates metadata from object data, improving cache locality during marking.
