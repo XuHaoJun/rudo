@@ -17,6 +17,8 @@ use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
 
 use sys_alloc::{Mmap, MmapOptions};
 
+use crate::handles::{AsyncScopeEntry, LocalHandles};
+
 /// Get a unique identifier for the current thread.
 /// Uses the stack address which is unique per thread.
 #[must_use]
@@ -52,6 +54,10 @@ pub struct ThreadControlBlock {
     pub heap: UnsafeCell<LocalHeap>,
     /// Stack roots captured at safepoint for the collector to scan.
     pub stack_roots: Mutex<Vec<*const u8>>,
+    /// Local handles for `HandleScope` v2 support.
+    local_handles: UnsafeCell<LocalHandles>,
+    /// Async scope registry for cross-await handle tracking.
+    async_scopes: Mutex<Vec<AsyncScopeEntry>>,
 }
 
 #[allow(clippy::non_send_fields_in_send_ty)]
@@ -76,6 +82,8 @@ impl ThreadControlBlock {
             park_mutex: Mutex::new(()),
             heap: UnsafeCell::new(LocalHeap::new()),
             stack_roots: Mutex::new(Vec::new()),
+            local_handles: UnsafeCell::new(LocalHandles::new()),
+            async_scopes: Mutex::new(Vec::new()),
         }
     }
 
@@ -87,6 +95,72 @@ impl ThreadControlBlock {
     /// Get an immutable reference to the heap.
     pub fn heap(&self) -> &LocalHeap {
         unsafe { &*self.heap.get() }
+    }
+
+    /// Get a raw pointer to local handles for interior mutability.
+    #[inline]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn local_handles_ptr(&self) -> *mut LocalHandles {
+        self.local_handles.get()
+    }
+
+    /// Get a mutable reference to local handles.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure exclusive access.
+    pub fn local_handles_mut(&mut self) -> &mut LocalHandles {
+        unsafe { &mut *self.local_handles.get() }
+    }
+
+    /// Register an async scope for GC root tracking.
+    #[allow(clippy::missing_panics_doc)]
+    pub fn register_async_scope(
+        &self,
+        id: u64,
+        block_ptr: *const crate::handles::HandleBlock,
+        used: *const AtomicUsize,
+    ) {
+        let entry = AsyncScopeEntry {
+            id,
+            block_ptr,
+            used,
+        };
+        self.async_scopes.lock().unwrap().push(entry);
+    }
+
+    /// Unregister an async scope.
+    #[allow(clippy::missing_panics_doc)]
+    pub fn unregister_async_scope(&self, id: u64) {
+        let mut scopes = self.async_scopes.lock().unwrap();
+        scopes.retain(|e| e.id != id);
+    }
+
+    /// Iterate all handles (sync and async) as GC roots.
+    #[allow(clippy::missing_panics_doc)]
+    pub fn iterate_all_handles<F>(&self, mut visitor: F)
+    where
+        F: FnMut(*const crate::ptr::GcBox<()>),
+    {
+        // Iterate sync handles
+        unsafe {
+            (*self.local_handles.get()).iterate(&mut visitor);
+        }
+
+        // Iterate async handles
+        let scopes = self.async_scopes.lock().unwrap();
+        for entry in scopes.iter() {
+            unsafe {
+                let used = (*entry.used).load(Ordering::Acquire);
+                let block = &*entry.block_ptr;
+                for i in 0..used {
+                    let slot = &*block.slots.as_ptr().add(i);
+                    if !slot.is_null() {
+                        visitor(slot.as_ptr());
+                    }
+                }
+            }
+        }
     }
 }
 
