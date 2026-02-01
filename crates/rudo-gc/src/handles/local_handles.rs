@@ -217,7 +217,7 @@ impl LocalHandles {
     /// A tuple of (next, limit) pointers for the new block
     pub fn add_block(&mut self) -> (*mut HandleSlot, *mut HandleSlot) {
         let new_block = HandleBlock::new();
-        let new_block_ptr = NonNull::from(Box::leak(new_block));
+        let new_block_ptr = unsafe { NonNull::new_unchecked(Box::into_raw(new_block)) };
 
         if let Some(mut current) = self.current_block {
             unsafe {
