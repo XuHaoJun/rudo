@@ -115,6 +115,15 @@ impl ThreadControlBlock {
     }
 
     /// Register an async scope for GC root tracking.
+    ///
+    /// Takes OWNERSHIP of an `Arc<AsyncScopeData>`.
+    /// The TCB will hold this Arc for the scope's lifetime.
+    ///
+    /// # Safety Notes
+    ///
+    /// The caller must NOT access the data after registration if they
+    /// plan to drop their Arc - use `Arc::clone()` if continued access needed.
+    /// Both the caller and TCB hold independent Arc references.
     #[allow(clippy::missing_panics_doc)]
     pub fn register_async_scope(&self, id: u64, data: Arc<AsyncScopeData>) {
         let entry = AsyncScopeEntry { id, data };

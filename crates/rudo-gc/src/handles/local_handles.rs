@@ -128,6 +128,17 @@ impl Default for HandleBlock {
 ///
 /// This structure maintains the allocation pointer, limit, and nesting level
 /// for the current handle scope.
+///
+/// # Note on `sealed_level` Field
+///
+/// The `sealed_level` field is `#[cfg(debug_assertions)]` only.
+/// This is INTENTIONAL - in release builds, `SealedHandleScope` is a ZST
+/// (zero-sized type) and uses the type system for sealing instead of
+/// runtime checks.
+///
+/// In release builds, `is_sealed()` always returns `false` because:
+/// - `SealedHandleScope` cannot be constructed incorrectly
+/// - The type system enforces correct nesting at compile time
 #[derive(Debug)]
 pub struct HandleScopeData {
     pub(crate) next: *mut HandleSlot,
@@ -158,7 +169,8 @@ impl HandleScopeData {
     /// Returns `true` if handle creation is sealed at the current level.
     ///
     /// In debug builds, this prevents handles from being created in sealed scopes.
-    /// In release builds, this always returns `false`.
+    /// In release builds, this always returns `false` because the type system
+    /// enforces correct sealing at compile time via `SealedHandleScope` as a ZST.
     #[cfg(debug_assertions)]
     #[inline]
     pub const fn is_sealed(&self) -> bool {

@@ -514,6 +514,14 @@ impl<'env> EscapeableHandleScope<'env> {
     ///     assert_eq!(escaped_handle.value, 123);
     /// }
     /// ```
+    ///
+    /// The `parent` parameter serves TWO purposes:
+    /// 1. **Lifetime Binding**: Establishes the `'parent` lifetime for the
+    ///    returned `Handle<'parent, T>`. This is a compile-time constraint.
+    /// 2. **Debug Validation**: In debug builds, verifies parent/child relationship.
+    ///
+    /// DO NOT remove this parameter even if unused at runtime.
+    /// The return type's lifetime depends on it for soundness.
     #[inline]
     pub fn escape<'parent, T: Trace + 'static>(
         &self,

@@ -105,7 +105,13 @@ use super::local_handles::{HandleBlock, HandleSlot, HANDLE_BLOCK_SIZE};
 static ASYNC_SCOPE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Shared data for async scope, owned by both `AsyncHandleScope` and the TCB registry.
-/// Uses `Arc` to ensure data remains valid as long as either party holds a reference.
+///
+/// Uses `Arc` to ensure data remains valid as long as EITHER party holds a reference.
+/// This is NOT a raw pointer - both owners have independent Arc reference counts.
+///
+/// Lifetime guarantee: The TCB's `async_scopes` registry holds an `Arc<AsyncScopeEntry>`,
+/// which in turn holds `Arc<AsyncScopeData>`. The scope data cannot be freed while
+/// registered, regardless of whether the `AsyncHandleScope` is still alive.
 pub struct AsyncScopeData {
     pub(crate) block: Box<HandleBlock>,
     pub(crate) used: UnsafeCell<AtomicUsize>,
@@ -187,6 +193,34 @@ impl AsyncHandleScope {
     ///
     /// The scope is automatically registered with the thread control block
     /// for GC root tracking.
+    ///
+    /// # Arguments
+    ///
+    /// * `tcb` - The thread control block (must be the current thread's TCB)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the scope ID counter overflows (extremely unlikely)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::handles::AsyncHandleScope;
+    ///
+    /// fn create_scope() {
+    ///     let tcb = rudo_gc::heap::current_thread_control_block().unwrap();
+    ///     let scope = AsyncHandleScope::new(&tcb);
+    ///     // scope is now active
+    /// }
+    /// ```
+    /// Creates a new `AsyncHandleScope`.
+    ///
+    /// The scope is automatically registered with the thread control block
+    /// for GC root tracking.
+    ///
+    /// IMPORTANT: The `data` Arc is CLONED before registration.
+    /// This ensures TCB holds independent ownership - dropping the
+    /// `AsyncHandleScope` does NOT deallocate the scope data.
     ///
     /// # Arguments
     ///
