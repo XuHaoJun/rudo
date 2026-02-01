@@ -2176,11 +2176,14 @@ pub unsafe fn find_gc_box_from_ptr(
         return None;
     }
 
-    // 2. Check if the pointer is aligned to something that could be a pointer
+    // 2. Interior pointer support: allow pointers to any field, not just usize-aligned.
+    //    A u32 field may be at offset 4, which is valid for u32 but not for usize (8-byte).
+    //    For conservative GC, we need to accept any potentially valid pointer alignment.
+    //    Minimum alignment is 1 byte (no alignment requirement for interior pointers).
     unsafe {
-        if addr % std::mem::align_of::<usize>() != 0 {
-            return None;
-        }
+        // Note: We removed the usize alignment check here to support interior pointers
+        // to fields smaller than usize (e.g., u32, u16, u8). The page header and offset
+        // calculations will validate whether this is a valid object pointer.
 
         // 3. Check large object map first (handles multi-page objects and avoids reading uninit tail pages)
         let page_addr = addr & crate::heap::page_mask();
@@ -2263,12 +2266,11 @@ pub unsafe fn find_gc_box_from_ptr(
             if offset_to_use >= block_size_to_use {
                 return None;
             }
-        } else if offset_to_use % block_size_to_use != 0 {
-            // For small objects, we still require them to point to the start of an object
-            // unless we want to support interior pointers for small objects too.
-            // Currently, only large objects (which often contain large buffers)
-            // really need interior pointer support for things like array slicing.
-            return None;
+        } else {
+            // Small object interior pointer support.
+            // offset_to_use is already relative to the start of the value area.
+            // Floor division automatically handles interior pointers.
+            // No additional adjustment needed beyond the initial index calculation.
         }
 
         // Bingo! We found a potential object.
