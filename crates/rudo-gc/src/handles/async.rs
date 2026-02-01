@@ -90,6 +90,7 @@
 #![allow(clippy::as_ptr_cast_mut)]
 #![allow(clippy::non_canonical_clone_impl)]
 
+use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -103,15 +104,30 @@ use super::local_handles::{HandleBlock, HandleSlot, HANDLE_BLOCK_SIZE};
 
 static ASYNC_SCOPE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+/// Shared data for async scope, owned by both `AsyncHandleScope` and the TCB registry.
+/// Uses `Arc` to ensure data remains valid as long as either party holds a reference.
+pub struct AsyncScopeData {
+    pub(crate) block: Box<HandleBlock>,
+    pub(crate) used: UnsafeCell<AtomicUsize>,
+}
+
+/// SAFETY: `AsyncScopeData` is `Send + Sync` because:
+/// - `block` is a `Box<HandleBlock>` which is `Send + Sync` (contains raw pointers but they're never accessed concurrently without synchronization)
+/// - `used` is an `UnsafeCell<AtomicUsize>` - the `AtomicUsize` is `Sync` by default
+unsafe impl Send for AsyncScopeData {}
+unsafe impl Sync for AsyncScopeData {}
+
 /// An entry in the async scope registry.
 /// Used internally to track async scopes for GC root collection.
+///
+/// SAFETY: The `data` field is an `Arc` that keeps the `AsyncScopeData` alive.
+/// Both the `AsyncHandleScope` and the TCB registry hold `Arc`s, so the data
+/// cannot be freed while either is still using it.
 pub struct AsyncScopeEntry {
     /// Unique scope identifier
     pub id: u64,
-    /// Pointer to the handle block
-    pub block_ptr: *const HandleBlock,
-    /// Pointer to the atomic counter tracking used slots
-    pub used: *const AtomicUsize,
+    /// Shared ownership of the scope's data
+    pub data: Arc<AsyncScopeData>,
 }
 
 unsafe impl Send for AsyncScopeEntry {}
@@ -162,8 +178,7 @@ unsafe impl Sync for AsyncScopeEntry {}
 pub struct AsyncHandleScope {
     id: u64,
     tcb: Arc<ThreadControlBlock>,
-    block: Box<HandleBlock>,
-    used: AtomicUsize,
+    data: Arc<AsyncScopeData>,
     dropped: AtomicBool,
 }
 
@@ -196,21 +211,20 @@ impl AsyncHandleScope {
     #[allow(clippy::unused_self)]
     pub fn new(tcb: &std::sync::Arc<ThreadControlBlock>) -> Self {
         let id = ASYNC_SCOPE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let block = HandleBlock::new();
+
+        let data = Arc::new(AsyncScopeData {
+            block: HandleBlock::new(),
+            used: UnsafeCell::new(AtomicUsize::new(0)),
+        });
 
         let scope = Self {
             id,
             tcb: std::sync::Arc::clone(tcb),
-            block,
-            used: AtomicUsize::new(0),
+            data: Arc::clone(&data),
             dropped: AtomicBool::new(false),
         };
 
-        tcb.register_async_scope(
-            scope.id,
-            scope.block.as_ref() as *const HandleBlock,
-            &scope.used as *const AtomicUsize,
-        );
+        tcb.register_async_scope(scope.id, data);
 
         scope
     }
@@ -254,13 +268,14 @@ impl AsyncHandleScope {
     /// ```
     #[inline]
     pub fn handle<T: Trace + 'static>(&self, gc: &Gc<T>) -> AsyncHandle<T> {
-        let idx = self.used.fetch_add(1, Ordering::Relaxed);
+        let used = unsafe { &*self.data.used.get() };
+        let idx = used.fetch_add(1, Ordering::Relaxed);
         if idx >= HANDLE_BLOCK_SIZE {
             panic!("AsyncHandleScope: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})");
         }
 
         let slot_ptr = unsafe {
-            let slots_ptr = self.block.slots.as_ptr() as *mut HandleSlot;
+            let slots_ptr = self.data.block.slots.as_ptr() as *mut HandleSlot;
             slots_ptr.add(idx)
         };
 
@@ -337,9 +352,9 @@ impl AsyncHandleScope {
     where
         F: FnMut(*const GcBox<()>),
     {
-        let used = self.used.load(Ordering::Acquire);
+        let used = unsafe { &*self.data.used.get() }.load(Ordering::Acquire);
         for i in 0..used {
-            let slot = unsafe { &*self.block.slots.as_ptr().add(i) };
+            let slot = unsafe { &*self.data.block.slots.as_ptr().add(i) };
             if !slot.is_null() {
                 visitor(slot.as_ptr());
             }

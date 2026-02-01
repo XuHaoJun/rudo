@@ -11,13 +11,14 @@
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
 
 use sys_alloc::{Mmap, MmapOptions};
 
-use crate::handles::{AsyncScopeEntry, LocalHandles};
+use crate::handles::{AsyncScopeData, AsyncScopeEntry, LocalHandles};
 
 /// Get a unique identifier for the current thread.
 /// Uses the stack address which is unique per thread.
@@ -115,17 +116,8 @@ impl ThreadControlBlock {
 
     /// Register an async scope for GC root tracking.
     #[allow(clippy::missing_panics_doc)]
-    pub fn register_async_scope(
-        &self,
-        id: u64,
-        block_ptr: *const crate::handles::HandleBlock,
-        used: *const AtomicUsize,
-    ) {
-        let entry = AsyncScopeEntry {
-            id,
-            block_ptr,
-            used,
-        };
+    pub fn register_async_scope(&self, id: u64, data: Arc<AsyncScopeData>) {
+        let entry = AsyncScopeEntry { id, data };
         self.async_scopes.lock().unwrap().push(entry);
     }
 
@@ -151,8 +143,8 @@ impl ThreadControlBlock {
         let scopes = self.async_scopes.lock().unwrap();
         for entry in scopes.iter() {
             unsafe {
-                let used = (*entry.used).load(Ordering::Acquire);
-                let block = &*entry.block_ptr;
+                let used = (*entry.data.used.get()).load(Ordering::Acquire);
+                let block = &*entry.data.block;
                 for i in 0..used {
                     let slot = &*block.slots.as_ptr().add(i);
                     if !slot.is_null() {

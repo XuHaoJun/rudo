@@ -66,7 +66,9 @@ mod tests;
 pub use local_handles::{
     HandleBlock, HandleScopeData, HandleSlot, LocalHandles, HANDLE_BLOCK_SIZE,
 };
-pub use r#async::{AsyncHandle, AsyncHandleGuard, AsyncHandleScope, AsyncScopeEntry};
+pub use r#async::{
+    AsyncHandle, AsyncHandleGuard, AsyncHandleScope, AsyncScopeData, AsyncScopeEntry,
+};
 
 use std::cell::Cell;
 use std::marker::PhantomData;
