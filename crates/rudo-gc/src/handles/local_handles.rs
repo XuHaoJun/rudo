@@ -14,6 +14,7 @@
 #![allow(clippy::use_self)]
 #![allow(clippy::non_send_fields_in_send_ty)]
 
+use std::cell::UnsafeCell;
 use std::ptr::NonNull;
 
 use crate::ptr::GcBox;
@@ -77,7 +78,7 @@ impl Default for HandleSlot {
 /// Handle blocks are linked together to form a growing pool of slots.
 /// Each block contains [`HANDLE_BLOCK_SIZE`] slots plus a pointer to the next block.
 pub struct HandleBlock {
-    pub(crate) slots: [HandleSlot; HANDLE_BLOCK_SIZE],
+    pub(crate) slots: UnsafeCell<[HandleSlot; HANDLE_BLOCK_SIZE]>,
     next: Option<NonNull<HandleBlock>>,
 }
 
@@ -85,7 +86,7 @@ impl HandleBlock {
     /// Creates a new handle block with all slots initialized to null.
     pub fn new() -> Box<Self> {
         Box::new(Self {
-            slots: std::array::from_fn(|_| HandleSlot::null()),
+            slots: UnsafeCell::new(std::array::from_fn(|_| HandleSlot::null())),
             next: None,
         })
     }
@@ -93,13 +94,16 @@ impl HandleBlock {
     /// Returns a pointer to the start of the slots array.
     #[inline]
     pub fn slots_ptr(&mut self) -> *mut HandleSlot {
-        self.slots.as_mut_ptr()
+        self.slots.get() as *mut HandleSlot
     }
 
     /// Returns a pointer past the end of the slots array.
     #[inline]
     pub fn slots_end(&mut self) -> *mut HandleSlot {
-        unsafe { self.slots.as_mut_ptr().add(HANDLE_BLOCK_SIZE) }
+        unsafe {
+            let ptr = self.slots.get() as *mut HandleSlot;
+            ptr.add(HANDLE_BLOCK_SIZE)
+        }
     }
 
     /// Returns the next block in the chain, if any.
@@ -118,7 +122,7 @@ impl HandleBlock {
 impl Default for HandleBlock {
     fn default() -> Self {
         Self {
-            slots: std::array::from_fn(|_| HandleSlot::null()),
+            slots: UnsafeCell::new(std::array::from_fn(|_| HandleSlot::null())),
             next: None,
         }
     }
@@ -245,7 +249,7 @@ impl LocalHandles {
 
         unsafe {
             let block = new_block_ptr.as_ptr();
-            let start = (*block).slots.as_mut_ptr();
+            let start = (*block).slots.get() as *mut HandleSlot;
             let end = start.add(HANDLE_BLOCK_SIZE);
             (start, end)
         }
@@ -297,7 +301,7 @@ impl LocalHandles {
         while let Some(block_ptr) = block_opt {
             let block = unsafe { block_ptr.as_ref() };
 
-            let slots_start = block.slots.as_ptr();
+            let slots_start = block.slots.get() as *const HandleSlot;
             let slots_end = if Some(block_ptr) == self.current_block {
                 self.scope_data.next as *const HandleSlot
             } else {

@@ -153,9 +153,8 @@ impl ThreadControlBlock {
         for entry in scopes.iter() {
             unsafe {
                 let used = (*entry.data.used.get()).load(Ordering::Acquire);
-                let block = &*entry.data.block;
-                for i in 0..used {
-                    let slot = &*block.slots.as_ptr().add(i);
+                let slots = &*entry.data.block.slots.get();
+                for slot in slots.iter().take(used) {
                     if !slot.is_null() {
                         visitor(slot.as_ptr());
                     }

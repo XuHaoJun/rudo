@@ -194,30 +194,6 @@ impl AsyncHandleScope {
     /// The scope is automatically registered with the thread control block
     /// for GC root tracking.
     ///
-    /// # Arguments
-    ///
-    /// * `tcb` - The thread control block (must be the current thread's TCB)
-    ///
-    /// # Panics
-    ///
-    /// Panics if the scope ID counter overflows (extremely unlikely)
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rudo_gc::handles::AsyncHandleScope;
-    ///
-    /// fn create_scope() {
-    ///     let tcb = rudo_gc::heap::current_thread_control_block().unwrap();
-    ///     let scope = AsyncHandleScope::new(&tcb);
-    ///     // scope is now active
-    /// }
-    /// ```
-    /// Creates a new `AsyncHandleScope`.
-    ///
-    /// The scope is automatically registered with the thread control block
-    /// for GC root tracking.
-    ///
     /// IMPORTANT: The `data` Arc is CLONED before registration.
     /// This ensures TCB holds independent ownership - dropping the
     /// `AsyncHandleScope` does NOT deallocate the scope data.
@@ -309,7 +285,7 @@ impl AsyncHandleScope {
         }
 
         let slot_ptr = unsafe {
-            let slots_ptr = self.data.block.slots.as_ptr() as *mut HandleSlot;
+            let slots_ptr = self.data.block.slots.get() as *mut HandleSlot;
             slots_ptr.add(idx)
         };
 
@@ -387,8 +363,8 @@ impl AsyncHandleScope {
         F: FnMut(*const GcBox<()>),
     {
         let used = unsafe { &*self.data.used.get() }.load(Ordering::Acquire);
-        for i in 0..used {
-            let slot = unsafe { &*self.data.block.slots.as_ptr().add(i) };
+        let slots = unsafe { &*self.data.block.slots.get() };
+        for slot in slots.iter().take(used) {
             if !slot.is_null() {
                 visitor(slot.as_ptr());
             }
@@ -574,14 +550,10 @@ impl<T: Trace + 'static> AsyncHandle<T> {
     /// }
     /// ```
     #[inline]
-    pub fn to_gc(&self) -> Gc<T> {
+    pub fn to_gc(self) -> Gc<T> {
         unsafe {
-            let slot = &*self.slot;
-            let ptr = slot.as_ptr() as *const u8;
-            let gc: Gc<T> = Gc::from_raw(ptr);
-            let gc_clone = gc.clone();
-            std::mem::forget(gc);
-            gc_clone
+            let ptr = (*self.slot).as_ptr() as *const u8;
+            Gc::from_raw(ptr)
         }
     }
 }

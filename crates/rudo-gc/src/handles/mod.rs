@@ -321,12 +321,8 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
     #[inline]
     pub fn to_gc(&self) -> Gc<T> {
         unsafe {
-            let slot = &*self.slot;
-            let ptr = slot.as_ptr() as *const u8;
-            // SAFETY: The handle slot contains a valid GcBox pointer
-            // This increments the reference count
+            let ptr = (*self.slot).as_ptr() as *const u8;
             let gc: Gc<T> = Gc::from_raw(ptr);
-            // Increment ref count since from_raw doesn't
             let gc_clone = gc.clone();
             std::mem::forget(gc);
             gc_clone
