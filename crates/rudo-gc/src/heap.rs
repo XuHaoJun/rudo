@@ -11,11 +11,14 @@
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
 
 use sys_alloc::{Mmap, MmapOptions};
+
+use crate::handles::{AsyncScopeData, AsyncScopeEntry, LocalHandles};
 
 /// Get a unique identifier for the current thread.
 /// Uses the stack address which is unique per thread.
@@ -52,6 +55,10 @@ pub struct ThreadControlBlock {
     pub heap: UnsafeCell<LocalHeap>,
     /// Stack roots captured at safepoint for the collector to scan.
     pub stack_roots: Mutex<Vec<*const u8>>,
+    /// Local handles for `HandleScope` v2 support.
+    local_handles: UnsafeCell<LocalHandles>,
+    /// Async scope registry for cross-await handle tracking.
+    async_scopes: Mutex<Vec<AsyncScopeEntry>>,
 }
 
 #[allow(clippy::non_send_fields_in_send_ty)]
@@ -76,6 +83,8 @@ impl ThreadControlBlock {
             park_mutex: Mutex::new(()),
             heap: UnsafeCell::new(LocalHeap::new()),
             stack_roots: Mutex::new(Vec::new()),
+            local_handles: UnsafeCell::new(LocalHandles::new()),
+            async_scopes: Mutex::new(Vec::new()),
         }
     }
 
@@ -87,6 +96,71 @@ impl ThreadControlBlock {
     /// Get an immutable reference to the heap.
     pub fn heap(&self) -> &LocalHeap {
         unsafe { &*self.heap.get() }
+    }
+
+    /// Get a raw pointer to local handles for interior mutability.
+    #[inline]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn local_handles_ptr(&self) -> *mut LocalHandles {
+        self.local_handles.get()
+    }
+
+    /// Get a mutable reference to local handles.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure exclusive access.
+    pub fn local_handles_mut(&mut self) -> &mut LocalHandles {
+        unsafe { &mut *self.local_handles.get() }
+    }
+
+    /// Register an async scope for GC root tracking.
+    ///
+    /// Takes OWNERSHIP of an `Arc<AsyncScopeData>`.
+    /// The TCB will hold this Arc for the scope's lifetime.
+    ///
+    /// # Safety Notes
+    ///
+    /// The caller must NOT access the data after registration if they
+    /// plan to drop their Arc - use `Arc::clone()` if continued access needed.
+    /// Both the caller and TCB hold independent Arc references.
+    #[allow(clippy::missing_panics_doc)]
+    pub fn register_async_scope(&self, id: u64, data: Arc<AsyncScopeData>) {
+        let entry = AsyncScopeEntry { id, data };
+        self.async_scopes.lock().unwrap().push(entry);
+    }
+
+    /// Unregister an async scope.
+    #[allow(clippy::missing_panics_doc)]
+    pub fn unregister_async_scope(&self, id: u64) {
+        let mut scopes = self.async_scopes.lock().unwrap();
+        scopes.retain(|e| e.id != id);
+    }
+
+    /// Iterate all handles (sync and async) as GC roots.
+    #[allow(clippy::missing_panics_doc)]
+    pub fn iterate_all_handles<F>(&self, mut visitor: F)
+    where
+        F: FnMut(*const crate::ptr::GcBox<()>),
+    {
+        // Iterate sync handles
+        unsafe {
+            (*self.local_handles.get()).iterate(&mut visitor);
+        }
+
+        // Iterate async handles
+        let scopes = self.async_scopes.lock().unwrap();
+        for entry in scopes.iter() {
+            unsafe {
+                let used = (*entry.data.used.get()).load(Ordering::Acquire);
+                let slots = &*entry.data.block.slots.get();
+                for slot in slots.iter().take(used) {
+                    if !slot.is_null() {
+                        visitor(slot.as_ptr());
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2051,6 +2125,19 @@ where
     F: FnOnce(&mut LocalHeap, &ThreadControlBlock) -> R,
 {
     HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get(), &local.tcb) })
+}
+
+/// Execute a function with access to the thread-local heap and Arc<ThreadControlBlock>.
+/// This is useful for creating `AsyncHandleScope` which requires `&Arc<TCB>`.
+#[allow(dead_code)]
+pub fn with_heap_and_tcb_arc<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut LocalHeap, &std::sync::Arc<ThreadControlBlock>) -> R,
+{
+    HEAP.with(|local| {
+        let tcb_arc = local.tcb.clone();
+        unsafe { f(&mut *local.tcb.heap.get(), &tcb_arc) }
+    })
 }
 
 /// Get the current thread's control block.

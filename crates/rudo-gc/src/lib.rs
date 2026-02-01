@@ -60,6 +60,7 @@
 
 pub mod cell;
 pub mod gc;
+pub mod handles;
 mod metrics;
 mod ptr;
 mod scan;
@@ -81,6 +82,10 @@ pub use cell::GcCell;
 pub use gc::{
     collect, collect_full, default_collect_condition, safepoint, set_collect_condition,
     CollectInfo, PerThreadMarkQueue, StealQueue,
+};
+pub use handles::{
+    AsyncHandle, AsyncHandleGuard, AsyncHandleScope, EscapeableHandleScope, Handle, HandleScope,
+    MaybeHandle, SealedHandleScope,
 };
 pub use metrics::{last_gc_metrics, CollectionType, GcMetrics};
 pub use ptr::{Gc, Weak};

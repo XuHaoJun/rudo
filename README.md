@@ -26,7 +26,8 @@ The library is built on a **BiBOP (Big Bag of Pages)** memory layout, which allo
 - **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`, enabling safe multi-threaded data sharing.
 - **Parallel Marking**: Work-stealing based parallel marking for multi-core scalability.
 - **Lazy Sweep**: Defers memory reclamation to allocation time, reducing STW pause times (enabled by default).
-- **Tokio Async Integration**: Full support for async/await with `GcRootSet`, `GcRootGuard`, and `#[gc::main]` macro (requires `tokio` feature).
+- **HandleScope**: V8-style explicit rooting for maximum performance and compiler-checked safety.
+- **Tokio Async Integration**: Full support for async/await with `spawn_with_gc!`, `AsyncHandleScope`, and `#[gc::main]` macro.
 
 ## Installation
 
@@ -88,6 +89,48 @@ let node = Gc::new(Node {
 
 // Mutating a GC-managed object
 *node.next.borrow_mut() = None;
+```
+
+## HandleScope  - Optional
+
+`rudo-gc` introduces **HandleScope**, a V8-inspired explicit rooting mechanism. While not required (the GC will automatically fallback to **Conservative Stack Scanning** if you don't use it), HandleScopes provide:
+
+1.  **Maximum Performance**: Reduces GC pause times by providing an explicit list of roots, skipping expensive stack/register scanning where possible.
+2.  **Compile-time Safety**: `Handle<'scope, T>` is bound to the scope's lifetime, preventing use-after-scope bugs at compile time.
+3.  **Precise Rooting**: Eliminates "false positives" often found in conservative scanning.
+
+### Synchronous Usage
+
+```rust
+use rudo_gc::handles::HandleScope;
+use rudo_gc::heap::current_thread_control_block;
+
+fn process() {
+    let tcb = current_thread_control_block().unwrap();
+    let scope = HandleScope::new(&tcb);
+    
+    let gc = Gc::new(MyData { value: 42 });
+    let handle = scope.handle(&gc);
+    
+    // Use handle like a reference (implements Deref)
+    println!("Value: {}", handle.value);
+} // Handle automatically becomes invalid here
+```
+
+### Asynchronous Usage (Across Await Points)
+
+Standard `HandleScope` handles cannot live across `.await` points. For async code, use `AsyncHandleScope` or the `spawn_with_gc!` macro:
+
+```rust
+use rudo_gc::spawn_with_gc;
+
+async fn async_task(data: Gc<MyData>) {
+    // Automatically creates an AsyncHandleScope for the spawned task
+    spawn_with_gc!(data => |handle| {
+        tokio::task::yield_now().await; // Safe to await!
+        println!("Still valid: {}", handle.get().value);
+    }).await.unwrap();
+}
 ```
 
 ### Long-running Loops
