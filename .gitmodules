@@ -13,3 +13,6 @@
 [submodule "learn-projects/tokio-rs"]
 	path = learn-projects/tokio-rs
 	url = git@github.com:tokio-rs/tokio.git
+[submodule "learn-projects/v8"]
+	path = learn-projects/v8
+	url = git@github.com:v8/v8.git
