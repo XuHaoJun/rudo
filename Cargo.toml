@@ -16,11 +16,11 @@ rudo-gc-derive = { path = "crates/rudo-gc-derive", version = "0.5" }
 rudo-gc-tokio-derive = { path = "crates/rudo-gc-tokio-derive", version = "0.5" }
 sys_alloc = { path = "crates/sys_alloc", version = "0.5" }
 libc = "0.2"
-windows-sys = "0.52"
+windows-sys = "0.61"
 proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "derive"] }
-tempfile = "3.8"
+tempfile = "3.24"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
