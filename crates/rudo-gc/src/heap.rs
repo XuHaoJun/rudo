@@ -506,6 +506,8 @@ pub const PAGE_FLAG_NEEDS_SWEEP: u8 = 0x04;
 /// Flag: All objects in page are dead (fast path for lazy sweep).
 #[cfg(feature = "lazy-sweep")]
 pub const PAGE_FLAG_ALL_DEAD: u8 = 0x08;
+/// Flag: Page is in the dirty pages list (old generation with dirty objects).
+pub const PAGE_FLAG_DIRTY_LISTED: u8 = 0x10;
 
 /// Maximum number of u64 words in a bitmap to support 64KB pages with 16-byte blocks.
 pub const BITMAP_SIZE: usize = 64;
@@ -694,6 +696,36 @@ impl PageHeader {
         for word in &self.dirty_bitmap {
             word.store(0u64, Ordering::Release);
         }
+    }
+
+    /// Check if page is in the dirty pages list.
+    ///
+    /// # Memory Ordering
+    /// Uses Acquire ordering to synchronize with set operations.
+    #[inline]
+    #[must_use]
+    pub fn is_dirty_listed(&self) -> bool {
+        (self.flags.load(Ordering::Acquire) & PAGE_FLAG_DIRTY_LISTED) != 0
+    }
+
+    /// Set the dirty-listed flag (called under mutex).
+    ///
+    /// # Memory Ordering
+    /// Uses Release ordering to publish Vec push.
+    #[inline]
+    pub fn set_dirty_listed(&self) {
+        self.flags
+            .fetch_or(PAGE_FLAG_DIRTY_LISTED, Ordering::Release);
+    }
+
+    /// Clear the dirty-listed flag (called during GC scan).
+    ///
+    /// # Memory Ordering
+    /// Uses Release ordering to publish for next cycle.
+    #[inline]
+    pub fn clear_dirty_listed(&self) {
+        self.flags
+            .fetch_and(!PAGE_FLAG_DIRTY_LISTED, Ordering::Release);
     }
 
     /// Check if an object at the given index is allocated.
@@ -1232,6 +1264,18 @@ pub struct LocalHeap {
     // So LocalHeap doesn't strictly need this unless we pass it to Manager to avoid re-locking?
     // Manager has its own.
     // We can remove it from here.
+    /// Mutex-protected list of pages with dirty objects (old generation only).
+    /// Cleared at the end of each minor GC cycle.
+    dirty_pages: parking_lot::Mutex<Vec<NonNull<PageHeader>>>,
+
+    /// Snapshot for lock-free scanning during GC.
+    dirty_pages_snapshot: Vec<NonNull<PageHeader>>,
+
+    /// Rolling average for capacity planning.
+    avg_dirty_pages: usize,
+
+    /// History of dirty page counts (last 4 cycles).
+    dirty_page_history: [usize; 4],
 }
 
 impl LocalHeap {
@@ -1254,6 +1298,10 @@ impl LocalHeap {
             old_allocated: 0,
             min_addr: usize::MAX,
             max_addr: 0,
+            dirty_pages: parking_lot::Mutex::new(Vec::with_capacity(64)),
+            dirty_pages_snapshot: Vec::new(),
+            avg_dirty_pages: 16,
+            dirty_page_history: [16; 4],
         }
     }
 
@@ -1272,6 +1320,79 @@ impl LocalHeap {
     #[must_use]
     pub const fn is_in_range(&self, addr: usize) -> bool {
         addr >= self.min_addr && addr < self.max_addr
+    }
+
+    /// Add a page to the dirty pages list if not already present.
+    ///
+    /// # Safety
+    /// Caller must ensure header points to a valid `PageHeader`.
+    ///
+    /// # Performance
+    /// - O(1) if page already listed (early exit via flag check)
+    /// - O(1) + mutex if adding new page
+    #[allow(clippy::significant_drop_tightening)]
+    #[inline]
+    pub unsafe fn add_to_dirty_pages(&self, header: NonNull<PageHeader>) {
+        // Fast path: already in list
+        // SAFETY: Caller guarantees header is valid
+        if unsafe { (*header.as_ptr()).is_dirty_listed() } {
+            return;
+        }
+
+        // Slow path: acquire lock and double-check
+        let mut dirty_pages = self.dirty_pages.lock();
+        // SAFETY: Caller guarantees header is valid
+        if unsafe { !(*header.as_ptr()).is_dirty_listed() } {
+            dirty_pages.push(header);
+            // SAFETY: Caller guarantees header is valid
+            unsafe { (*header.as_ptr()).set_dirty_listed() };
+        }
+    }
+
+    /// Take a snapshot of dirty pages for GC scanning.
+    ///
+    /// # Contract
+    /// - Called at the start of minor GC, before scanning
+    /// - Moves `dirty_pages` contents to snapshot
+    /// - Lock released immediately after snapshot
+    ///
+    /// # Returns
+    /// Number of pages in the snapshot
+    pub fn take_dirty_pages_snapshot(&mut self) -> usize {
+        let mut dirty_pages = self.dirty_pages.lock();
+        let capacity = self.avg_dirty_pages.max(16);
+        self.dirty_pages_snapshot = Vec::with_capacity(capacity);
+        self.dirty_pages_snapshot.extend(dirty_pages.drain(..));
+        drop(dirty_pages);
+        self.dirty_pages_snapshot.len()
+    }
+
+    /// Get iterator over dirty pages snapshot.
+    ///
+    /// # Contract
+    /// - Must only be called after `take_dirty_pages_snapshot()`
+    /// - Must be called before `clear_dirty_pages_snapshot()`
+    #[inline]
+    pub fn dirty_pages_iter(&self) -> impl Iterator<Item = NonNull<PageHeader>> + '_ {
+        self.dirty_pages_snapshot.iter().copied()
+    }
+
+    /// Clear the snapshot and update statistics.
+    ///
+    /// # Contract
+    /// - Must be called at the end of minor GC
+    /// - Updates rolling average for capacity planning
+    pub fn clear_dirty_pages_snapshot(&mut self) {
+        let count = self.dirty_pages_snapshot.len();
+        self.dirty_page_history.rotate_right(1);
+        self.dirty_page_history[0] = count;
+        self.avg_dirty_pages = self.dirty_page_history.iter().sum::<usize>() / 4;
+        self.dirty_pages_snapshot.clear();
+    }
+
+    /// Get count of dirty pages (for debugging/metrics and tests).
+    pub fn dirty_pages_count(&self) -> usize {
+        self.dirty_pages.lock().len()
     }
 
     /// Allocate space for a value of type T.

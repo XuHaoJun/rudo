@@ -6,6 +6,7 @@
 
 use crate::trace::Trace;
 use std::cell::{Ref, RefCell, RefMut};
+use std::ptr::NonNull;
 
 /// A memory location with interior mutability that triggers a write barrier.
 ///
@@ -96,6 +97,8 @@ impl<T: ?Sized> GcCell<T> {
 
                                 if index < (*header).obj_count as usize {
                                     (*header).set_dirty(index);
+                                    // Add page to dirty list for minor GC optimization
+                                    heap.add_to_dirty_pages(NonNull::new_unchecked(header));
                                 }
                             }
                         }
@@ -116,6 +119,8 @@ impl<T: ?Sized> GcCell<T> {
 
                             if index < (*header.as_ptr()).obj_count as usize {
                                 (*header.as_ptr()).set_dirty(index);
+                                // Add page to dirty list for minor GC optimization
+                                heap.add_to_dirty_pages(header);
                             }
                         }
                     }
