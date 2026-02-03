@@ -3,6 +3,8 @@
 Auto-generated from all feature plans. Last updated: 2026-02-03
 
 ## Active Technologies
+- Rust 1.75+ (stable) + `parking_lot` (existing), `crossbeam-queue` (new for lock-free worklist) (008-incremental-marking)
+- N/A (in-memory GC) (008-incremental-marking)
 
 - Rust 1.75+ (stable) + parking_lot (mutex), std::sync::atomic (007-gen-gc-dirty-pages)
 
@@ -22,6 +24,7 @@ cargo test [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECH
 Rust 1.75+ (stable): Follow standard conventions
 
 ## Recent Changes
+- 008-incremental-marking: Added Rust 1.75+ (stable) + `parking_lot` (existing), `crossbeam-queue` (new for lock-free worklist)
 
 - 007-gen-gc-dirty-pages: Added Rust 1.75+ (stable) + parking_lot (mutex), std::sync::atomic
 
