@@ -920,9 +920,13 @@ fn mark_minor_roots_parallel(
             if (*header).generation == 0 {
                 continue;
             }
-            // Skip large objects for now (handled separately if needed)
+            // Handle large objects: add to work queue for parallel marking
             if (*header).is_large_object() {
-                continue;
+                let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                // Add to first worker queue (will be distributed by work stealing)
+                worker_queues[0].push(gc_box_ptr);
             }
             dirty_pages.push(header);
         }
@@ -973,12 +977,12 @@ fn mark_minor_roots_parallel(
 
     registry.set_complete();
 
-    // Clear dirty state for all pages in the snapshot
-    for page_ptr in heap.dirty_pages_iter() {
+    // Clear dirty state for all pages in the snapshot (using already-collected vector)
+    for &header in &dirty_pages {
         unsafe {
-            let header = page_ptr.as_ptr();
-            (*header).clear_all_dirty();
-            (*header).clear_dirty_listed();
+            let header_mut = header as *mut PageHeader;
+            (*header_mut).clear_all_dirty();
+            (*header_mut).clear_dirty_listed();
         }
     }
 
