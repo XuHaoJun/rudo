@@ -978,13 +978,7 @@ fn mark_minor_roots_parallel(
     registry.set_complete();
 
     // Clear dirty state for all pages in the snapshot (using already-collected vector)
-    for &header in &dirty_pages {
-        unsafe {
-            let header_mut = header as *mut PageHeader;
-            (*header_mut).clear_all_dirty();
-            (*header_mut).clear_dirty_listed();
-        }
-    }
+    clear_dirty_page_states(&dirty_pages);
 
     // Clear snapshot and update statistics
     heap.clear_dirty_pages_snapshot();
@@ -1218,6 +1212,8 @@ fn collect_major(heap: &mut LocalHeap) -> usize {
 }
 
 /// Clear all mark bits, dirty bits, and reset `dead_count` in the heap.
+/// NOTE: Does not clear `PAGE_FLAG_DIRTY_LISTED` - that's handled during GC scan
+/// when pages are scanned for live objects.
 fn clear_all_marks_and_dirty(heap: &LocalHeap) {
     for page_ptr in heap.all_pages() {
         // SAFETY: Page pointers in the heap are always valid
@@ -1227,6 +1223,17 @@ fn clear_all_marks_and_dirty(heap: &LocalHeap) {
             (*header).clear_all_dirty();
             #[cfg(feature = "lazy-sweep")]
             (*header).set_dead_count(0);
+        }
+    }
+}
+
+#[inline]
+fn clear_dirty_page_states(headers: &[*const PageHeader]) {
+    for &header_ptr in headers {
+        unsafe {
+            let header_mut = header_ptr.cast_mut();
+            (*header_mut).clear_all_dirty();
+            (*header_mut).clear_dirty_listed();
         }
     }
 }
