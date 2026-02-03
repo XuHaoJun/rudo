@@ -1146,6 +1146,11 @@ fn mark_major_roots_parallel(
 
 /// Minor Collection: Collect Young Generation only.
 fn collect_minor(heap: &mut LocalHeap) -> usize {
+    // Block minor GC during incremental major marking to avoid nested collections
+    if crate::gc::incremental::is_incremental_marking_active() {
+        return 0;
+    }
+
     // 1. Mark Phase
     mark_minor_roots(heap);
 

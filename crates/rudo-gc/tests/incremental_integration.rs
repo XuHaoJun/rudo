@@ -3,6 +3,14 @@
 //! These tests verify that the system correctly falls back to STW
 //! when mutation thresholds are exceeded.
 
+#![allow(
+    clippy::items_after_statements,
+    clippy::significant_drop_tightening,
+    clippy::redundant_pattern_matching,
+    dead_code,
+    clippy::similar_names
+)]
+
 use rudo_gc::gc::incremental::{
     is_incremental_marking_active, is_write_barrier_active, IncrementalConfig,
     IncrementalMarkState, MarkPhase, MarkSliceResult,

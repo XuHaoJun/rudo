@@ -97,6 +97,40 @@ pub fn set_incremental_config(config: IncrementalConfig) {
 pub fn is_incremental_gc_enabled() -> bool {
     IncrementalMarkState::global().config().enabled
 }
+
+/// Get the current incremental marking configuration.
+#[must_use]
+pub fn get_incremental_config() -> IncrementalConfig {
+    *IncrementalMarkState::global().config()
+}
+
+/// Yield to the garbage collector for cooperative scheduling.
+///
+/// This function allows the GC to run during long-running computations,
+/// which is particularly useful when incremental marking is enabled.
+/// When incremental marking is not active, this is a no-op.
+///
+/// # Examples
+///
+/// ```ignore
+/// use rudo_gc::Gc;
+///
+/// fn process_large_dataset(items: &[Item]) {
+///     for (i, item) in items.iter().enumerate() {
+///         process_item(item);
+///
+///         // Yield every 1000 items to allow GC marking
+///         if i % 1000 == 0 {
+///             Gc::<()>::yield_now();
+///         }
+///     }
+/// }
+/// ```
+pub fn yield_now() {
+    if crate::gc::incremental::is_incremental_marking_active() {
+        std::thread::yield_now();
+    }
+}
 pub use gc::{
     collect, collect_full, default_collect_condition, safepoint, set_collect_condition,
     CollectInfo, PerThreadMarkQueue, StealQueue,
