@@ -1,25 +1,25 @@
 # rudo-gc Incremental Marking Implementation Plan
 
-**Version**: 0.8.1  
-**Date**: 2026-02-02  
-**Status**: Draft - Revised for Card-Based Integration  
-**Dependency**: Requires Generational GC 0.7.2 (Card-Based) to be complete  
-**Goal**: Reduce major GC pause times through incremental marking integrated with card-based generational GC
+**Version**: 0.8.2  
+**Date**: 2026-02-03  
+**Status**: Draft - Revised for Dirty Page List Integration  
+**Dependency**: Requires Generational GC 0.7.x Dirty Page List to be complete  
+**Goal**: Reduce major GC pause times through incremental marking integrated with dirty page list tracking
 
 ---
 
 ## Changelog
 
-### Version 0.8.1 (Revised)
+### Version 0.8.2 (Revised)
 
-**Key Changes from 0.8:**
+**Key Changes from 0.8.1:**
 
-1. **Card-Based Integration**: Updated to work with the card-based dirty tracking from 0.7.2 instead of mutex-protected page lists
-2. **Simplified State Management**: Reduced complexity by leveraging per-segment dirty tracking instead of global state machines
-3. **Optimized Write Barrier**: Combined generational and incremental checks without mutex contention
-4. **ChezScheme Alignment**: Adopted proven patterns from ChezScheme's incremental marking implementation
-5. **Lock-Free Design**: Replaced Mutex-based dirty record buffers with lock-free approaches
-6. **Better Performance**: Eliminated write barrier contention while maintaining correctness guarantees
+1. **Dirty Page List Integration**: Updated to work with mutex-protected dirty page lists from spec 007
+2. **Snapshot Scanning**: Incremental marking scans dirty page snapshots rather than card tables
+3. **Write Barrier Alignment**: Uses existing dirty page list barrier to record old-generation mutations
+4. **ChezScheme Alignment**: Keeps the Chez Scheme dirty list + snapshot pattern
+5. **Pragmatic Concurrency**: Prioritizes correctness over lock-free buffers in this phase
+6. **Compatibility**: Matches current `rudo-gc` implementation of dirty pages in `LocalHeap`
 
 ---
 
@@ -31,7 +31,7 @@
 
 **Key Challenge**: Maintaining correctness when objects are modified during the incremental mark phase (requires snapshot-at-the-beginning or incremental update algorithms).
 
-**Timeline**: 3 weeks (after 0.7.2 card-based generational GC is complete and stable)
+**Timeline**: 3 weeks (after dirty page list generational GC is complete and stable)
 
 ---
 
@@ -82,14 +82,15 @@ After mark: B is incorrectly collected (BUG!)
 
 ## 3. Architecture Design
 
-### 3.1 Snapshot-At-The-Beginning (SATB) with Card-Based Integration
+### 3.1 Snapshot-At-The-Beginning (SATB) with Dirty Page List Integration
 
-We use the Dijkstra-style incremental update approach integrated with our card-based generational GC:
+We use the Dijkstra-style incremental update approach integrated with our dirty page list
+generational GC:
 
 1. **Snapshot Phase**: Record all root references at mark start
-2. **Incremental Mark**: Process worklist in small chunks using card-based dirty tracking
-3. **Write Barrier**: Record overwritten references (not new values) using lock-free approaches
-4. **Final Mark**: Revisit recorded references to complete marking using card-based dirty segments
+2. **Incremental Mark**: Process worklist in small chunks using dirty page snapshots
+3. **Write Barrier**: Record old-generation mutations by adding pages to dirty list
+4. **Final Mark**: Revisit dirty page snapshots to complete marking
 
 ### 3.2 System Overview
 
@@ -110,7 +111,7 @@ We use the Dijkstra-style incremental update approach integrated with our card-b
 │                         [MARKING] ─────────────────────────────────────────────────────────────────────┐
 │                         │                        │          │
 │                         │ Mark chunks            │          │
-│                         │ Check dirty records    │          │
+│                         │ Check dirty pages      │          │
 │                         │                        │          │
 │                         ▼                        │          │
 │                    Mark complete?                │          │
@@ -119,7 +120,7 @@ We use the Dijkstra-style incremental update approach integrated with our card-b
 │                     │                                       │
 │                     ▼                                       │
 │               (STW: short)                                  │
-│               Process final dirty records                   │
+│               Process final dirty pages                     │
 │               Verify marking complete                       │
 │                     │                                       │
 │                     ▼                                       │
@@ -133,7 +134,7 @@ We use the Dijkstra-style incremental update approach integrated with our card-b
 
 ### 3.3 Data Structures
 
-#### 3.3.1 Incremental State with Card-Based Integration
+#### 3.3.1 Incremental State with Dirty Page List Integration
 
 **New File**: `src/gc/incremental.rs`
 
@@ -141,7 +142,7 @@ We use the Dijkstra-style incremental update approach integrated with our card-b
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use std::collections::VecDeque;
 
-/// Global incremental marking state integrated with card-based tracking
+/// Global incremental marking state integrated with dirty page list tracking
 pub struct IncrementalMarkState {
     /// Current phase of incremental marking
     phase: AtomicUsize,  // 0=IDLE, 1=SNAPSHOT, 2=MARKING, 3=FINAL_MARK, 4=SWEEPING
@@ -149,8 +150,8 @@ pub struct IncrementalMarkState {
     /// Work queue for objects to mark (lock-free)
     worklist: crossbeam::queue::SegQueue<NonNull<GcBox<()>>>,
     
-    /// Card-based dirty record buffer (lock-free)
-    dirty_records: crossbeam::queue::SegQueue<DirtyRecord>,
+    /// Dirty page snapshot for incremental marking
+    dirty_pages_snapshot: Vec<NonNull<PageHeader>>,
     
     /// Number of objects marked this increment
     marked_this_increment: AtomicUsize,
@@ -158,14 +159,13 @@ pub struct IncrementalMarkState {
     /// Target: mark this many objects per increment
     increment_size: usize,
     
-    /// Card-based dirty segment tracking
-    dirty_segments: parking_lot::Mutex<Vec<NonNull<PageHeader>>>,
+    /// Dirty page list (shared with generational GC)
+    dirty_pages: parking_lot::Mutex<Vec<NonNull<PageHeader>>>,
 }
 
 /// Record of a reference write during incremental marking
+/// (Retained for SATB if we need to track overwritten values)
 pub struct DirtyRecord {
-    /// Location where pointer was stored (the slot)
-    location: *mut *const GcBox<()>,
     /// Old value that was overwritten (needs to be marked)
     old_value: *const GcBox<()>,
 }
@@ -218,23 +218,23 @@ pub struct ThreadControlBlock {
 }
 ```
 
-### 3.4 Write Barrier for Incremental Marking with Card Integration
+### 3.4 Write Barrier for Incremental Marking with Dirty Page List Integration
 
 #### 3.4.1 Enhanced Write Barrier
 
 **File**: `src/cell.rs` and `src/gc/gc.rs`
 
 The write barrier must:
-1. Apply card-based generational barrier (old→young tracking)
+1. Apply dirty page list generational barrier (old→young tracking)
 2. Apply incremental barrier (record overwritten references)
 
 ```rust
-/// Combined write barrier for card-based generational + incremental GC
+/// Combined write barrier for dirty page list generational + incremental GC
 fn write_barrier<T: Trace>(&self, old_value: Option<&T>, new_value: &T) {
-    // 1. Card-based generational barrier (from 0.7.2)
-    // If old object writing young reference, mark card dirty
+    // 1. Dirty page list generational barrier (from spec 007)
+    // If old object writing young reference, mark page dirty
     if self.is_old_generation() && new_value.is_young_generation() {
-        mark_card_dirty(self.page());
+        add_to_dirty_pages(self.page());
     }
     
     // 2. Incremental barrier (new for 0.8)
@@ -252,48 +252,30 @@ fn write_barrier<T: Trace>(&self, old_value: Option<&T>, new_value: &T) {
 }
 ```
 
-#### 3.4.2 Dirty Record Processing
+#### 3.4.2 Dirty Page Snapshot Processing
 
 **File**: `src/gc/incremental.rs`
 
 ```rust
 impl IncrementalMarkState {
     /// Called during each marking increment
-    pub fn process_dirty_records(&self, budget: usize) -> usize {
-        let mut processed = 0;
-        
-        // Process lock-free dirty records
-        while processed < budget {
-            if let Some(record) = self.dirty_records.pop() {
-                // Mark the old value that was overwritten
-                if let Some(gc_box) = unsafe { record.old_value.as_ref() } {
-                    if !gc_box.is_marked() {
-                        self.worklist.push(NonNull::from(gc_box));
-                    }
-                }
-                processed += 1;
-            } else {
-                break;
-            }
-        }
-        
-        processed
+    pub fn process_dirty_pages(&mut self) {
+        // Snapshot dirty pages for lock-free scanning
+        let mut dirty_pages = self.dirty_pages.lock();
+        self.dirty_pages_snapshot.clear();
+        self.dirty_pages_snapshot.extend(dirty_pages.drain(..));
+        drop(dirty_pages);
     }
     
-    /// Record a dirty reference (called from write barrier)
-    pub fn record_dirty(&self, old_value: *const GcBox<()>) {
-        let record = DirtyRecord {
-            location: std::ptr::null_mut(), // Not needed for SATB
-            old_value,
-        };
-        
-        // Lock-free enqueue using crossbeam
-        self.dirty_records.push(record);
+    /// Record a dirty page (called from write barrier)
+    pub fn record_dirty_page(&self, page: NonNull<PageHeader>) {
+        let mut dirty_pages = self.dirty_pages.lock();
+        dirty_pages.push(page);
     }
 }
 ```
 
-### 3.5 Incremental Mark Loop with Card Integration
+### 3.5 Incremental Mark Loop with Dirty Page List Integration
 
 #### 3.5.1 Cooperative Yield Points
 
@@ -320,13 +302,14 @@ pub fn mark_increment(heap: &LocalHeap, budget: usize) -> MarkStatus {
             }
             marked += 1;
         } else {
-            // Worklist empty - check dirty records
-            let dirty_processed = state.process_dirty_records(budget - marked);
-            marked += dirty_processed;
-            
-            if dirty_processed == 0 {
-                // Nothing more to do
+            // Worklist empty - scan dirty pages snapshot
+            state.process_dirty_pages();
+            if state.dirty_pages_snapshot.is_empty() {
                 return MarkStatus::Complete;
+            }
+            for page in state.dirty_pages_snapshot.drain(..) {
+                // Scan dirty objects on this page and push to worklist
+                scan_dirty_page(page, &state.worklist);
             }
         }
     }
@@ -337,7 +320,7 @@ pub fn mark_increment(heap: &LocalHeap, budget: usize) -> MarkStatus {
 /// Check if marking is complete
 pub fn is_marking_complete() -> bool {
     let state = incremental_state();
-    state.worklist.is_empty() && state.dirty_records.is_empty()
+    state.worklist.is_empty()
 }
 ```
 
@@ -370,7 +353,7 @@ impl Gc {
 1. Create `src/gc/incremental.rs` with state management
 2. Add phase constants and atomic state transitions
 3. Implement worklist with crossbeam queue
-4. Add dirty record buffer
+4. Add dirty page snapshot buffer
 5. Create `is_incremental_marking_active()` helper
 6. Unit tests for state machine
 
@@ -381,8 +364,8 @@ impl Gc {
 ### Phase 2: Write Barrier Integration (Week 1-2)
 
 **Tasks**:
-1. Enhance write barrier to support incremental marking with card integration
-2. Implement dirty record recording
+1. Enhance write barrier to support incremental marking with dirty page list integration
+2. Implement dirty page snapshot recording
 3. Add write barrier to GcCell, Gc<T>, and derived Trace impls
 4. Thread-local mark queue for reduced contention
 5. Tests for write barrier correctness
@@ -399,7 +382,7 @@ impl Gc {
 1. Implement snapshot-at-beginning root capture
 2. Create incremental mark loop with budget
 3. Integrate with existing parallel marking infrastructure
-4. Add dirty record processing
+4. Add dirty page snapshot processing
 5. Mark completion detection
 
 **Deliverables**:
@@ -411,7 +394,7 @@ impl Gc {
 
 **Tasks**:
 1. Implement final mark phase (STW to complete marking)
-2. Integration with card-based generational GC (0.7.2)
+2. Integration with dirty page list generational GC (spec 007)
 3. Gc::yield_now() for cooperative scheduling
 4. Configuration options (increment_size, enable/disable)
 5. Full integration tests
@@ -536,7 +519,7 @@ fn bench_incremental_pause(c: &mut Criterion) {
 |------|------------|--------|------------|
 | Lost objects due to race | Medium | Critical | Extensive loom tests, SATB algorithm |
 | Write barrier overhead | High | Medium | Profile hot path, optimize fast path |
-| Memory bloat (dirty records) | Medium | Medium | Bounded buffer, overflow to STW |
+| Memory bloat (dirty pages) | Medium | Medium | Bounded buffer, overflow to STW |
 | Complexity in GC state | Medium | High | Clear state machine, thorough testing |
 | Integration with generational | Medium | Medium | Test combined scenarios |
 
@@ -570,21 +553,21 @@ fn bench_incremental_pause(c: &mut Criterion) {
 
 ---
 
-## 9. Relationship to Card-Based Generational GC
+## 9. Relationship to Dirty Page List Generational GC
 
 ### 9.1 Integration Points
 
-1. **Write Barrier**: Combines card-based generational and incremental checks
+1. **Write Barrier**: Combines dirty page list generational and incremental checks
    ```rust
    fn write_barrier(old, new) {
-       card_based_barrier(new);  // From 0.7.2
-       incremental_barrier(old);   // New for 0.8
+       dirty_page_barrier(new);   // From spec 007
+       incremental_barrier(old);  // New for 0.8
    }
    ```
 
 2. **Collection Scheduling**:
-   - Minor GC: STW, uses card-based dirty page list (from 0.7.2)
-   - Major GC: Incremental, uses write barrier + dirty records
+   - Minor GC: STW, uses dirty page list (spec 007)
+   - Major GC: Incremental, uses write barrier + dirty page snapshots
 
 3. **Phase Coordination**:
    - Cannot run minor GC during incremental major mark
@@ -594,14 +577,14 @@ fn bench_incremental_pause(c: &mut Criterion) {
 
 ```rust
 pub struct GcConfig {
-    // From 0.7.2
+    // From spec 007
     pub generational: bool,
-    pub card_size: usize,
+    pub dirty_page_list: bool,
     
     // New for 0.8
     pub incremental_marking: bool,
     pub increment_size: usize,  // Objects per increment
-    pub max_dirty_records: usize,  // Buffer size before overflow
+    pub max_dirty_pages: usize,  // Snapshot size before fallback
 }
 ```
 
@@ -609,15 +592,15 @@ pub struct GcConfig {
 
 ## 10. Comparison with Original 0.8 Plan
 
-| Aspect | Original 0.8 Plan | Revised 0.8.1 Plan |
+| Aspect | Original 0.8 Plan | Revised 0.8.2 Plan |
 |--------|-------------------|-------------------|
-| **Core Mechanism** | Mutex-protected page lists | Card-based dirty tracking |
-| **Write Barrier** | Mutex contention | Lock-free atomic operations |
-| **State Management** | Global state machine | Per-segment dirty tracking |
-| **Complexity** | High (Mutex, snapshots, double-checks) | Low (ChezScheme patterns) |
-| **Thread Safety** | Mutex + double-check patterns | Lock-free approaches |
-| **Performance** | Write barrier regression | Minimal overhead |
-| **Risk Level** | High | Low |
+| **Core Mechanism** | Mutex-protected page lists | Dirty page list snapshots |
+| **Write Barrier** | Mutex contention | Mutex + double-check (Chez pattern) |
+| **State Management** | Global state machine | Dirty page snapshots |
+| **Complexity** | High (Mutex, snapshots, double-checks) | Moderate (reuses existing infra) |
+| **Thread Safety** | Mutex + double-check patterns | Mutex + double-check patterns |
+| **Performance** | Write barrier regression | Targeted O(dirty_pages) scans |
+| **Risk Level** | High | Medium (reuses proven pattern) |
 
 ---
 
@@ -626,7 +609,7 @@ pub struct GcConfig {
 - **ChezScheme GC**: Reference for incremental marking implementation
 - **V8 GC**: Inspiration for idle-time incremental marking
 - **Go GC**: Reference for concurrent marking with write barriers
-- **Card-Based Generational GC 0.7.2**: Prerequisite for this plan
+- **Dirty Page List GC (spec 007)**: Prerequisite for this plan
 - **Dijkstra et al.**: "On-the-Fly Garbage Collection: An Exercise in Cooperation"
 
 ---
@@ -641,9 +624,9 @@ pub struct GcConfig {
 
 ---
 
-*Document generated: 2026-02-02*  
+*Document generated: 2026-02-03*  
 *Based on: Dybvig Review and ChezScheme Reference*  
-*Prerequisite: Card-Based Generational GC 0.7.2 must be complete and stable*
+*Prerequisite: Dirty Page List GC (spec 007) must be complete and stable*
 
 ---
 
@@ -722,7 +705,7 @@ We use the Dijkstra-style incremental update approach:
 │                         [MARKING] ──yield_now()──┐          │
 │                         │                        │          │
 │                         │ Mark chunks            │          │
-│                         │ Check dirty records    │          │
+│                         │ Check dirty pages      │          │
 │                         │                        │          │
 │                         ▼                        │          │
 │                    Mark complete?                │          │
@@ -731,7 +714,7 @@ We use the Dijkstra-style incremental update approach:
 │                     │                                       │
 │                     ▼                                       │
 │               (STW: short)                                  │
-│               Process final dirty records                   │
+│               Process final dirty pages                     │
 │               Verify marking complete                       │
 │                     │                                       │
 │                     ▼                                       │
@@ -766,14 +749,14 @@ pub struct IncrementalMarkState {
     /// Target: mark this many objects per increment
     increment_size: usize,
     
-    /// Write barrier buffer for dirty records
-    dirty_records: Mutex<Vec<DirtyRecord>>,
+    /// Dirty page snapshot for incremental marking
+    dirty_pages_snapshot: Vec<NonNull<PageHeader>>,
+    /// Dirty page list (shared with generational GC)
+    dirty_pages: Mutex<Vec<NonNull<PageHeader>>>,
 }
 
 /// Record of a reference write during incremental marking
 pub struct DirtyRecord {
-    /// Location where pointer was stored (the slot)
-    location: *mut *const GcBox<()>,
     /// Old value that was overwritten (needs to be marked)
     old_value: *const GcBox<()>,
 }
@@ -860,43 +843,24 @@ fn write_barrier<T: Trace>(&self, old_value: Option<&T>, new_value: &T) {
 }
 ```
 
-#### 3.4.2 Dirty Record Processing
+#### 3.4.2 Dirty Page Snapshot Processing
 
 **File**: `src/gc/incremental.rs`
 
 ```rust
 impl IncrementalMarkState {
     /// Called during each marking increment
-    pub fn process_dirty_records(&self, budget: usize) -> usize {
-        let mut processed = 0;
-        let records = self.dirty_records.lock().unwrap();
-        
-        for record in records.iter().take(budget) {
-            // Mark the old value that was overwritten
-            if let Some(gc_box) = unsafe { record.old_value.as_ref() } {
-                if !gc_box.is_marked() {
-                    self.worklist.push(NonNull::from(gc_box));
-                }
-            }
-            processed += 1;
-        }
-        
-        // Remove processed records
-        drop(records);
-        self.dirty_records.lock().unwrap().drain(0..processed);
-        
-        processed
+    pub fn process_dirty_pages(&mut self) {
+        // Snapshot dirty pages for lock-free scanning
+        let mut dirty_pages = self.dirty_pages.lock().unwrap();
+        self.dirty_pages_snapshot.clear();
+        self.dirty_pages_snapshot.extend(dirty_pages.drain(..));
+        drop(dirty_pages);
     }
     
-    /// Record a dirty reference (called from write barrier)
-    pub fn record_dirty(&self, old_value: *const GcBox<()>) {
-        let record = DirtyRecord {
-            location: std::ptr::null_mut(), // Not needed for SATB
-            old_value,
-        };
-        
-        // Lock-free enqueue using crossbeam
-        self.dirty_records.lock().unwrap().push(record);
+    /// Record a dirty page (called from write barrier)
+    pub fn record_dirty_page(&self, page: NonNull<PageHeader>) {
+        self.dirty_pages.lock().unwrap().push(page);
     }
 }
 ```
@@ -928,13 +892,14 @@ pub fn mark_increment(heap: &LocalHeap, budget: usize) -> MarkStatus {
             }
             marked += 1;
         } else {
-            // Worklist empty - check dirty records
-            let dirty_processed = state.process_dirty_records(budget - marked);
-            marked += dirty_processed;
-            
-            if dirty_processed == 0 {
+            // Worklist empty - check dirty pages
+            state.process_dirty_pages();
+            if state.dirty_pages_snapshot.is_empty() {
                 // Nothing more to do
                 return MarkStatus::Complete;
+            }
+            for page in state.dirty_pages_snapshot.drain(..) {
+                scan_dirty_page(page, &state.worklist);
             }
         }
     }
@@ -945,7 +910,7 @@ pub fn mark_increment(heap: &LocalHeap, budget: usize) -> MarkStatus {
 /// Check if marking is complete
 pub fn is_marking_complete() -> bool {
     let state = incremental_state();
-    state.worklist.is_empty() && state.dirty_records.lock().unwrap().is_empty()
+    state.worklist.is_empty()
 }
 ```
 
@@ -978,7 +943,7 @@ impl Gc {
 1. Create `src/gc/incremental.rs` with state management
 2. Add phase constants and atomic state transitions
 3. Implement worklist with crossbeam queue
-4. Add dirty record buffer
+4. Add dirty page snapshot buffer
 5. Create `is_incremental_marking_active()` helper
 6. Unit tests for state machine
 
@@ -990,7 +955,7 @@ impl Gc {
 
 **Tasks**:
 1. Enhance write barrier to support incremental marking
-2. Implement dirty record recording
+2. Implement dirty page snapshot recording
 3. Add write barrier to GcCell, Gc<T>, and derived Trace impls
 4. Thread-local mark queue for reduced contention
 5. Tests for write barrier correctness
@@ -1007,7 +972,7 @@ impl Gc {
 1. Implement snapshot-at-beginning root capture
 2. Create incremental mark loop with budget
 3. Integrate with existing parallel marking infrastructure
-4. Add dirty record processing
+4. Add dirty page snapshot processing
 5. Mark completion detection
 
 **Deliverables**:
@@ -1144,7 +1109,7 @@ fn bench_incremental_pause(c: &mut Criterion) {
 |------|------------|--------|------------|
 | Lost objects due to race | Medium | Critical | Extensive loom tests, SATB algorithm |
 | Write barrier overhead | High | Medium | Profile hot path, optimize fast path |
-| Memory bloat (dirty records) | Medium | Medium | Bounded buffer, overflow to STW |
+| Memory bloat (dirty pages) | Medium | Medium | Bounded buffer, overflow to STW |
 | Complexity in GC state | Medium | High | Clear state machine, thorough testing |
 | Integration with generational | Medium | Medium | Test combined scenarios |
 
@@ -1180,17 +1145,17 @@ fn bench_incremental_pause(c: &mut Criterion) {
 
 ### 9.1 Integration Points
 
-1. **Write Barrier**: Combines card-based generational and incremental checks
+1. **Write Barrier**: Combines dirty page list generational and incremental checks
    ```rust
    fn write_barrier(old, new) {
-       card_based_barrier(new);  // From 0.7.2
-       incremental_barrier(old);   // New for 0.8
+       dirty_page_barrier(new);   // From spec 007
+       incremental_barrier(old);  // New for 0.8
    }
    ```
 
 2. **Collection Scheduling**:
-   - Minor GC: STW, uses card-based dirty page list (from 0.7.2)
-   - Major GC: Incremental, uses write barrier + dirty records
+   - Minor GC: STW, uses dirty page list (spec 007)
+   - Major GC: Incremental, uses write barrier + dirty page snapshots
 
 3. **Phase Coordination**:
    - Cannot run minor GC during incremental major mark
@@ -1200,14 +1165,14 @@ fn bench_incremental_pause(c: &mut Criterion) {
 
 ```rust
 pub struct GcConfig {
-    // From 0.7.2
+    // From spec 007
     pub generational: bool,
-    pub card_size: usize,
+    pub dirty_page_list: bool,
     
     // New for 0.8
     pub incremental_marking: bool,
     pub increment_size: usize,  // Objects per increment
-    pub max_dirty_records: usize,  // Buffer size before overflow
+    pub max_dirty_pages: usize,  // Snapshot size before fallback
 }
 ```
 
@@ -1215,15 +1180,15 @@ pub struct GcConfig {
 
 ## 10. Comparison with Original 0.8 Plan
 
-| Aspect | Original 0.8 Plan | Revised 0.8.1 Plan |
+| Aspect | Original 0.8 Plan | Revised 0.8.2 Plan |
 |--------|-------------------|-------------------|
-| **Core Mechanism** | Mutex-protected page lists | Card-based dirty tracking |
-| **Write Barrier** | Mutex contention | Lock-free atomic operations |
-| **State Management** | Global state machine | Per-segment dirty tracking |
-| **Complexity** | High (Mutex, snapshots, double-checks) | Low (ChezScheme patterns) |
-| **Thread Safety** | Mutex + double-check patterns | Lock-free approaches |
-| **Performance** | Write barrier regression | Minimal overhead |
-| **Risk Level** | High | Low |
+| **Core Mechanism** | Mutex-protected page lists | Dirty page list snapshots |
+| **Write Barrier** | Mutex contention | Mutex + double-check (Chez pattern) |
+| **State Management** | Global state machine | Dirty page snapshots |
+| **Complexity** | High (Mutex, snapshots, double-checks) | Moderate (reuses existing infra) |
+| **Thread Safety** | Mutex + double-check patterns | Mutex + double-check patterns |
+| **Performance** | Write barrier regression | Targeted O(dirty_pages) scans |
+| **Risk Level** | High | Medium (reuses proven pattern) |
 
 ---
 
@@ -1232,7 +1197,7 @@ pub struct GcConfig {
 - **ChezScheme GC**: Reference for incremental marking implementation
 - **V8 GC**: Inspiration for idle-time incremental marking
 - **Go GC**: Reference for concurrent marking with write barriers
-- **Card-Based Generational GC 0.7.2**: Prerequisite for this plan
+- **Dirty Page List GC (spec 007)**: Prerequisite for this plan
 - **Dijkstra et al.**: "On-the-Fly Garbage Collection: An Exercise in Cooperation"
 
 ---
@@ -1247,21 +1212,21 @@ pub struct GcConfig {
 
 ---
 
-*Document generated: 2026-02-02*  
+*Document generated: 2026-02-03*  
 *Based on: Dybvig Review and ChezScheme Reference*  
-*Prerequisite: Card-Based Generational GC 0.7.2 must be complete and stable*
+*Prerequisite: Dirty Page List GC (spec 007) must be complete and stable*
 
 ---
 
 ## Changelog
 
-### Version 0.8.1 (Revised)
+### Version 0.8.2 (Revised)
 
-**Key Changes from 0.8:**
+**Key Changes from 0.8.1:**
 
-1. **Card-Based Integration**: Updated to work with the card-based dirty tracking from 0.7.2 instead of mutex-protected page lists
-2. **Simplified State Management**: Reduced complexity by leveraging per-segment dirty tracking instead of global state machines
-3. **Optimized Write Barrier**: Combined generational and incremental checks without mutex contention
-4. **ChezScheme Alignment**: Adopted proven patterns from ChezScheme's incremental marking implementation
-5. **Lock-Free Design**: Replaced Mutex-based dirty record buffers with lock-free approaches
-6. **Better Performance**: Eliminated write barrier contention while maintaining correctness guarantees
+1. **Dirty Page List Integration**: Updated to work with mutex-protected dirty page lists from spec 007
+2. **Snapshot Scanning**: Incremental marking scans dirty page snapshots rather than card tables
+3. **Write Barrier Alignment**: Uses existing dirty page list barrier to record old-generation mutations
+4. **ChezScheme Alignment**: Keeps the Chez Scheme dirty list + snapshot pattern
+5. **Pragmatic Concurrency**: Prioritizes correctness over lock-free buffers in this phase
+6. **Compatibility**: Matches current `rudo-gc` implementation of dirty pages in `LocalHeap`
