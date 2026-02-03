@@ -1390,8 +1390,7 @@ impl LocalHeap {
         self.dirty_pages_snapshot.clear();
     }
 
-    /// Get count of dirty pages (for debugging/metrics).
-    #[cfg(test)]
+    /// Get count of dirty pages (for debugging/metrics and tests).
     pub fn dirty_pages_count(&self) -> usize {
         self.dirty_pages.lock().len()
     }

@@ -332,6 +332,14 @@ fn test_dirty_pages_across_multiple_pages() {
     // Minor GC
     collect();
 
+    // Verify dirty page tracking is page-level (at most one entry per dirty page)
+    let dirty_page_count = rudo_gc::heap::with_heap(|heap| heap.dirty_pages_count());
+    assert!(
+        dirty_page_count <= 100,
+        "Expected at most 100 dirty pages (one per old object), got {}",
+        dirty_page_count
+    );
+
     // Verify all young objects survived
     for (i, young) in young_objects.iter().enumerate() {
         assert_eq!(*young.value.borrow(), (i * 1000) as i32);

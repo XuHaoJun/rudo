@@ -927,6 +927,7 @@ fn mark_minor_roots_parallel(
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
                 // Add to first worker queue (will be distributed by work stealing)
                 worker_queues[0].push(gc_box_ptr);
+                continue; // Large objects don't use per-object dirty tracking
             }
             dirty_pages.push(header);
         }
@@ -1212,8 +1213,15 @@ fn collect_major(heap: &mut LocalHeap) -> usize {
 }
 
 /// Clear all mark bits, dirty bits, and reset `dead_count` in the heap.
-/// NOTE: Does not clear `PAGE_FLAG_DIRTY_LISTED` - that's handled during GC scan
-/// when pages are scanned for live objects.
+///
+/// # Invariants
+///
+/// - `PAGE_FLAG_DIRTY_LISTED` is NOT cleared here because:
+///   - Minor GC clears it via `clear_dirty_page_states()` after scanning dirty pages
+///   - Major GC clears it via `clear_dirty_page_states()` after processing its dirty page list
+///   - These two GC types are never nested, so the invariant holds
+///
+/// This separation ensures dirty page tracking works correctly across GC cycles.
 fn clear_all_marks_and_dirty(heap: &LocalHeap) {
     for page_ptr in heap.all_pages() {
         // SAFETY: Page pointers in the heap are always valid
