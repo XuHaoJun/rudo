@@ -19,7 +19,7 @@
 
 **Purpose**: Project initialization and dependency setup
 
-- [ ] T001 Add parking_lot dependency in `crates/rudo-gc/Cargo.toml`
+- [X] T001 Add parking_lot dependency in `crates/rudo-gc/Cargo.toml`
 
 ---
 
@@ -29,12 +29,12 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T002 Add `PAGE_FLAG_DIRTY_LISTED` constant in `crates/rudo-gc/src/heap.rs`
-- [ ] T003 Add PageHeader dirty-listed helpers in `crates/rudo-gc/src/heap.rs`
-- [ ] T004 Add dirty page fields to LocalHeap in `crates/rudo-gc/src/heap.rs`
-- [ ] T005 Add LocalHeap dirty page methods in `crates/rudo-gc/src/heap.rs`
-- [ ] T006 Initialize dirty page fields in `LocalHeap::new()` in `crates/rudo-gc/src/heap.rs`
-- [ ] T007 Update write_barrier to add dirty pages (small/large paths) in `crates/rudo-gc/src/cell.rs`
+- [X] T002 Add `PAGE_FLAG_DIRTY_LISTED` constant in `crates/rudo-gc/src/heap.rs`
+- [X] T003 Add PageHeader dirty-listed helpers in `crates/rudo-gc/src/heap.rs`
+- [X] T004 Add dirty page fields to LocalHeap in `crates/rudo-gc/src/heap.rs`
+- [X] T005 Add LocalHeap dirty page methods in `crates/rudo-gc/src/heap.rs`
+- [X] T006 Initialize dirty page fields in `LocalHeap::new()` in `crates/rudo-gc/src/heap.rs`
+- [X] T007 Update write_barrier to add dirty pages (small/large paths) in `crates/rudo-gc/src/cell.rs`
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -48,9 +48,9 @@
 
 ### Implementation for User Story 1
 
-- [ ] T008 [US1] Update `mark_minor_roots` to use dirty page snapshots in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T009 [US1] Update `mark_minor_roots_multi` to use dirty page snapshots in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T010 [US1] Update `mark_minor_roots_parallel` to use dirty page snapshots in `crates/rudo-gc/src/gc/gc.rs`
+- [X] T008 [US1] Update `mark_minor_roots` to use dirty page snapshots in `crates/rudo-gc/src/gc/gc.rs`
+- [X] T009 [US1] Update `mark_minor_roots_multi` to use dirty page snapshots in `crates/rudo-gc/src/gc/gc.rs`
+- [X] T010 [US1] Update `mark_minor_roots_parallel` to use dirty page snapshots in `crates/rudo-gc/src/gc/gc.rs`
 
 **Checkpoint**: User Story 1 is functional and minor GC scans only dirty pages
 
@@ -64,8 +64,8 @@
 
 ### Tests for User Story 3
 
-- [ ] T011 [P] [US3] Add dirty page list unit tests in `crates/rudo-gc/tests/dirty_page_list.rs`
-- [ ] T012 [P] [US3] Add minor GC integration tests (old→young, large object) in `crates/rudo-gc/tests/minor_gc_optimized.rs`
+- [X] T011 [P] [US3] Add dirty page list unit tests in `crates/rudo-gc/tests/dirty_page_list.rs`
+- [X] T012 [P] [US3] Add minor GC integration tests (old→young, large object) in `crates/rudo-gc/tests/minor_gc_optimized.rs`
 
 **Checkpoint**: Old-to-young survival verified with integration tests
 
@@ -103,9 +103,9 @@
 
 **Purpose**: Validation, performance checks, and CI readiness
 
-- [ ] T015 Run full test suite via `./test.sh`
-- [ ] T016 Run clippy via `./clippy.sh`
-- [ ] T017 Run Miri via `./miri-test.sh`
+- [X] T015 Run full test suite via `./test.sh`
+- [X] T016 Run clippy via `./clippy.sh`
+- [X] T017 Run Miri via `./miri-test.sh`
 - [ ] T018 [P] Add minor GC pause benchmark in `crates/rudo-gc/benches/minor_gc_pause.rs`
 
 ---

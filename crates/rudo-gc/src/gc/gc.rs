@@ -755,9 +755,14 @@ fn mark_minor_roots_multi(
         }
     }
 
-    for page_ptr in heap.all_pages() {
+    // Take snapshot of dirty pages for lock-free scanning
+    let _dirty_count = heap.take_dirty_pages_snapshot();
+
+    // Scan ONLY dirty pages (not all pages)
+    for page_ptr in heap.dirty_pages_iter() {
         unsafe {
             let header = page_ptr.as_ptr();
+            // Defensive: skip young pages (shouldn't happen)
             if (*header).generation == 0 {
                 continue;
             }
@@ -769,27 +774,31 @@ fn mark_minor_roots_multi(
                     std::ptr::NonNull::new_unchecked(gc_box_ptr),
                     &mut visitor,
                 );
-                continue;
-            }
+            } else {
+                let obj_count = (*header).obj_count as usize;
+                for i in 0..obj_count {
+                    if (*header).is_dirty(i) {
+                        let block_size = (*header).block_size as usize;
+                        let header_size = PageHeader::header_size(block_size);
+                        let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
+                        #[allow(clippy::cast_ptr_alignment)]
+                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-            let obj_count = (*header).obj_count as usize;
-            for i in 0..obj_count {
-                if (*header).is_dirty(i) {
-                    let block_size = (*header).block_size as usize;
-                    let header_size = PageHeader::header_size(block_size);
-                    let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
-                    #[allow(clippy::cast_ptr_alignment)]
-                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-
-                    mark_and_trace_incremental(
-                        std::ptr::NonNull::new_unchecked(gc_box_ptr),
-                        &mut visitor,
-                    );
+                        mark_and_trace_incremental(
+                            std::ptr::NonNull::new_unchecked(gc_box_ptr),
+                            &mut visitor,
+                        );
+                    }
                 }
             }
+            // Clear dirty state after scanning
             (*header).clear_all_dirty();
+            (*header).clear_dirty_listed();
         }
     }
+
+    // Clear snapshot and update statistics
+    heap.clear_dirty_pages_snapshot();
 
     while let Some(ptr) = visitor.worklist.pop() {
         unsafe {
@@ -899,13 +908,19 @@ fn mark_minor_roots_parallel(
         }
     }
 
+    // Take snapshot of dirty pages for lock-free scanning
+    let _dirty_count = heap.take_dirty_pages_snapshot();
+
+    // Collect dirty pages into a local vector for parallel distribution
     let mut dirty_pages: Vec<*const PageHeader> = Vec::new();
-    for page_ptr in heap.all_pages() {
+    for page_ptr in heap.dirty_pages_iter() {
         unsafe {
             let header = page_ptr.as_ptr();
+            // Defensive: skip young pages (shouldn't happen)
             if (*header).generation == 0 {
                 continue;
             }
+            // Skip large objects for now (handled separately if needed)
             if (*header).is_large_object() {
                 continue;
             }
@@ -958,14 +973,17 @@ fn mark_minor_roots_parallel(
 
     registry.set_complete();
 
-    for page in &dirty_pages {
+    // Clear dirty state for all pages in the snapshot
+    for page_ptr in heap.dirty_pages_iter() {
         unsafe {
-            (*page as *mut PageHeader)
-                .as_mut()
-                .unwrap()
-                .clear_all_dirty();
+            let header = page_ptr.as_ptr();
+            (*header).clear_all_dirty();
+            (*header).clear_dirty_listed();
         }
     }
+
+    // Clear snapshot and update statistics
+    heap.clear_dirty_pages_snapshot();
 
     crate::gc::marker::clear_overflow_queue();
 }
@@ -1210,7 +1228,8 @@ fn clear_all_marks_and_dirty(heap: &LocalHeap) {
 }
 
 /// Mark roots for Minor GC (Stack + `RemSet`).
-fn mark_minor_roots(heap: &LocalHeap) {
+/// Optimized to scan only dirty pages instead of all pages.
+fn mark_minor_roots(heap: &mut LocalHeap) {
     let mut visitor = GcVisitor::new(VisitorKind::Minor);
 
     unsafe {
@@ -1232,9 +1251,14 @@ fn mark_minor_roots(heap: &LocalHeap) {
         });
     }
 
-    for page_ptr in heap.all_pages() {
+    // Take snapshot of dirty pages for lock-free scanning
+    let _dirty_count = heap.take_dirty_pages_snapshot();
+
+    // Scan ONLY dirty pages (not all pages)
+    for page_ptr in heap.dirty_pages_iter() {
         unsafe {
             let header = page_ptr.as_ptr();
+            // Defensive: skip young pages (shouldn't happen)
             if (*header).generation == 0 {
                 continue;
             }
@@ -1243,24 +1267,28 @@ fn mark_minor_roots(heap: &LocalHeap) {
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
                 ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
-                continue;
-            }
+            } else {
+                let obj_count = (*header).obj_count as usize;
+                for i in 0..obj_count {
+                    if (*header).is_dirty(i) {
+                        let block_size = (*header).block_size as usize;
+                        let header_size = PageHeader::header_size(block_size);
+                        let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
+                        #[allow(clippy::cast_ptr_alignment)]
+                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-            let obj_count = (*header).obj_count as usize;
-            for i in 0..obj_count {
-                if (*header).is_dirty(i) {
-                    let block_size = (*header).block_size as usize;
-                    let header_size = PageHeader::header_size(block_size);
-                    let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
-                    #[allow(clippy::cast_ptr_alignment)]
-                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-
-                    ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
+                        ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
+                    }
                 }
             }
+            // Clear dirty state after scanning
             (*header).clear_all_dirty();
+            (*header).clear_dirty_listed();
         }
     }
+
+    // Clear snapshot and update statistics
+    heap.clear_dirty_pages_snapshot();
 
     visitor.process_worklist();
 }
