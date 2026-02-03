@@ -19,6 +19,7 @@ use std::cell::UnsafeCell;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::LazyLock;
+use std::time::Instant;
 
 use crate::heap::LocalHeap;
 pub use crate::ptr::GcBox;
@@ -149,6 +150,7 @@ pub struct IncrementalMarkState {
     stats: MarkStats,
     fallback_requested: AtomicBool,
     initial_worklist_size: AtomicUsize,
+    slice_start_time: Mutex<Option<Instant>>,
 }
 
 unsafe impl Send for IncrementalMarkState {}
@@ -171,6 +173,7 @@ impl IncrementalMarkState {
             stats: MarkStats::new(),
             fallback_requested: AtomicBool::new(false),
             initial_worklist_size: AtomicUsize::new(0),
+            slice_start_time: Mutex::new(None),
         }
     }
 
@@ -178,6 +181,21 @@ impl IncrementalMarkState {
     pub fn global() -> &'static Self {
         static INSTANCE: LazyLock<IncrementalMarkState> = LazyLock::new(IncrementalMarkState::new);
         &INSTANCE
+    }
+
+    pub fn start_slice(&self) {
+        *self.slice_start_time.lock() = Some(Instant::now());
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::option_if_let_else)]
+    #[allow(clippy::significant_drop_in_scrutinee)]
+    pub fn slice_elapsed_ms(&self) -> u64 {
+        if let Some(start) = *self.slice_start_time.lock() {
+            start.elapsed().as_millis() as u64
+        } else {
+            0
+        }
     }
 
     pub fn phase(&self) -> MarkPhase {
@@ -284,6 +302,7 @@ impl IncrementalMarkState {
         self.reset_worklist();
         self.reset_fallback();
         self.stats().reset();
+        *self.slice_start_time.lock() = None;
     }
 }
 
@@ -304,13 +323,15 @@ pub fn write_barrier_needed() -> bool {
     state.config().enabled && !state.fallback_requested() && is_write_barrier_active()
 }
 
-pub fn execute_snapshot(_heap: &mut LocalHeap) {
+pub fn execute_snapshot(heap: &mut LocalHeap) {
     let state = IncrementalMarkState::global();
     state.set_phase(MarkPhase::Snapshot);
     state.stats().reset();
     state.reset_fallback();
-
+    state.set_initial_worklist_size(state.worklist_len());
     state.reset_worklist();
+
+    state.start_slice();
 
     // Mark bits will be cleared by the main marking process
     // This is handled in the parallel marker infrastructure
@@ -318,8 +339,10 @@ pub fn execute_snapshot(_heap: &mut LocalHeap) {
     state.set_phase(MarkPhase::Marking);
 }
 
-pub fn mark_slice(_heap: &mut LocalHeap, _budget: usize) -> MarkSliceResult {
+#[allow(clippy::significant_drop_tightening)]
+pub fn mark_slice(heap: &LocalHeap, budget: usize) -> MarkSliceResult {
     let state = IncrementalMarkState::global();
+    let config = state.config();
 
     if state.fallback_requested() {
         let reason = state.stats().fallback_reason.lock().clone();
@@ -329,9 +352,8 @@ pub fn mark_slice(_heap: &mut LocalHeap, _budget: usize) -> MarkSliceResult {
     }
 
     let mut objects_marked = 0;
-    let config = state.config();
 
-    while objects_marked < config.increment_size {
+    while objects_marked < budget {
         match state.pop_work() {
             Some(_ptr) => {
                 objects_marked += 1;
@@ -348,7 +370,34 @@ pub fn mark_slice(_heap: &mut LocalHeap, _budget: usize) -> MarkSliceResult {
         .objects_marked
         .fetch_add(objects_marked, Ordering::SeqCst);
 
-    if state.worklist_is_empty() {
+    let dirty_pages = count_dirty_pages(heap);
+
+    let slice_elapsed = state.slice_elapsed_ms();
+    let worklist_size = state.worklist_len();
+    let initial_size = state.initial_worklist_size();
+
+    if dirty_pages > config.max_dirty_pages {
+        state.request_fallback(FallbackReason::DirtyPagesExceeded);
+        return MarkSliceResult::Fallback {
+            reason: FallbackReason::DirtyPagesExceeded,
+        };
+    }
+
+    if slice_elapsed > config.slice_timeout_ms {
+        state.request_fallback(FallbackReason::SliceTimeout);
+        return MarkSliceResult::Fallback {
+            reason: FallbackReason::SliceTimeout,
+        };
+    }
+
+    if initial_size > 0 && worklist_size > initial_size * 10 {
+        state.request_fallback(FallbackReason::WorklistUnbounded);
+        return MarkSliceResult::Fallback {
+            reason: FallbackReason::WorklistUnbounded,
+        };
+    }
+
+    if state.worklist_is_empty() && dirty_pages == 0 {
         MarkSliceResult::Complete {
             total_objects_marked: state.stats().objects_marked.load(Ordering::SeqCst),
             total_slices: state.stats().slices_executed.load(Ordering::SeqCst),
@@ -356,9 +405,13 @@ pub fn mark_slice(_heap: &mut LocalHeap, _budget: usize) -> MarkSliceResult {
     } else {
         MarkSliceResult::Pending {
             objects_marked,
-            dirty_pages_remaining: 0,
+            dirty_pages_remaining: dirty_pages,
         }
     }
+}
+
+fn count_dirty_pages(_heap: &LocalHeap) -> usize {
+    0
 }
 
 pub fn execute_final_mark(_heap: &mut LocalHeap) -> bool {

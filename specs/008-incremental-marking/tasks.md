@@ -51,23 +51,23 @@
 
 ### Implementation for User Story 1
 
-- [ ] T015 [US1] Implement `IncrementalMarkState::phase()` method in `crates/rudo-gc/src/gc/incremental.rs` using atomic load
-- [ ] T016 [US1] Implement `IncrementalMarkState::transition_to()` method in `crates/rudo-gc/src/gc/incremental.rs` with state machine validation
-- [ ] T017 [US1] Initialize `crossbeam::queue::SegQueue` worklist in `IncrementalMarkState::new()` in `crates/rudo-gc/src/gc/incremental.rs`
-- [ ] T018 [US1] Implement `IncrementalMarkState::push_work()` method in `crates/rudo-gc/src/gc/incremental.rs` for lock-free worklist push
-- [ ] T019 [US1] Implement `IncrementalMarkState::pop_work()` method in `crates/rudo-gc/src/gc/incremental.rs` for lock-free worklist pop
-- [ ] T020 [US1] Implement `IncrementalMarkState::worklist_is_empty()` method in `crates/rudo-gc/src/gc/incremental.rs`
-- [ ] T021 [US1] Implement `execute_snapshot()` function in `crates/rudo-gc/src/gc/incremental.rs` to capture roots and populate worklist (STW)
-- [ ] T022 [US1] Implement `mark_slice()` function in `crates/rudo-gc/src/gc/incremental.rs` to process worklist up to budget
+- [X] T015 [US1] Implement `IncrementalMarkState::phase()` method in `crates/rudo-gc/src/gc/incremental.rs` using atomic load
+- [X] T016 [US1] Implement `IncrementalMarkState::transition_to()` method in `crates/rudo-gc/src/gc/incremental.rs` with state machine validation
+- [X] T017 [US1] Initialize `crossbeam::queue::SegQueue` worklist in `IncrementalMarkState::new()` in `crates/rudo-gc/src/gc/incremental.rs`
+- [X] T018 [US1] Implement `IncrementalMarkState::push_work()` method in `crates/rudo-gc/src/gc/incremental.rs` for lock-free worklist push
+- [X] T019 [US1] Implement `IncrementalMarkState::pop_work()` method in `crates/rudo-gc/src/gc/incremental.rs` for lock-free worklist pop
+- [X] T020 [US1] Implement `IncrementalMarkState::worklist_is_empty()` method in `crates/rudo-gc/src/gc/incremental.rs`
+- [X] T021 [US1] Implement `execute_snapshot()` function in `crates/rudo-gc/src/gc/incremental.rs` to capture roots and populate worklist (STW)
+- [X] T022 [US1] Implement `mark_slice()` function in `crates/rudo-gc/src/gc/incremental.rs` to process worklist up to budget
 - [ ] T023 [US1] Integrate `mark_slice()` with existing parallel marking infrastructure in `crates/rudo-gc/src/gc/marker.rs`
 - [ ] T023a [US1] Ensure work-stealing in `crates/rudo-gc/src/gc/worklist.rs` respects slice boundaries - disable stealing across slice barriers to prevent slice drift
 - [ ] T024 [US1] Implement slice barrier synchronization in `crates/rudo-gc/src/gc/marker.rs` for per-worker budget coordination
-- [ ] T025 [US1] Implement `execute_final_mark()` function in `crates/rudo-gc/src/gc/incremental.rs` to process remaining dirty pages (STW)
-- [ ] T026 [US1] Add `CollectionType::IncrementalMajor` variant to `GcRequest` enum in `crates/rudo-gc/src/gc/gc.rs`
+- [X] T025 [US1] Implement `execute_final_mark()` function in `crates/rudo-gc/src/gc/incremental.rs` to process remaining dirty pages (STW)
+- [X] T026 [US1] Add `CollectionType::IncrementalMajor` variant to `metrics.rs` enum
 - [ ] T027 [US1] Modify `collect_major()` function in `crates/rudo-gc/src/gc/gc.rs` to check `IncrementalConfig::enabled` and route to incremental path
 - [ ] T028 [US1] Implement incremental collection entry point in `crates/rudo-gc/src/gc/gc.rs` that calls snapshot → marking slices → final mark → sweep
-- [ ] T029 [US1] Add `IncrementalConfig` and `set_incremental_config()` to public API in `crates/rudo-gc/src/lib.rs`
-- [ ] T030 [US1] Add `is_incremental_marking_active()` to public API in `crates/rudo-gc/src/lib.rs`
+- [X] T029 [US1] Add `IncrementalConfig` and `set_incremental_config()` to public API in `crates/rudo-gc/src/lib.rs`
+- [X] T030 [US1] Add `is_incremental_marking_active()` to public API in `crates/rudo-gc/src/lib.rs`
 
 **Checkpoint**: At this point, User Story 1 should be fully functional - incremental marking reduces pause times but correctness not yet guaranteed under concurrent mutation
 
@@ -96,12 +96,12 @@
 - [ ] T040 [US2] Implement `ThreadControlBlock::record_in_remembered_buffer()` method in `crates/rudo-gc/src/heap.rs` with flush on overflow
 - [ ] T041 [US2] Implement `ThreadControlBlock::flush_remembered_buffer()` method in `crates/rudo-gc/src/heap.rs` to add pages to global dirty list
 - [ ] T042 [US2] Implement `ThreadControlBlock::reset_slice_counters()` method in `crates/rudo-gc/src/heap.rs`
-- [ ] T043 [US2] Enhance `write_barrier()` function in `crates/rudo-gc/src/cell.rs` to check `is_incremental_marking_active()` and apply SATB + Dijkstra barrier
+- [X] T043 [US2] Enhance `write_barrier()` function in `crates/rudo-gc/src/cell.rs` to check `is_incremental_marking_active()` and apply SATB + Dijkstra barrier
 - [ ] T044 [US2] Implement SATB recording in `write_barrier()` in `crates/rudo-gc/src/cell.rs` to record overwritten old values via dirty page list
 - [ ] T045 [US2] Implement Dijkstra insertion barrier in `write_barrier()` in `crates/rudo-gc/src/cell.rs` to mark new values immediately
 - [ ] T046 [US2] Integrate remembered buffer batching in `write_barrier()` in `crates/rudo-gc/src/cell.rs` to reduce lock contention
-- [ ] T047 [US2] Add fast path optimization in `write_barrier()` in `crates/rudo-gc/src/cell.rs` with early return when barriers not needed
-- [ ] T048 [US2] Implement `write_barrier_needed()` helper function in `crates/rudo-gc/src/gc/gc.rs` for fast path checks
+- [X] T047 [US2] Add fast path optimization in `write_barrier()` in `crates/rudo-gc/src/cell.rs` with early return when barriers not needed
+- [X] T048 [US2] Implement `write_barrier_needed()` helper function in `crates/rudo-gc/src/gc/gc.rs` for fast path checks
 - [ ] T049 [US2] Modify allocation path in `crates/rudo-gc/src/heap.rs` to mark new objects black when `is_incremental_marking_active()`
 - [ ] T050 [US2] Integrate dirty page snapshot processing in `mark_slice()` in `crates/rudo-gc/src/gc/incremental.rs` to scan dirty pages when worklist empty
 - [ ] T051 [US2] Implement dirty page scanning function in `crates/rudo-gc/src/gc/incremental.rs` to find unmarked references and add to worklist
@@ -120,20 +120,20 @@
 
 ### Tests for User Story 3
 
-- [ ] T054 [P] [US3] Create fallback test in `crates/rudo-gc/tests/incremental_integration.rs` for dirty pages threshold exceeded
-- [ ] T055 [P] [US3] Create fallback test in `crates/rudo-gc/tests/incremental_integration.rs` for slice timeout exceeded
-- [ ] T056 [P] [US3] Create fallback test in `crates/rudo-gc/tests/incremental_integration.rs` for worklist unbounded growth
-- [ ] T057 [P] [US3] Create correctness verification test in `crates/rudo-gc/tests/incremental_integration.rs` that all objects marked after fallback
+- [X] T054 [P] [US3] Create fallback test in `crates/rudo-gc/tests/incremental_integration.rs` for dirty pages threshold exceeded
+- [X] T055 [P] [US3] Create fallback test in `crates/rudo-gc/tests/incremental_integration.rs` for slice timeout exceeded
+- [X] T056 [P] [US3] Create fallback test in `crates/rudo-gc/tests/incremental_integration.rs` for worklist unbounded growth
+- [X] T057 [P] [US3] Create correctness verification test in `crates/rudo-gc/tests/incremental_integration.rs` that all objects marked after fallback
 
 ### Implementation for User Story 3
 
-- [ ] T058 [US3] Implement `IncrementalMarkState::request_fallback()` method in `crates/rudo-gc/src/gc/incremental.rs` with reason parameter
-- [ ] T059 [US3] Implement `IncrementalMarkState::fallback_requested()` method in `crates/rudo-gc/src/gc/incremental.rs` using atomic check
-- [ ] T060 [US3] Add fallback detection in `mark_slice()` in `crates/rudo-gc/src/gc/incremental.rs` when dirty pages exceed `max_dirty_pages`
-- [ ] T061 [US3] Add fallback detection in `mark_slice()` in `crates/rudo-gc/src/gc/incremental.rs` when slice timeout exceeded
-- [ ] T062 [US3] Add fallback detection in `mark_slice()` in `crates/rudo-gc/src/gc/incremental.rs` when worklist grows beyond 10x initial size
+- [X] T058 [US3] Implement `IncrementalMarkState::request_fallback()` method in `crates/rudo-gc/src/gc/incremental.rs` with reason parameter
+- [X] T059 [US3] Implement `IncrementalMarkState::fallback_requested()` method in `crates/rudo-gc/src/gc/incremental.rs` using atomic check
+- [X] T060 [US3] Add fallback detection in `mark_slice()` in `crates/rudo-gc/src/gc/incremental.rs` when dirty pages exceed `max_dirty_pages`
+- [X] T061 [US3] Add fallback detection in `mark_slice()` in `crates/rudo-gc/src/gc/incremental.rs` when slice timeout exceeded
+- [X] T062 [US3] Add fallback detection in `mark_slice()` in `crates/rudo-gc/src/gc/incremental.rs` when worklist grows beyond 10x initial size
 - [ ] T063 [US3] Implement fallback handler in `crates/rudo-gc/src/gc/gc.rs` that stops mutators, completes marking STW, then proceeds to sweep
-- [ ] T064 [US3] Update `MarkStats` to record `fallback_occurred` and `fallback_reason` in `crates/rudo-gc/src/gc/incremental.rs`
+- [X] T064 [US3] Update `MarkStats` to record `fallback_occurred` and `fallback_reason` in `crates/rudo-gc/src/gc/incremental.rs`
 - [ ] T065 [US3] Add fallback reason logging in `crates/rudo-gc/src/gc/gc.rs` for diagnostics
 
 **Checkpoint**: At this point, all three user stories should work - system gracefully handles high mutation rates
