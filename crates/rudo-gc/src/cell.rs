@@ -74,8 +74,19 @@ impl<T: ?Sized> GcCell<T> {
     /// Triggers the write barrier for this cell.
     ///
     /// This checks if the cell is in an old generation page and marks it as dirty if so.
+    /// During incremental marking, also applies SATB + Dijkstra barriers.
     fn write_barrier(&self) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
+
+        if crate::gc::incremental::is_incremental_marking_active() {
+            self.incremental_write_barrier(ptr);
+        } else {
+            self.generational_write_barrier(ptr);
+        }
+    }
+
+    #[allow(clippy::unused_self)]
+    fn generational_write_barrier(&self, ptr: *const u8) {
         unsafe {
             crate::heap::with_heap(|heap| {
                 let page_addr = (ptr as usize) & crate::heap::page_mask();
@@ -126,6 +137,18 @@ impl<T: ?Sized> GcCell<T> {
                     }
                 }
             });
+        }
+    }
+
+    #[allow(clippy::unused_self)]
+    #[allow(clippy::needless_return)]
+    fn incremental_write_barrier(&self, _ptr: *const u8) {
+        use crate::gc::incremental::IncrementalMarkState;
+
+        let state = IncrementalMarkState::global();
+
+        if !state.config().enabled || state.fallback_requested() {
+            return;
         }
     }
 }

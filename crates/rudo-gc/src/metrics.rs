@@ -55,6 +55,8 @@ pub enum CollectionType {
     Minor = 1,
     /// A major collection (Full heap).
     Major = 2,
+    /// A major collection with incremental marking.
+    IncrementalMajor = 3,
 }
 
 thread_local! {

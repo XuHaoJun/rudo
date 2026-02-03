@@ -57,6 +57,9 @@
 #![warn(clippy::pedantic)]
 #![warn(clippy::nursery)]
 #![allow(clippy::module_name_repetitions)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+#![allow(clippy::clone_on_copy)]
 
 pub mod cell;
 pub mod gc;
@@ -79,6 +82,21 @@ pub mod heap;
 
 // Re-export public API
 pub use cell::GcCell;
+pub use gc::incremental::{
+    is_incremental_marking_active, is_write_barrier_active, IncrementalConfig,
+    IncrementalMarkState, MarkPhase, MarkSliceResult, MarkStats,
+};
+
+/// Configure incremental marking settings.
+pub fn set_incremental_config(config: IncrementalConfig) {
+    IncrementalMarkState::global().set_config(config);
+}
+
+/// Check if incremental GC is enabled.
+#[must_use]
+pub fn is_incremental_gc_enabled() -> bool {
+    IncrementalMarkState::global().config().enabled
+}
 pub use gc::{
     collect, collect_full, default_collect_condition, safepoint, set_collect_condition,
     CollectInfo, PerThreadMarkQueue, StealQueue,
@@ -155,6 +173,7 @@ pub mod test_util {
     pub fn reset() {
         unsafe { crate::heap::reset_for_testing() };
         clear_test_roots();
+        crate::gc::incremental::IncrementalMarkState::global().reset();
     }
 }
 

@@ -19,26 +19,17 @@
 
 **Purpose**: Project initialization and dependency setup
 
-- [ ] T001 Add `crossbeam-queue` dependency to `crates/rudo-gc/Cargo.toml`
-- [ ] T002 [P] Verify `parking_lot` dependency exists in `crates/rudo-gc/Cargo.toml`
-- [ ] T003 [P] Create module structure: add `pub mod incremental;` to `crates/rudo-gc/src/gc/mod.rs`
-
----
-
-## Phase 2: Foundational (Blocking Prerequisites)
-
-**Purpose**: Core infrastructure that MUST be complete before ANY user story can be implemented
-
-**⚠️ CRITICAL**: No user story work can begin until this phase is complete
-
-- [ ] T004 Create `MarkPhase` enum in `crates/rudo-gc/src/gc/incremental.rs` with variants: Idle, Snapshot, Marking, FinalMark, Sweeping
-- [ ] T005 [P] Create `IncrementalConfig` struct in `crates/rudo-gc/src/gc/incremental.rs` with fields: enabled, increment_size, max_dirty_pages, remembered_buffer_len, slice_timeout_ms
-- [ ] T006 [P] Create `MarkStats` struct in `crates/rudo-gc/src/gc/incremental.rs` with atomic fields for statistics tracking
-- [ ] T007 Create `FallbackReason` enum in `crates/rudo-gc/src/gc/incremental.rs` with variants: DirtyPagesExceeded, SliceTimeout, WorklistUnbounded
-- [ ] T008 Create `MarkSliceResult` enum in `crates/rudo-gc/src/gc/incremental.rs` with variants: Pending, Complete, Fallback
-- [ ] T009 Create `IncrementalMarkState` struct skeleton in `crates/rudo-gc/src/gc/incremental.rs` with phase, worklist, config, stats, fallback_requested fields
-- [ ] T010 Implement `IncrementalMarkState::global()` singleton accessor in `crates/rudo-gc/src/gc/incremental.rs`
-- [ ] T011 Implement `is_incremental_marking_active()` helper function in `crates/rudo-gc/src/gc/incremental.rs`
+- [X] T001 Add `crossbeam-queue` dependency to `crates/rudo-gc/Cargo.toml`
+- [X] T002 [P] Verify `parking_lot` dependency exists in `crates/rudo-gc/Cargo.toml`
+- [X] T003 [P] Create module structure: add `pub mod incremental;` to `crates/rudo-gc/src/gc/mod.rs`
+- [X] T004 Create `MarkPhase` enum in `crates/rudo-gc/src/gc/incremental.rs` with variants: Idle, Snapshot, Marking, FinalMark, Sweeping
+- [X] T005 [P] Create `IncrementalConfig` struct in `crates/rudo-gc/src/gc/incremental.rs` with fields: enabled, increment_size, max_dirty_pages, remembered_buffer_len, slice_timeout_ms
+- [X] T006 [P] Create `MarkStats` struct in `crates/rudo-gc/src/gc/incremental.rs` with atomic fields for statistics tracking
+- [X] T007 Create `FallbackReason` enum in `crates/rudo-gc/src/gc/incremental.rs` with variants: DirtyPagesExceeded, SliceTimeout, WorklistUnbounded
+- [X] T008 Create `MarkSliceResult` enum in `crates/rudo-gc/src/gc/incremental.rs` with variants: Pending, Complete, Fallback
+- [X] T009 Create `IncrementalMarkState` struct skeleton in `crates/rudo-gc/src/gc/incremental.rs` with phase, worklist, config, stats, fallback_requested fields
+- [X] T010 Implement `IncrementalMarkState::global()` singleton accessor in `crates/rudo-gc/src/gc/incremental.rs`
+- [X] T011 Implement `is_incremental_marking_active()` helper function in `crates/rudo-gc/src/gc/incremental.rs`
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
@@ -54,9 +45,9 @@
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T012 [P] [US1] Create state machine transition tests in `crates/rudo-gc/tests/incremental_state.rs` for Idle→Snapshot→Marking→FinalMark→Sweeping transitions
-- [ ] T013 [P] [US1] Create pause time benchmark in `crates/rudo-gc/benches/incremental_pause.rs` that measures max pause for 1GB heap
-- [ ] T014 [P] [US1] Create integration test in `crates/rudo-gc/tests/incremental_marking.rs` for basic incremental marking workflow
+- [X] T012 [P] [US1] Create state machine transition tests in `crates/rudo-gc/tests/incremental_state.rs` for Idle→Snapshot→Marking→FinalMark→Sweeping transitions
+- [X] T013 [P] [US1] Create pause time benchmark in `crates/rudo-gc/benches/incremental_pause.rs` that measures max pause for 1GB heap
+- [X] T014 [P] [US1] Create integration test in `crates/rudo-gc/tests/incremental_marking.rs` for basic incremental marking workflow
 
 ### Implementation for User Story 1
 

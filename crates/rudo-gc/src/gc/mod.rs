@@ -11,6 +11,7 @@
 #[allow(clippy::module_inception)]
 mod gc;
 
+pub mod incremental;
 pub mod mark;
 pub mod marker;
 pub mod sync;
