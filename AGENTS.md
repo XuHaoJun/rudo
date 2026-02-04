@@ -114,6 +114,14 @@ This project uses custom agentic workflows defined in `.agent/workflows/` (previ
 
 ## Recent Features & Changes
 
+### 008 - Incremental Marking (In Progress)
+- **Goal**: Reduce major GC pause times by splitting marking into cooperative increments
+- **Algorithm**: Hybrid SATB (Snapshot-At-The-Beginning) + Dijkstra insertion barrier
+- **Write Barriers**: Fast-path optimized barriers in `GcCell::borrow_mut()` with per-thread remembered buffer
+- **Fallback**: Graceful STW fallback when dirty pages exceed threshold or slice timeout
+- **Key Types**: `IncrementalMarkState`, `MarkPhase` enum, `IncrementalConfig`, `MarkStats`
+- **Public API**: `set_incremental_config()`, `get_incremental_config()`, `is_incremental_marking_active()`
+
 ### 005 - Lazy Sweep (In Progress)
 - Implements lazy sweeping to reduce pause times.
 - Two-phase sweep: fast initial sweep for availability, background/lazy sweep for reclamation.

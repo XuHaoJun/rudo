@@ -298,3 +298,111 @@ fn state_machine_transition_test() {
     state.set_phase(MarkPhase::Sweeping);
     state.set_phase(MarkPhase::Idle);
 }
+
+#[test]
+fn test_new_allocations_marked_black_during_incremental_marking() {
+    use std::cell::RefCell;
+
+    test_util::reset();
+
+    IncrementalMarkState::global().set_config(IncrementalConfig {
+        enabled: true,
+        ..Default::default()
+    });
+
+    let root = Gc::new(RefCell::new(Vec::<Gc<Data>>::new()));
+
+    let state = IncrementalMarkState::global();
+    state.set_phase(MarkPhase::Snapshot);
+
+    state.set_phase(MarkPhase::Marking);
+    assert!(is_incremental_marking_active());
+
+    for i in 0..100 {
+        let new_obj = Gc::new(Data { value: i });
+        root.borrow_mut().push(new_obj);
+    }
+
+    state.set_phase(MarkPhase::FinalMark);
+    state.set_phase(MarkPhase::Sweeping);
+    state.set_phase(MarkPhase::Idle);
+
+    assert_eq!(root.borrow().len(), 100);
+    for (i, obj) in root.borrow().iter().enumerate() {
+        assert_eq!(obj.value, i);
+    }
+}
+
+#[test]
+fn test_satb_barrier_records_overwritten_references() {
+    use std::cell::RefCell;
+
+    test_util::reset();
+
+    IncrementalMarkState::global().set_config(IncrementalConfig {
+        enabled: true,
+        ..Default::default()
+    });
+
+    let _old_obj = Gc::new(Data { value: 1 });
+    let new_obj = Gc::new(Data { value: 2 });
+
+    let container = Gc::new(RefCell::new(new_obj));
+
+    let state = IncrementalMarkState::global();
+    state.set_phase(MarkPhase::Snapshot);
+    state.set_phase(MarkPhase::Marking);
+
+    *container.borrow_mut() = Gc::new(Data { value: 3 });
+
+    state.set_phase(MarkPhase::FinalMark);
+    state.set_phase(MarkPhase::Sweeping);
+    state.set_phase(MarkPhase::Idle);
+
+    assert_eq!(container.borrow().value, 3);
+}
+
+#[test]
+fn test_write_barrier_fast_path_disabled_during_idle() {
+    test_util::reset();
+
+    assert!(!is_incremental_marking_active());
+
+    let cell = Gc::new(RefCell::new(Gc::new(Data { value: 42 })));
+    let new = Gc::new(Data { value: 100 });
+
+    *cell.borrow_mut() = new;
+
+    assert_eq!(cell.borrow().value, 100);
+}
+
+#[test]
+fn test_incremental_config_respected_by_write_barrier() {
+    use std::cell::RefCell;
+
+    test_util::reset();
+
+    IncrementalMarkState::global().set_config(IncrementalConfig {
+        enabled: false,
+        ..Default::default()
+    });
+
+    let cell = Gc::new(RefCell::new(Gc::new(Data { value: 42 })));
+    let new = Gc::new(Data { value: 100 });
+
+    *cell.borrow_mut() = new;
+
+    assert_eq!(cell.borrow().value, 100);
+
+    IncrementalMarkState::global().set_config(IncrementalConfig {
+        enabled: true,
+        ..Default::default()
+    });
+
+    let cell2 = Gc::new(RefCell::new(Gc::new(Data { value: 200 })));
+    let new2 = Gc::new(Data { value: 300 });
+
+    *cell2.borrow_mut() = new2;
+
+    assert_eq!(cell2.borrow().value, 300);
+}

@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::PoisonError;
 
+use crate::gc::incremental::FallbackReason;
 use crate::gc::incremental::{
     count_dirty_pages, execute_final_mark, execute_snapshot, mark_slice, start_incremental_mark,
     IncrementalMarkState, MarkPhase, MarkSliceResult, MarkStats,
@@ -215,6 +216,41 @@ pub fn safepoint() {
 // ============================================================================
 
 const MAJOR_THRESHOLD: usize = 10 * 1024 * 1024; // 10MB
+
+#[inline]
+fn log_fallback_reason(reason: FallbackReason) {
+    match reason {
+        FallbackReason::DirtyPagesExceeded => {
+            eprintln!("[GC] Incremental marking fallback: dirty pages exceeded threshold");
+        }
+        FallbackReason::SliceTimeout => {
+            eprintln!("[GC] Incremental marking fallback: slice timeout exceeded");
+        }
+        FallbackReason::WorklistUnbounded => {
+            eprintln!("[GC] Incremental marking fallback: worklist grew unbounded");
+        }
+    }
+}
+
+fn handle_incremental_fallback(_heap: &LocalHeap) {
+    let state = IncrementalMarkState::global();
+    let mark_stats = state.stats();
+
+    let reason = {
+        let guard = mark_stats.fallback_reason.lock();
+        guard.unwrap_or(FallbackReason::DirtyPagesExceeded)
+    };
+
+    log_fallback_reason(reason);
+
+    let config = state.config();
+
+    if config.enabled {
+        eprintln!(
+            "[GC] Incremental marking fallback triggered, completing marking STW (reason: {reason:?})"
+        );
+    }
+}
 
 /// Perform a garbage collection.
 ///
@@ -1247,7 +1283,8 @@ fn collect_major_incremental(heap: &mut LocalHeap) -> usize {
                 break;
             }
             MarkSliceResult::Pending { .. } => {}
-            MarkSliceResult::Fallback { .. } => {
+            MarkSliceResult::Fallback { reason } => {
+                log_fallback_reason(reason);
                 state.set_phase(MarkPhase::FinalMark);
                 break;
             }

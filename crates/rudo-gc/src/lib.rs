@@ -88,7 +88,9 @@ pub use gc::incremental::{
 };
 
 /// Configure incremental marking settings.
-pub fn set_incremental_config(config: IncrementalConfig) {
+///
+/// Use this to enable and configure incremental marking for reduced GC pause times.
+pub fn set_incremental_config(config: gc::incremental::IncrementalConfig) {
     IncrementalMarkState::global().set_config(config);
 }
 
@@ -100,7 +102,7 @@ pub fn is_incremental_gc_enabled() -> bool {
 
 /// Get the current incremental marking configuration.
 #[must_use]
-pub fn get_incremental_config() -> IncrementalConfig {
+pub fn get_incremental_config() -> gc::incremental::IncrementalConfig {
     *IncrementalMarkState::global().config()
 }
 

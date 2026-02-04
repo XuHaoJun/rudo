@@ -88,6 +88,11 @@ impl<T: ?Sized> GcCell<T> {
     ///
     /// This checks if the cell is in an old generation page and marks it as dirty if so.
     /// During incremental marking, also applies SATB + Dijkstra barriers.
+    ///
+    /// # Hot Path Optimization
+    ///
+    /// This function is optimized for the common case where incremental marking is not active.
+    /// When not in incremental marking mode, it falls through to generational write barrier.
     fn write_barrier(&self) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 

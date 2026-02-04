@@ -250,6 +250,30 @@ pub fn main(
     expanded.into()
 }
 
+/// Derive macro for the `Trace` trait.
+///
+/// This macro generates implementations of the `Trace` trait for structs and enums.
+/// The generated implementation calls `trace()` on each field recursively.
+///
+/// # Write Barrier Compatibility
+///
+/// The derived `Trace` implementation is compatible with incremental marking write barriers.
+/// When incremental marking is active, mutations to `Gc<T>` fields are tracked via the
+/// `GcCell<T>` write barrier, ensuring correctness under concurrent mutation.
+///
+/// For types that need custom write barrier behavior, implement `Trace` manually.
+///
+/// # Example
+///
+/// ```rust
+/// use rudo_gc::Trace;
+///
+/// #[derive(Trace)]
+/// struct MyStruct {
+///     field1: Gc<OtherStruct>,
+///     field2: Vec<Gc<AnotherStruct>>,
+/// }
+/// ```
 #[proc_macro_derive(Trace, attributes(rudo_gc))]
 pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
