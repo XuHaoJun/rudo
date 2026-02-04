@@ -36,7 +36,9 @@ use std::ptr::NonNull;
 /// - **Dijkstra Insertion Barrier**: Immediately marks new pointer values written during marking.
 ///   This prevents newly-reachable objects from being missed.
 ///
-/// The write barrier is only active during the `Marking` phase of incremental collection.
+/// The `borrow_mut()` method automatically captures old GC pointer values for SATB
+/// verification. For types that don't implement `GcCapture` (e.g., primitives),
+/// use `borrow_mut_unchecked()`.
 pub struct GcCell<T: ?Sized> {
     inner: RefCell<T>,
 }
@@ -69,35 +71,17 @@ impl<T: ?Sized> GcCell<T> {
         self.inner.borrow()
     }
 
-    /// Mutably borrows the wrapped value.
+    /// Mutably borrows the wrapped value with automatic SATB barrier.
     ///
-    /// The borrow lasts until the returned `RefMut`'s scope ends. The value cannot be
-    /// borrowed while this borrow is active.
-    ///
-    /// Triggers generational write barrier for old-to-young pointer tracking.
-    /// For SATB capture during incremental marking, use `borrow_mut_with_satb()`.
+    /// This method automatically captures old GC pointer values before mutation,
+    /// enabling correct incremental marking. Use this for `GcCell<Gc<T>>`,
+    /// `GcCell<Option<Gc<T>>>`, `GcCell<Vec<Gc<T>>>`, and similar types.
     ///
     /// # Panics
     ///
     /// Panics if the value is currently borrowed.
     #[inline]
-    pub fn borrow_mut(&self) -> RefMut<'_, T> {
-        let ptr = std::ptr::from_ref(self).cast::<u8>();
-        self.generational_write_barrier(ptr);
-        self.inner.borrow_mut()
-    }
-
-    /// Mutably borrows the wrapped value with SATB barrier for incremental GC.
-    ///
-    /// This method captures old pointer values before mutation, enabling correct
-    /// incremental marking. Use this for `GcCell<Gc<T>>`, `GcCell<Option<Gc<T>>>`,
-    /// `GcCell<Vec<Gc<T>>>`, and other types implementing `GcCapture`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the value is currently borrowed.
-    #[inline]
-    pub fn borrow_mut_with_satb(&self) -> RefMut<'_, T>
+    pub fn borrow_mut(&self) -> RefMut<'_, T>
     where
         T: GcCapture,
     {
@@ -119,6 +103,19 @@ impl<T: ?Sized> GcCell<T> {
         }
 
         self.generational_write_barrier(ptr);
+        self.inner.borrow_mut()
+    }
+
+    /// Mutably borrows the wrapped value without GC tracking.
+    ///
+    /// This is an escape hatch for types that don't implement `GcCapture`
+    /// (e.g., primitives, non-Gc structs). No write barrier is triggered.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value is currently borrowed.
+    #[inline]
+    pub fn borrow_mut_unchecked(&self) -> RefMut<'_, T> {
         self.inner.borrow_mut()
     }
 
@@ -460,6 +457,70 @@ impl<T: Trace + 'static, const N: usize> GcCapture for crate::GcCell<[crate::Gc<
     }
 }
 
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+#[allow(clippy::implicit_hasher)]
+impl<K: Trace + 'static, V: Trace + 'static, S: std::hash::BuildHasher + Default> GcCapture
+    for HashMap<crate::Gc<K>, crate::Gc<V>, S>
+{
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for gc in self.values() {
+            gc.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<K: Trace + 'static, V: Trace + 'static> GcCapture for BTreeMap<crate::Gc<K>, crate::Gc<V>> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for gc in self.values() {
+            gc.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+#[allow(clippy::implicit_hasher)]
+impl<T: Trace + 'static, S: std::hash::BuildHasher + Default> GcCapture
+    for HashSet<crate::Gc<T>, S>
+{
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for gc in self {
+            gc.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: Trace + 'static> GcCapture for BTreeSet<crate::Gc<T>> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for gc in self {
+            gc.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
 // SAFETY: GcCell is Trace if T is Trace.
 // It just traces the inner value.
 unsafe impl<T: Trace + ?Sized> Trace for GcCell<T> {
@@ -519,10 +580,10 @@ mod tests {
     }
 
     #[test]
-    fn test_satb_capture_with_borrow_mut_with_satb() {
+    fn test_satb_capture_with_borrow_mut() {
         let cell = Gc::new(GcCell::new(Some(Gc::new(42))));
 
-        let mut borrow = cell.borrow_mut_with_satb();
+        let mut borrow = cell.borrow_mut();
         *borrow = Some(Gc::new(100));
 
         drop(borrow);
@@ -534,7 +595,7 @@ mod tests {
         let cell = Gc::new(GcCell::new(vec![Gc::new(1), Gc::new(2), Gc::new(3)]));
 
         {
-            let mut borrow = cell.borrow_mut_with_satb();
+            let mut borrow = cell.borrow_mut();
             borrow[1] = Gc::new(200);
         }
 
@@ -549,7 +610,7 @@ mod tests {
         let old_ptr = cell.borrow()[1].raw_ptr();
 
         {
-            let mut borrow = cell.borrow_mut_with_satb();
+            let mut borrow = cell.borrow_mut();
             borrow[1] = Gc::new(999);
         }
 
@@ -561,7 +622,7 @@ mod tests {
         let cell = Gc::new(GcCell::new(Some(vec![Gc::new(1), Gc::new(2)])));
 
         {
-            let mut borrow = cell.borrow_mut_with_satb();
+            let mut borrow = cell.borrow_mut();
             borrow.as_mut().unwrap()[0] = Gc::new(100);
         }
 
@@ -580,12 +641,22 @@ mod tests {
         let cell = Gc::new(GcCell::new([Gc::new(1), Gc::new(2), Gc::new(3)]));
 
         {
-            let mut borrow = cell.borrow_mut_with_satb();
+            let mut borrow = cell.borrow_mut();
             borrow[2] = Gc::new(300);
         }
 
         let values: Vec<i32> = cell.borrow().iter().map(|gc| **gc).collect();
         assert_eq!(values, vec![1, 2, 300]);
+    }
+
+    #[test]
+    fn test_borrow_mut_unchecked() {
+        let cell = GcCell::new(42);
+        {
+            let mut borrow = cell.borrow_mut_unchecked();
+            *borrow = 100;
+        }
+        assert_eq!(cell.into_inner(), 100);
     }
 
     #[test]
