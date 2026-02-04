@@ -6,6 +6,7 @@
 
 use crate::gc::incremental::IncrementalMarkState;
 use crate::heap::{ptr_to_page_header, PageHeader, MAGIC_GC_PAGE};
+use crate::ptr::GcBox;
 use crate::trace::Trace;
 use std::cell::{Ref, RefCell, RefMut};
 use std::ptr::NonNull;
@@ -70,29 +71,55 @@ impl<T: ?Sized> GcCell<T> {
 
     /// Mutably borrows the wrapped value.
     ///
-    /// The borrow lasts until the returned `RefMut` exits scope. The value cannot be
+    /// The borrow lasts until the returned `RefMut`'s scope ends. The value cannot be
     /// borrowed while this borrow is active.
     ///
-    /// Triggers a write barrier to notify the GC of potential old-to-young pointers.
+    /// Triggers generational write barrier for old-to-young pointer tracking.
+    /// For SATB capture during incremental marking, use `borrow_mut_with_satb()`.
     ///
     /// # Panics
     ///
     /// Panics if the value is currently borrowed.
     #[inline]
     pub fn borrow_mut(&self) -> RefMut<'_, T> {
-        self.write_barrier();
+        let ptr = std::ptr::from_ref(self).cast::<u8>();
+        self.generational_write_barrier(ptr);
         self.inner.borrow_mut()
     }
 
-    /// Triggers the write barrier for this cell.
+    /// Mutably borrows the wrapped value with SATB barrier for incremental GC.
     ///
-    /// This checks if the cell is in an old generation page and marks it as dirty if so.
-    /// During incremental marking, also applies SATB + Dijkstra barriers.
+    /// This method captures old pointer values before mutation, enabling correct
+    /// incremental marking. Use this for `GcCell<Gc<T>>`, `GcCell<Option<Gc<T>>>`,
+    /// and other types implementing `GcCapture`.
     ///
-    /// # Hot Path Optimization
+    /// # Panics
     ///
-    /// This function is optimized for the common case where incremental marking is not active.
-    /// When not in incremental marking mode, it falls through to generational write barrier.
+    /// Panics if the value is currently borrowed.
+    #[inline]
+    pub fn borrow_mut_with_satb(&self) -> RefMut<'_, T>
+    where
+        T: GcCapture,
+    {
+        let ptr = std::ptr::from_ref(self).cast::<u8>();
+
+        if crate::gc::incremental::is_incremental_marking_active() {
+            unsafe {
+                let value = &*self.inner.as_ptr();
+                if let Some(gc_ptr) = value.capture_gc_ptr() {
+                    crate::heap::with_heap(|heap| {
+                        heap.record_satb_old_value(gc_ptr);
+                    });
+                }
+            }
+        }
+
+        self.generational_write_barrier(ptr);
+        self.inner.borrow_mut()
+    }
+
+    #[allow(dead_code)]
+    #[allow(clippy::unused_self)]
     fn write_barrier(&self) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
@@ -158,6 +185,7 @@ impl<T: ?Sized> GcCell<T> {
         }
     }
 
+    #[allow(dead_code)]
     #[allow(clippy::unused_self)]
     #[allow(clippy::needless_return)]
     fn incremental_write_barrier(&self, ptr: *const u8) {
@@ -185,6 +213,7 @@ impl<T: ?Sized> GcCell<T> {
 /// This is used by the SATB barrier to record pages that may contain
 /// overwritten old values. The remembered buffer is flushed to the
 /// global dirty list when it overflows.
+#[allow(dead_code)]
 #[allow(unsafe_op_in_unsafe_fn)]
 #[inline]
 unsafe fn record_page_in_remembered_buffer(page: NonNull<PageHeader>) -> bool {
@@ -197,6 +226,50 @@ unsafe fn record_page_in_remembered_buffer(page: NonNull<PageHeader>) -> bool {
             false
         }
     })
+}
+
+/// Trait for types that can participate in SATB barrier.
+/// Implement this to enable automatic old-value capture during write barriers.
+pub trait GcCapture {
+    /// Capture the `GcBox` pointer from this type, if it contains a `Gc`.
+    ///
+    /// Returns `Some` if this type contains a `Gc` pointer, `None` otherwise.
+    /// The returned pointer is used for SATB barrier recording.
+    fn capture_gc_ptr(&self) -> Option<NonNull<GcBox<()>>>;
+}
+
+impl<T: Trace + 'static> GcCapture for crate::Gc<T> {
+    #[inline]
+    fn capture_gc_ptr(&self) -> Option<NonNull<GcBox<()>>> {
+        let ptr = self.raw_ptr();
+        if ptr.is_null() {
+            None
+        } else {
+            // SAFETY: ptr is non-null, and we only use it to check if it's null
+            unsafe { Some(NonNull::new_unchecked(ptr.cast())) }
+        }
+    }
+}
+
+impl<T: Trace + 'static> GcCapture for Option<crate::Gc<T>> {
+    #[inline]
+    fn capture_gc_ptr(&self) -> Option<NonNull<GcBox<()>>> {
+        self.as_ref().and_then(|gc| gc.capture_gc_ptr())
+    }
+}
+
+impl<T: Trace + 'static> GcCapture for Vec<crate::Gc<T>> {
+    #[inline]
+    fn capture_gc_ptr(&self) -> Option<NonNull<GcBox<()>>> {
+        self.first().and_then(|gc| gc.capture_gc_ptr())
+    }
+}
+
+impl<T: Trace + 'static, const N: usize> GcCapture for [crate::Gc<T>; N] {
+    #[inline]
+    fn capture_gc_ptr(&self) -> Option<NonNull<GcBox<()>>> {
+        self.first().and_then(|gc| gc.capture_gc_ptr())
+    }
 }
 
 // SAFETY: GcCell is Trace if T is Trace.
@@ -253,6 +326,19 @@ mod tests {
         let cell = Gc::new(GcCell::new(Some(Gc::new(42))));
 
         let mut borrow = cell.borrow_mut();
+        *borrow = Some(Gc::new(100));
+
+        crate::collect_full();
+
+        drop(borrow);
+        assert_eq!(**cell.borrow().as_ref().unwrap(), 100);
+    }
+
+    #[test]
+    fn test_satb_capture_with_borrow_mut_with_satb() {
+        let cell = Gc::new(GcCell::new(Some(Gc::new(42))));
+
+        let mut borrow = cell.borrow_mut_with_satb();
         *borrow = Some(Gc::new(100));
 
         crate::collect_full();

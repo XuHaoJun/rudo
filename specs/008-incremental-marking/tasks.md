@@ -102,6 +102,10 @@
 - [X] T046 [US2] Integrate remembered buffer batching in `write_barrier()` in `crates/rudo-gc/src/cell.rs` to reduce lock contention
 - [X] T047 [US2] Add fast path optimization in `write_barrier()` in `crates/rudo-gc/src/cell.rs` with early return when barriers not needed
 - [X] T048 [US2] Implement `write_barrier_needed()` helper function in `crates/rudo-gc/src/gc/gc.rs` for fast path checks
+- [ ] T043-FIX [US2-BUGFIX] Fix `incremental_write_barrier()` in `crates/rudo-gc/src/cell.rs` to capture old Gc pointer values (not page addresses) for SATB correctness
+- [ ] T044-FIX [US2-BUGFIX] Implement true SATB recording in `GcCell::borrow_mut()` to call `heap.record_satb_old_value()` with old pointer before overwrite
+- [ ] T045-FIX [US2-BUGFIX] Implement Dijkstra insertion barrier in `GcCell::borrow_mut()` to mark new Gc pointer values immediately via `mark_object_black()`
+- [ ] T049-FIX [US2-BUGFIX] Add SATB correctness test in `crates/rudo-gc/tests/incremental_write_barrier.rs` for mutation during incremental marking
 - [X] T049 [US2] Modify allocation path in `crates/rudo-gc/src/ptr.rs` to mark new objects black when `is_incremental_marking_active()`
 - [X] T050 [US2] Integrate dirty page snapshot processing in `mark_slice()` in `crates/rudo-gc/src/gc/incremental.rs` to scan dirty pages when worklist empty
 - [X] T051 [US2] Implement dirty page scanning function in `crates/rudo-gc/src/gc/incremental.rs` to find unmarked references and add to worklist
