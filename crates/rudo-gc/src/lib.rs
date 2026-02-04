@@ -83,8 +83,8 @@ pub mod heap;
 // Re-export public API
 pub use cell::GcCell;
 pub use gc::incremental::{
-    is_incremental_marking_active, is_write_barrier_active, IncrementalConfig,
-    IncrementalMarkState, MarkPhase, MarkSliceResult, MarkStats,
+    is_incremental_marking_active, is_write_barrier_active, mark_new_object_black,
+    IncrementalConfig, IncrementalMarkState, MarkPhase, MarkSliceResult, MarkStats,
 };
 
 /// Configure incremental marking settings.

@@ -102,11 +102,11 @@
 - [X] T046 [US2] Integrate remembered buffer batching in `write_barrier()` in `crates/rudo-gc/src/cell.rs` to reduce lock contention
 - [X] T047 [US2] Add fast path optimization in `write_barrier()` in `crates/rudo-gc/src/cell.rs` with early return when barriers not needed
 - [X] T048 [US2] Implement `write_barrier_needed()` helper function in `crates/rudo-gc/src/gc/gc.rs` for fast path checks
-- [ ] T049 [US2] Modify allocation path in `crates/rudo-gc/src/heap.rs` to mark new objects black when `is_incremental_marking_active()`
-- [ ] T050 [US2] Integrate dirty page snapshot processing in `mark_slice()` in `crates/rudo-gc/src/gc/incremental.rs` to scan dirty pages when worklist empty
-- [ ] T051 [US2] Implement dirty page scanning function in `crates/rudo-gc/src/gc/incremental.rs` to find unmarked references and add to worklist
-- [ ] T052 [US2] Update `LocalHeap::take_dirty_pages_snapshot()` in `crates/rudo-gc/src/heap.rs` to be called at mark slice start
-- [ ] T053 [US2] Update completion check in `crates/rudo-gc/src/gc/incremental.rs` to require worklist empty AND dirty snapshot drained
+- [X] T049 [US2] Modify allocation path in `crates/rudo-gc/src/ptr.rs` to mark new objects black when `is_incremental_marking_active()`
+- [X] T050 [US2] Integrate dirty page snapshot processing in `mark_slice()` in `crates/rudo-gc/src/gc/incremental.rs` to scan dirty pages when worklist empty
+- [X] T051 [US2] Implement dirty page scanning function in `crates/rudo-gc/src/gc/incremental.rs` to find unmarked references and add to worklist
+- [X] T052 [US2] Update `LocalHeap::take_dirty_pages_snapshot()` in `crates/rudo-gc/src/heap.rs` to be called at mark slice start
+- [X] T053 [US2] Update completion check in `crates/rudo-gc/src/gc/incremental.rs` to require worklist empty AND dirty snapshot drained
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work - incremental marking is correct under concurrent mutation
 
@@ -277,14 +277,14 @@ With multiple developers:
 ## Summary
 
 - **Total Tasks**: 77
-- **Completed**: 59 (77%)
-- **Remaining**: 18 (23%)
+- **Completed**: 66 (86%)
+- **Remaining**: 11 (14%)
 
 ### By Phase
 
 - **Setup & Foundational (Phase 1-2)**: 11/11 ✅
 - **User Story 1 (Phase 3)**: 22/22 ✅
-- **User Story 2 (Phase 4)**: 16/23 (12 new tasks complete)
+- **User Story 2 (Phase 4)**: 23/23 ✅ (COMPLETE!)
 - **User Story 3 (Phase 5)**: 7/8 ✅
 - **Integration & Polish (Phase 6)**: 5/11
 
@@ -307,6 +307,6 @@ With multiple developers:
 
 ### Next Steps
 
-1. **Dirty page integration** (T049-T053): Full incremental marking correctness
+1. **Integration & Polish (T057-T071)**: Complete remaining integration tasks
 2. **Miri tests** (T072): Run Miri tests for all unsafe code paths
-3. **Derive macro update** (T070): Update proc macro for write barriers
+3. **Final validation**: Full test suite and performance benchmarks

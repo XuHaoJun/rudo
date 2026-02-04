@@ -10,7 +10,9 @@
     clippy::new_without_default,
     clippy::must_use_candidate,
     clippy::missing_const_for_fn,
-    clippy::ptr_cast_constness
+    clippy::ptr_cast_constness,
+    clippy::unnecessary_cast,
+    clippy::ptr_as_ptr
 )]
 
 use crossbeam::queue::SegQueue;
@@ -385,7 +387,7 @@ pub fn start_incremental_mark(heap: &mut LocalHeap, num_workers: usize) {
 }
 
 #[allow(clippy::significant_drop_tightening)]
-pub fn mark_slice(heap: &LocalHeap, budget: usize) -> MarkSliceResult {
+pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
     let state = IncrementalMarkState::global();
     let config = state.config();
 
@@ -396,11 +398,20 @@ pub fn mark_slice(heap: &LocalHeap, budget: usize) -> MarkSliceResult {
         };
     }
 
+    let snapshot_count = heap.take_dirty_pages_snapshot();
+
     let mut objects_marked = 0;
 
     while objects_marked < budget {
         match state.pop_work() {
-            Some(_ptr) => {
+            Some(ptr) => {
+                #[allow(clippy::unnecessary_cast)]
+                #[allow(clippy::ptr_as_ptr)]
+                unsafe {
+                    if let Some(gc_box) = NonNull::new(ptr.as_ptr() as *mut GcBox<()>) {
+                        trace_and_mark_object(gc_box, state);
+                    }
+                }
                 objects_marked += 1;
             }
             None => {
@@ -409,6 +420,16 @@ pub fn mark_slice(heap: &LocalHeap, budget: usize) -> MarkSliceResult {
         }
     }
 
+    let mut dirty_scanned = 0;
+    for page_ptr in heap.dirty_pages_iter() {
+        unsafe {
+            dirty_scanned += scan_page_for_marked_refs(page_ptr, state);
+        }
+    }
+    heap.clear_dirty_pages_snapshot();
+
+    let additional_marked = state.worklist_len().saturating_sub(objects_marked);
+    objects_marked = objects_marked.min(state.worklist_len());
     state.stats().slices_executed.fetch_add(1, Ordering::SeqCst);
     state
         .stats()
@@ -442,7 +463,8 @@ pub fn mark_slice(heap: &LocalHeap, budget: usize) -> MarkSliceResult {
         };
     }
 
-    if state.worklist_is_empty() && dirty_pages == 0 {
+    let remaining_dirty = count_dirty_pages(heap);
+    if state.worklist_is_empty() && remaining_dirty == 0 {
         MarkSliceResult::Complete {
             total_objects_marked: state.stats().objects_marked.load(Ordering::SeqCst),
             total_slices: state.stats().slices_executed.load(Ordering::SeqCst),
@@ -450,12 +472,61 @@ pub fn mark_slice(heap: &LocalHeap, budget: usize) -> MarkSliceResult {
     } else {
         MarkSliceResult::Pending {
             objects_marked,
-            dirty_pages_remaining: dirty_pages,
+            dirty_pages_remaining: remaining_dirty,
         }
     }
 }
 
-pub fn incremental_mark_slice(heap: &LocalHeap, budget: usize) -> MarkSliceResult {
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalMarkState) {
+    let ptr = gc_box.as_ptr() as *const u8;
+    let header = crate::heap::ptr_to_page_header(ptr);
+    let block_size = (*header.as_ptr()).block_size as usize;
+    let header_size = crate::heap::PageHeader::header_size(block_size);
+    let data_ptr = ptr.add(header_size);
+
+    let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
+
+    ((*gc_box.as_ptr()).trace_fn)(data_ptr, &mut visitor);
+
+    while let Some(child_ptr) = visitor.worklist.pop() {
+        state.push_work(child_ptr);
+    }
+}
+
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn scan_page_for_marked_refs(
+    page: NonNull<PageHeader>,
+    state: &IncrementalMarkState,
+) -> usize {
+    let header = page.as_ptr();
+    let block_size = (*header).block_size as usize;
+    let header_size = crate::heap::PageHeader::header_size(block_size);
+    let obj_count = (*header).obj_count as usize;
+    let mut refs_found = 0;
+
+    for i in 0..obj_count {
+        if (*header).is_allocated(i) && !(*header).is_marked(i) {
+            let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
+            refs_found += 1;
+            if let Some(idx) = crate::heap::ptr_to_object_index(obj_ptr.cast()) {
+                if !(*header).is_marked(idx) {
+                    (*header).set_mark(idx);
+                    #[allow(clippy::cast_ptr_alignment)]
+                    #[allow(clippy::unnecessary_cast)]
+                    #[allow(clippy::ptr_as_ptr)]
+                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                    if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
+                        state.push_work(gc_box);
+                    }
+                }
+            }
+        }
+    }
+    refs_found
+}
+
+pub fn incremental_mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
     let result = mark_slice(heap, budget);
 
     let state = IncrementalMarkState::global();
@@ -528,4 +599,49 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
     stats
         .dirty_pages_scanned
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Mark a newly allocated object as black (live) during incremental marking.
+///
+/// This implements the "black allocation" optimization where new objects
+/// are immediately considered reachable from the mutator. This is safe
+/// because:
+/// 1. New objects are only visible to the thread that created them
+/// 2. The creating thread is at a safepoint during GC marking
+/// 3. No other thread can have a reference to a brand new object
+///
+/// Returns true if the object was marked, false if marking is not active.
+#[inline]
+pub fn mark_new_object_black(ptr: *const u8) -> bool {
+    if !is_incremental_marking_active() {
+        return false;
+    }
+
+    unsafe {
+        if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
+            let header = crate::heap::ptr_to_page_header(ptr);
+            if !(*header.as_ptr()).is_marked(idx) {
+                (*header.as_ptr()).set_mark(idx);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Get the object index for a pointer and mark it black.
+///
+/// Returns the index if successful, None otherwise.
+#[inline]
+#[allow(clippy::missing_safety_doc)]
+#[allow(unsafe_op_in_unsafe_fn)]
+pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
+    if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
+        let header = crate::heap::ptr_to_page_header(ptr);
+        if !(*header.as_ptr()).is_marked(idx) {
+            (*header.as_ptr()).set_mark(idx);
+            return Some(idx);
+        }
+    }
+    None
 }
