@@ -100,6 +100,28 @@ impl Default for IncrementalConfig {
     }
 }
 
+/// Incremental marking state singleton.
+///
+/// This type manages the state machine for incremental garbage collection marking.
+/// It is implemented as a process-level singleton accessed via `global()`.
+///
+/// # Thread Safety
+///
+/// This type is currently designed for single-threaded access during GC mark slices.
+/// The `worklist` field is reserved for future parallel marking coordination and
+/// is currently unused.
+///
+/// **Important**: The `unsafe impl Sync` declaration is intentionally removed.
+/// When parallel marking is implemented, proper synchronization (Mutex or atomic
+/// operations) must be added to the `worklist` field before it can be safely accessed
+/// from multiple threads. The blanket `unsafe impl Sync` was removed because the
+/// `UnsafeCell<SegQueue>` does not provide thread-safe interior mutability.
+///
+/// # Usage
+///
+/// The state machine transitions through phases: Idle → Snapshot → Marking → `FinalMark` → Sweeping.
+/// Only the `phase` field uses atomic operations for cross-phase visibility. Other fields
+/// are accessed only from the GC thread during synchronized phases.
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct IncrementalMarkState {
@@ -163,7 +185,20 @@ impl MarkStats {
     }
 }
 
+/// SAFETY: `IncrementalMarkState` is currently accessed only from the GC thread.
+/// If parallel marking is implemented, proper synchronization must be added.
 unsafe impl Send for IncrementalMarkState {}
+
+/// SAFETY: `IncrementalMarkState` is accessed as a process-level singleton via `global()`.
+///
+/// The `UnsafeCell<SegQueue>` in the `worklist` field is currently **unused** and reserved
+/// for future parallel marking coordination. All current access patterns are single-threaded
+/// from the GC thread during mark slices.
+///
+/// When parallel marking is implemented:
+/// 1. The `worklist` field MUST be protected with proper synchronization (Mutex or atomic ops)
+/// 2. The blanket `unsafe impl Sync` MUST be replaced with field-level synchronization
+/// 3. Concurrent access to `worklist` without synchronization is undefined behavior
 unsafe impl Sync for IncrementalMarkState {}
 
 impl Default for IncrementalMarkState {

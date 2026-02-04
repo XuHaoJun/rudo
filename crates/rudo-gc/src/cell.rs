@@ -91,7 +91,7 @@ impl<T: ?Sized> GcCell<T> {
     ///
     /// This method captures old pointer values before mutation, enabling correct
     /// incremental marking. Use this for `GcCell<Gc<T>>`, `GcCell<Option<Gc<T>>>`,
-    /// and other types implementing `GcCapture`.
+    /// `GcCell<Vec<Gc<T>>>`, and other types implementing `GcCapture`.
     ///
     /// # Panics
     ///
@@ -106,9 +106,12 @@ impl<T: ?Sized> GcCell<T> {
         if crate::gc::incremental::is_incremental_marking_active() {
             unsafe {
                 let value = &*self.inner.as_ptr();
-                if let Some(gc_ptr) = value.capture_gc_ptr() {
+                let gc_ptrs = value.capture_gc_ptrs();
+                if !gc_ptrs.is_empty() {
                     crate::heap::with_heap(|heap| {
-                        heap.record_satb_old_value(gc_ptr);
+                        for &gc_ptr in gc_ptrs {
+                            heap.record_satb_old_value(gc_ptr);
+                        }
                     });
                 }
             }
@@ -153,7 +156,6 @@ impl<T: ?Sized> GcCell<T> {
 
                                 if index < (*header).obj_count as usize {
                                     (*header).set_dirty(index);
-                                    // Add page to dirty list for minor GC optimization
                                     heap.add_to_dirty_pages(NonNull::new_unchecked(header));
                                 }
                             }
@@ -175,7 +177,6 @@ impl<T: ?Sized> GcCell<T> {
 
                             if index < (*header.as_ptr()).obj_count as usize {
                                 (*header.as_ptr()).set_dirty(index);
-                                // Add page to dirty list for minor GC optimization
                                 heap.add_to_dirty_pages(header);
                             }
                         }
@@ -231,44 +232,74 @@ unsafe fn record_page_in_remembered_buffer(page: NonNull<PageHeader>) -> bool {
 /// Trait for types that can participate in SATB barrier.
 /// Implement this to enable automatic old-value capture during write barriers.
 pub trait GcCapture {
-    /// Capture the `GcBox` pointer from this type, if it contains a `Gc`.
+    /// Returns a slice of all `GcBox` pointers contained in this type.
     ///
-    /// Returns `Some` if this type contains a `Gc` pointer, `None` otherwise.
-    /// The returned pointer is used for SATB barrier recording.
-    fn capture_gc_ptr(&self) -> Option<NonNull<GcBox<()>>>;
+    /// For single `Gc<T>`: returns slice of length 0 or 1
+    /// For `Vec<Gc<T>>`: returns slice of all elements
+    /// For non-Gc types: returns empty slice
+    ///
+    /// The returned pointers are used for SATB barrier recording.
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>];
 }
 
 impl<T: Trace + 'static> GcCapture for crate::Gc<T> {
     #[inline]
-    fn capture_gc_ptr(&self) -> Option<NonNull<GcBox<()>>> {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         let ptr = self.raw_ptr();
         if ptr.is_null() {
-            None
+            &[]
         } else {
-            // SAFETY: ptr is non-null, and we only use it to check if it's null
-            unsafe { Some(NonNull::new_unchecked(ptr.cast())) }
+            // SAFETY: ptr is non-null, creating single-element slice.
+            // The pointer is derived from a valid Gc<T> which owns the GcBox.
+            let nn = NonNull::new(ptr.cast::<crate::ptr::GcBox<()>>()).unwrap();
+            unsafe { std::slice::from_raw_parts(nn.cast().as_ptr(), 1) }
         }
     }
 }
 
 impl<T: Trace + 'static> GcCapture for Option<crate::Gc<T>> {
     #[inline]
-    fn capture_gc_ptr(&self) -> Option<NonNull<GcBox<()>>> {
-        self.as_ref().and_then(|gc| gc.capture_gc_ptr())
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        self.as_ref().map_or(&[], |gc| gc.capture_gc_ptrs())
     }
 }
 
 impl<T: Trace + 'static> GcCapture for Vec<crate::Gc<T>> {
     #[inline]
-    fn capture_gc_ptr(&self) -> Option<NonNull<GcBox<()>>> {
-        self.first().and_then(|gc| gc.capture_gc_ptr())
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        if self.is_empty() {
+            &[]
+        } else {
+            // SAFETY: We create a slice of NonNull pointers derived from self's Gc pointers.
+            // Each Gc<T> is valid, and we only read their raw internal pointers.
+            // The lifetime is tied to self, ensuring no dangling references.
+            // The layout of Gc<T> guarantees the data pointer is at offset 0.
+            unsafe {
+                let ptrs: *const NonNull<GcBox<()>> = self.as_ptr().cast::<NonNull<GcBox<()>>>();
+                std::slice::from_raw_parts(ptrs, self.len())
+            }
+        }
     }
 }
 
 impl<T: Trace + 'static, const N: usize> GcCapture for [crate::Gc<T>; N] {
     #[inline]
-    fn capture_gc_ptr(&self) -> Option<NonNull<GcBox<()>>> {
-        self.first().and_then(|gc| gc.capture_gc_ptr())
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        if N == 0 {
+            &[]
+        } else {
+            unsafe {
+                let ptrs: *const NonNull<GcBox<()>> = self.as_ptr().cast::<NonNull<GcBox<()>>>();
+                std::slice::from_raw_parts(ptrs, N)
+            }
+        }
+    }
+}
+
+impl<T: Trace + 'static> GcCapture for Option<Vec<crate::Gc<T>>> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        self.as_ref().map_or(&[], |vec| vec.capture_gc_ptrs())
     }
 }
 
@@ -299,8 +330,6 @@ impl<T: Default> Default for GcCell<T> {
 
 impl<T: Clone> Clone for GcCell<T> {
     fn clone(&self) -> Self {
-        // Note: Clone creates a NEW object, which starts Young.
-        // So no write barrier needed for the *new* object.
         Self::new(self.borrow().clone())
     }
 }
@@ -313,7 +342,7 @@ impl<T: std::fmt::Debug + ?Sized> std::fmt::Debug for GcCell<T> {
 
 impl<T: std::fmt::Display + ?Sized> std::fmt::Display for GcCell<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.inner.borrow().fmt(f)
+        self.borrow().fmt(f)
     }
 }
 
@@ -345,5 +374,73 @@ mod tests {
 
         drop(borrow);
         assert_eq!(**cell.borrow().as_ref().unwrap(), 100);
+    }
+
+    #[test]
+    fn test_satb_capture_vec_all_elements() {
+        let cell = Gc::new(GcCell::new(vec![Gc::new(1), Gc::new(2), Gc::new(3)]));
+
+        {
+            let mut borrow = cell.borrow_mut_with_satb();
+            borrow[1] = Gc::new(200);
+        }
+
+        crate::collect_full();
+
+        let values: Vec<i32> = cell.borrow().iter().map(|gc| **gc).collect();
+        assert_eq!(values, vec![1, 200, 3]);
+    }
+
+    #[test]
+    fn test_satb_preserves_replaced_object() {
+        let cell = Gc::new(GcCell::new(vec![Gc::new(1), Gc::new(2)]));
+
+        let old_ptr = cell.borrow()[1].raw_ptr();
+
+        {
+            let mut borrow = cell.borrow_mut_with_satb();
+            borrow[1] = Gc::new(999);
+        }
+
+        crate::collect_full();
+
+        drop(cell);
+        assert!(!old_ptr.is_null());
+    }
+
+    #[test]
+    fn test_satb_capture_option_vec() {
+        let cell = Gc::new(GcCell::new(Some(vec![Gc::new(1), Gc::new(2)])));
+
+        {
+            let mut borrow = cell.borrow_mut_with_satb();
+            borrow.as_mut().unwrap()[0] = Gc::new(100);
+        }
+
+        crate::collect_full();
+
+        let values: Vec<i32> = cell
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|gc| **gc)
+            .collect();
+        assert_eq!(values, vec![100, 2]);
+    }
+
+    #[test]
+    fn test_satb_capture_array() {
+        let cell = Gc::new(GcCell::new([Gc::new(1), Gc::new(2), Gc::new(3)]));
+
+        {
+            let mut borrow = cell.borrow_mut_with_satb();
+            borrow[2] = Gc::new(300);
+        }
+
+        crate::collect_full();
+
+        let values: Vec<i32> = cell.borrow().iter().map(|gc| **gc).collect();
+        assert_eq!(values, vec![1, 2, 300]);
     }
 }
