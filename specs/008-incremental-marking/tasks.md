@@ -59,13 +59,13 @@
 - [X] T020 [US1] Implement `IncrementalMarkState::worklist_is_empty()` method in `crates/rudo-gc/src/gc/incremental.rs`
 - [X] T021 [US1] Implement `execute_snapshot()` function in `crates/rudo-gc/src/gc/incremental.rs` to capture roots and populate worklist (STW)
 - [X] T022 [US1] Implement `mark_slice()` function in `crates/rudo-gc/src/gc/incremental.rs` to process worklist up to budget
-- [ ] T023 [US1] Integrate `mark_slice()` with existing parallel marking infrastructure in `crates/rudo-gc/src/gc/marker.rs`
-- [ ] T023a [US1] Ensure work-stealing in `crates/rudo-gc/src/gc/worklist.rs` respects slice boundaries - disable stealing across slice barriers to prevent slice drift
-- [ ] T024 [US1] Implement slice barrier synchronization in `crates/rudo-gc/src/gc/marker.rs` for per-worker budget coordination
+- [X] T023 [US1] Integrate `mark_slice()` with existing parallel marking infrastructure in `crates/rudo-gc/src/gc/marker.rs`
+- [X] T023a [US1] Ensure work-stealing in `crates/rudo-gc/src/gc/worklist.rs` respects slice boundaries - disable stealing across slice barriers to prevent slice drift
+- [X] T024 [US1] Implement slice barrier synchronization in `crates/rudo-gc/src/gc/marker.rs` for per-worker budget coordination
 - [X] T025 [US1] Implement `execute_final_mark()` function in `crates/rudo-gc/src/gc/incremental.rs` to process remaining dirty pages (STW)
 - [X] T026 [US1] Add `CollectionType::IncrementalMajor` variant to `metrics.rs` enum
-- [ ] T027 [US1] Modify `collect_major()` function in `crates/rudo-gc/src/gc/gc.rs` to check `IncrementalConfig::enabled` and route to incremental path
-- [ ] T028 [US1] Implement incremental collection entry point in `crates/rudo-gc/src/gc/gc.rs` that calls snapshot → marking slices → final mark → sweep
+- [X] T027 [US1] Modify `collect_major()` function in `crates/rudo-gc/src/gc/gc.rs` to check `IncrementalConfig::enabled` and route to incremental path
+- [X] T028 [US1] Implement incremental collection entry point in `crates/rudo-gc/src/gc/gc.rs` that calls snapshot → marking slices → final mark → sweep
 - [X] T029 [US1] Add `IncrementalConfig` and `set_incremental_config()` to public API in `crates/rudo-gc/src/lib.rs`
 - [X] T030 [US1] Add `is_incremental_marking_active()` to public API in `crates/rudo-gc/src/lib.rs`
 
@@ -277,13 +277,13 @@ With multiple developers:
 ## Summary
 
 - **Total Tasks**: 77
-- **Completed**: 42 (55%)
-- **Remaining**: 35 (45%)
+- **Completed**: 47 (61%)
+- **Remaining**: 30 (39%)
 
 ### By Phase
 
 - **Setup & Foundational (Phase 1-2)**: 11/11 ✅
-- **User Story 1 (Phase 3)**: 17/20 ✅
+- **User Story 1 (Phase 3)**: 22/22 ✅ (COMPLETE!)
 - **User Story 2 (Phase 4)**: 4/23 (skeleton complete, full SATB pending)
 - **User Story 3 (Phase 5)**: 7/8 ✅
 - **Integration & Polish (Phase 6)**: 5/11
@@ -307,8 +307,7 @@ With multiple developers:
 
 ### Next Steps (MVP Release Ready)
 
-1. **marker.rs integration** (T023, T023a, T024): Connect `mark_slice()` to parallel marker
-2. **collect_major routing** (T027, T028): Route major GC through incremental path
-3. **Full SATB implementation** (T044-T046): Complete write barrier with SATB/Dijkstra
-4. **ThreadControlBlock extensions** (T035-T042): Per-thread mark queues and remembered buffers
-5. **Dirty page integration** (T049-T053): Full incremental marking correctness
+1. **Full SATB implementation** (T044-T046): Complete write barrier with SATB/Dijkstra
+2. **ThreadControlBlock extensions** (T035-T042): Per-thread mark queues and remembered buffers
+3. **Dirty page integration** (T049-T053): Full incremental marking correctness
+4. **Miri tests** (T072): Run Miri tests for all unsafe code paths

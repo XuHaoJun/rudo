@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::LazyLock;
 use std::time::Instant;
 
-use crate::heap::LocalHeap;
+use crate::heap::{LocalHeap, PageHeader};
 pub use crate::ptr::GcBox;
 
 pub const DEFAULT_INCREMENT_SIZE: usize = 1000;
@@ -151,6 +151,9 @@ pub struct IncrementalMarkState {
     fallback_requested: AtomicBool,
     initial_worklist_size: AtomicUsize,
     slice_start_time: Mutex<Option<Instant>>,
+    slice_counter: AtomicUsize,
+    workers_at_barrier: AtomicUsize,
+    total_workers: AtomicUsize,
 }
 
 unsafe impl Send for IncrementalMarkState {}
@@ -174,6 +177,9 @@ impl IncrementalMarkState {
             fallback_requested: AtomicBool::new(false),
             initial_worklist_size: AtomicUsize::new(0),
             slice_start_time: Mutex::new(None),
+            slice_counter: AtomicUsize::new(0),
+            workers_at_barrier: AtomicUsize::new(0),
+            total_workers: AtomicUsize::new(0),
         }
     }
 
@@ -285,6 +291,33 @@ impl IncrementalMarkState {
         self.initial_worklist_size.load(Ordering::SeqCst)
     }
 
+    pub fn set_total_workers(&self, count: usize) {
+        self.total_workers.store(count, Ordering::SeqCst);
+    }
+
+    pub fn total_workers(&self) -> usize {
+        self.total_workers.load(Ordering::SeqCst)
+    }
+
+    pub fn slice_counter(&self) -> usize {
+        self.slice_counter.load(Ordering::SeqCst)
+    }
+
+    pub fn increment_slice_counter(&self) -> usize {
+        self.slice_counter.fetch_add(1, Ordering::SeqCst)
+    }
+
+    pub fn wait_at_barrier(&self) {
+        self.workers_at_barrier.fetch_add(1, Ordering::SeqCst);
+        while self.workers_at_barrier.load(Ordering::Acquire) < self.total_workers() {
+            std::hint::spin_loop();
+        }
+    }
+
+    pub fn reset_barrier(&self) {
+        self.workers_at_barrier.store(0, Ordering::SeqCst);
+    }
+
     pub fn config(&self) -> parking_lot::MutexGuard<'_, IncrementalConfig> {
         self.config.lock()
     }
@@ -331,10 +364,22 @@ pub fn execute_snapshot(heap: &mut LocalHeap) {
     state.set_initial_worklist_size(state.worklist_len());
     state.reset_worklist();
 
+    state.reset_barrier();
     state.start_slice();
 
-    // Mark bits will be cleared by the main marking process
-    // This is handled in the parallel marker infrastructure
+    state.set_phase(MarkPhase::Marking);
+}
+
+pub fn start_incremental_mark(heap: &mut LocalHeap, num_workers: usize) {
+    let state = IncrementalMarkState::global();
+    state.set_phase(MarkPhase::Snapshot);
+    state.stats().reset();
+    state.reset_fallback();
+    state.reset_worklist();
+
+    state.set_total_workers(num_workers);
+    state.reset_barrier();
+    state.start_slice();
 
     state.set_phase(MarkPhase::Marking);
 }
@@ -410,15 +455,47 @@ pub fn mark_slice(heap: &LocalHeap, budget: usize) -> MarkSliceResult {
     }
 }
 
-fn count_dirty_pages(_heap: &LocalHeap) -> usize {
-    0
+pub fn incremental_mark_slice(heap: &LocalHeap, budget: usize) -> MarkSliceResult {
+    let result = mark_slice(heap, budget);
+
+    let state = IncrementalMarkState::global();
+    match result {
+        MarkSliceResult::Pending { .. } | MarkSliceResult::Complete { .. } => {
+            state.wait_at_barrier();
+        }
+        MarkSliceResult::Fallback { .. } => {}
+    }
+
+    result
 }
 
-pub fn execute_final_mark(_heap: &mut LocalHeap) -> bool {
+pub fn count_dirty_pages(heap: &LocalHeap) -> usize {
+    heap.dirty_pages_count()
+}
+
+pub fn take_dirty_pages_snapshot(heap: &mut LocalHeap) -> usize {
+    heap.take_dirty_pages_snapshot()
+}
+
+pub fn clear_dirty_pages_snapshot(heap: &mut LocalHeap) {
+    heap.clear_dirty_pages_snapshot();
+}
+
+pub fn execute_final_mark(heap: &mut LocalHeap) -> bool {
     let state = IncrementalMarkState::global();
     state.set_phase(MarkPhase::FinalMark);
 
-    let remaining = state.worklist_len();
+    let mut remaining = state.worklist_len();
+
+    let snapshot_count = heap.take_dirty_pages_snapshot();
+    for page_ptr in heap.dirty_pages_iter() {
+        unsafe {
+            scan_page_for_unmarked_refs(page_ptr, state.stats());
+        }
+    }
+    heap.clear_dirty_pages_snapshot();
+    remaining += state.worklist_len();
+
     if remaining > 0 {
         state.set_phase(MarkPhase::Marking);
         return false;
@@ -426,4 +503,29 @@ pub fn execute_final_mark(_heap: &mut LocalHeap) -> bool {
 
     state.set_phase(MarkPhase::Sweeping);
     true
+}
+
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkStats) {
+    let header = page.as_ptr();
+    let block_size = (*header).block_size as usize;
+    let header_size = crate::heap::PageHeader::header_size(block_size);
+    let obj_count = (*header).obj_count as usize;
+
+    for i in 0..obj_count {
+        if (*header).is_allocated(i) && !(*header).is_marked(i) {
+            let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
+            #[allow(clippy::cast_ptr_alignment)]
+            #[allow(clippy::unnecessary_cast)]
+            #[allow(clippy::ptr_as_ptr)]
+            let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+            if let Some(gc_box) = NonNull::new(gc_box_ptr) {
+                let ptr = IncrementalMarkState::global();
+                ptr.push_work(gc_box);
+            }
+        }
+    }
+    stats
+        .dirty_pages_scanned
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }

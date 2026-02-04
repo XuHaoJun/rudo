@@ -10,6 +10,10 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::PoisonError;
 
+use crate::gc::incremental::{
+    count_dirty_pages, execute_final_mark, execute_snapshot, mark_slice, start_incremental_mark,
+    IncrementalMarkState, MarkPhase, MarkSliceResult, MarkStats,
+};
 use crate::gc::marker::{
     worker_mark_loop, worker_mark_loop_with_registry, GcWorkerRegistry, ParallelMarkConfig,
     PerThreadMarkQueue,
@@ -1202,17 +1206,68 @@ fn promote_young_pages(heap: &mut LocalHeap) {
 
 /// Major Collection: Collect Entire Heap.
 fn collect_major(heap: &mut LocalHeap) -> usize {
-    // 1. Mark Phase
-    // Clear marks first
+    let config = crate::gc::incremental::IncrementalMarkState::global().config();
+
+    if config.enabled {
+        collect_major_incremental(heap)
+    } else {
+        collect_major_stw(heap)
+    }
+}
+
+fn collect_major_stw(heap: &mut LocalHeap) -> usize {
     clear_all_marks_and_dirty(heap);
     mark_major_roots(heap);
 
-    // 2. Sweep Phase
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
 
-    // 3. Promotion Phase (All to Old)
     promote_all_pages(heap);
+
+    reclaimed + reclaimed_large
+}
+
+#[allow(clippy::significant_drop_tightening)]
+fn collect_major_incremental(heap: &mut LocalHeap) -> usize {
+    let state = IncrementalMarkState::global();
+    let config = state.config();
+    let num_workers = 1;
+
+    execute_snapshot(heap);
+
+    start_incremental_mark(heap, num_workers);
+
+    let per_worker_budget = config.increment_size;
+
+    loop {
+        let result = mark_slice(heap, per_worker_budget);
+
+        match result {
+            MarkSliceResult::Complete { .. } => {
+                break;
+            }
+            MarkSliceResult::Pending { .. } => {}
+            MarkSliceResult::Fallback { .. } => {
+                state.set_phase(MarkPhase::FinalMark);
+                break;
+            }
+        }
+    }
+
+    let remaining = state.worklist_len();
+    let dirty_pages = count_dirty_pages(heap);
+    if remaining > 0 || dirty_pages > 0 {
+        execute_final_mark(heap);
+    }
+
+    state.set_phase(MarkPhase::Sweeping);
+
+    let reclaimed = sweep_segment_pages(heap, false);
+    let reclaimed_large = sweep_large_objects(heap, false);
+
+    promote_all_pages(heap);
+
+    state.set_phase(MarkPhase::Idle);
 
     reclaimed + reclaimed_large
 }
