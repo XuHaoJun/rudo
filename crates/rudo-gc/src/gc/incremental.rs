@@ -19,7 +19,7 @@ use crossbeam::queue::SegQueue;
 use parking_lot::Mutex;
 use std::cell::UnsafeCell;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::LazyLock;
 use std::time::Instant;
 
@@ -58,10 +58,29 @@ impl MarkPhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
 pub enum FallbackReason {
-    DirtyPagesExceeded,
-    SliceTimeout,
-    WorklistUnbounded,
+    None = 0,
+    DirtyPagesExceeded = 1,
+    SliceTimeout = 2,
+    WorklistUnbounded = 3,
+}
+
+impl FallbackReason {
+    #[must_use]
+    pub fn from_u32(v: u32) -> Self {
+        match v {
+            1 => Self::DirtyPagesExceeded,
+            2 => Self::SliceTimeout,
+            3 => Self::WorklistUnbounded,
+            _ => Self::None,
+        }
+    }
+
+    #[must_use]
+    pub fn to_u32(self) -> u32 {
+        self as u32
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,10 +152,6 @@ pub struct IncrementalMarkState {
     initial_worklist_size: AtomicUsize,
     slice_start_time: Mutex<Option<Instant>>,
     slice_counter: AtomicUsize,
-    /// Reserved for future parallel marking coordination. Currently unused.
-    workers_at_barrier: AtomicUsize,
-    /// Reserved for future parallel marking coordination. Currently unused.
-    total_workers: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -147,7 +162,7 @@ pub struct MarkStats {
     pub slices_executed: AtomicUsize,
     pub mark_time_ns: AtomicU64,
     pub fallback_occurred: AtomicBool,
-    pub fallback_reason: Mutex<Option<FallbackReason>>,
+    pub fallback_reason: AtomicU32,
 }
 
 impl Default for MarkStats {
@@ -166,7 +181,7 @@ impl MarkStats {
             slices_executed: AtomicUsize::new(0),
             mark_time_ns: AtomicU64::new(0),
             fallback_occurred: AtomicBool::new(false),
-            fallback_reason: Mutex::new(None),
+            fallback_reason: AtomicU32::new(0),
         }
     }
 
@@ -176,12 +191,17 @@ impl MarkStats {
         self.slices_executed.store(0, Ordering::SeqCst);
         self.mark_time_ns.store(0, Ordering::SeqCst);
         self.fallback_occurred.store(false, Ordering::SeqCst);
-        *self.fallback_reason.lock() = None;
+        self.fallback_reason.store(0, Ordering::SeqCst);
     }
 
     pub fn record_fallback(&self, reason: FallbackReason) {
         self.fallback_occurred.store(true, Ordering::SeqCst);
-        *self.fallback_reason.lock() = Some(reason);
+        self.fallback_reason
+            .store(reason.to_u32(), Ordering::SeqCst);
+    }
+
+    pub fn fallback_reason(&self) -> FallbackReason {
+        FallbackReason::from_u32(self.fallback_reason.load(Ordering::Acquire))
     }
 }
 
@@ -192,17 +212,17 @@ unsafe impl Send for IncrementalMarkState {}
 /// SAFETY: `IncrementalMarkState` is accessed as a process-level singleton via `global()`.
 ///
 /// The `UnsafeCell<SegQueue>` in the `worklist` field is accessed single-threaded from the
-/// GC thread during mark slices via `push_work()` and `pop_work()`. For parallel marking,
-/// this field MUST be protected with proper synchronization (Mutex or atomic operations).
+/// GC thread during mark slices via `push_work()` and `pop_work()`. All other fields are
+/// either atomic or protected by Mutex.
 ///
-/// Currently, the blanket `unsafe impl Sync` is justified because:
+/// The blanket `unsafe impl Sync` is justified because:
 /// 1. All access to `worklist` occurs from the GC thread during synchronized mark slices
 /// 2. No concurrent access from mutator threads
+/// 3. Atomic fields use proper ordering (`SeqCst` for writes, default for reads)
 ///
 /// When parallel marking is implemented:
 /// 1. The `worklist` field MUST be protected with proper synchronization
-/// 2. The blanket `unsafe impl Sync` MUST be replaced with field-level synchronization
-/// 3. Concurrent access without synchronization is undefined behavior
+/// 2. Concurrent access without synchronization is undefined behavior
 unsafe impl Sync for IncrementalMarkState {}
 
 impl Default for IncrementalMarkState {
@@ -224,8 +244,6 @@ impl IncrementalMarkState {
             initial_worklist_size: AtomicUsize::new(0),
             slice_start_time: Mutex::new(None),
             slice_counter: AtomicUsize::new(0),
-            workers_at_barrier: AtomicUsize::new(0),
-            total_workers: AtomicUsize::new(0),
         }
     }
 
@@ -337,36 +355,6 @@ impl IncrementalMarkState {
         self.initial_worklist_size.load(Ordering::SeqCst)
     }
 
-    #[allow(dead_code)]
-    pub fn set_total_workers(&self, count: usize) {
-        self.total_workers.store(count, Ordering::SeqCst);
-    }
-
-    #[allow(dead_code)]
-    pub fn total_workers(&self) -> usize {
-        self.total_workers.load(Ordering::SeqCst)
-    }
-
-    // ========================================================================
-    // Barrier coordination for future parallel marking
-    // ========================================================================
-    // These functions are reserved for parallel marking where multiple worker
-    // threads need to synchronize at slice boundaries. Currently unused
-    // because incremental marking runs single-threaded (mutator + GC thread).
-
-    #[allow(dead_code)]
-    pub fn wait_at_barrier(&self) {
-        self.workers_at_barrier.fetch_add(1, Ordering::SeqCst);
-        while self.workers_at_barrier.load(Ordering::Acquire) < self.total_workers() {
-            std::hint::spin_loop();
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn reset_barrier(&self) {
-        self.workers_at_barrier.store(0, Ordering::SeqCst);
-    }
-
     pub fn slice_counter(&self) -> usize {
         self.slice_counter.load(Ordering::SeqCst)
     }
@@ -421,7 +409,6 @@ pub fn execute_snapshot(heap: &mut LocalHeap) -> usize {
     state.set_initial_worklist_size(state.worklist_len());
     state.reset_worklist();
 
-    state.reset_barrier();
     state.start_slice();
 
     let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
@@ -469,9 +456,13 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
     let config = state.config();
 
     if state.fallback_requested() {
-        let reason = state.stats().fallback_reason.lock().clone();
+        let reason = state.stats().fallback_reason();
         return MarkSliceResult::Fallback {
-            reason: reason.unwrap_or(FallbackReason::DirtyPagesExceeded),
+            reason: if reason == FallbackReason::None {
+                FallbackReason::DirtyPagesExceeded
+            } else {
+                reason
+            },
         };
     }
 
@@ -481,13 +472,13 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
 
     while objects_marked < budget {
         if state.fallback_requested() {
+            let reason = state.stats().fallback_reason();
             return MarkSliceResult::Fallback {
-                reason: state
-                    .stats()
-                    .fallback_reason
-                    .lock()
-                    .clone()
-                    .unwrap_or(FallbackReason::SliceTimeout),
+                reason: if reason == FallbackReason::None {
+                    FallbackReason::SliceTimeout
+                } else {
+                    reason
+                },
             };
         }
         match state.pop_work() {
@@ -495,9 +486,7 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
                 #[allow(clippy::unnecessary_cast)]
                 #[allow(clippy::ptr_as_ptr)]
                 unsafe {
-                    if let Some(gc_box) = NonNull::new(ptr.as_ptr() as *mut GcBox<()>) {
-                        trace_and_mark_object(gc_box, state);
-                    }
+                    trace_and_mark_object(ptr, state);
                 }
                 objects_marked += 1;
             }

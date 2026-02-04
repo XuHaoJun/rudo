@@ -162,10 +162,10 @@ fn test_fallback_recorded() {
 
     assert!(stats.fallback_occurred.load(Ordering::SeqCst));
 
-    let reason = stats.fallback_reason.lock();
+    let reason = stats.fallback_reason();
     assert!(matches!(
-        *reason,
-        Some(rudo_gc::gc::incremental::FallbackReason::DirtyPagesExceeded)
+        reason,
+        rudo_gc::gc::incremental::FallbackReason::DirtyPagesExceeded
     ));
 }
 

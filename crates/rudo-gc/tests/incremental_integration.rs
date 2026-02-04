@@ -113,10 +113,10 @@ fn test_request_fallback_records_reason() {
         .fallback_occurred
         .load(std::sync::atomic::Ordering::SeqCst));
 
-    let reason = stats.fallback_reason.lock();
+    let reason = stats.fallback_reason();
     assert!(matches!(
-        *reason,
-        Some(rudo_gc::gc::incremental::FallbackReason::SliceTimeout)
+        reason,
+        rudo_gc::gc::incremental::FallbackReason::SliceTimeout
     ));
 }
 
@@ -276,11 +276,7 @@ fn test_fallback_reason_recording() {
             .fallback_occurred
             .load(std::sync::atomic::Ordering::SeqCst));
 
-        let recorded = stats.fallback_reason.lock();
-        if let Some(_) = &*recorded {
-            // Fallback was recorded successfully
-        } else {
-            panic!("Expected Some variant");
-        }
+        let recorded = stats.fallback_reason();
+        assert!(recorded != rudo_gc::gc::incremental::FallbackReason::None);
     }
 }

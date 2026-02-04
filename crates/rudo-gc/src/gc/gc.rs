@@ -229,6 +229,9 @@ const MAJOR_THRESHOLD: usize = 10 * 1024 * 1024; // 10MB
 #[inline]
 fn log_fallback_reason(reason: FallbackReason) {
     match reason {
+        FallbackReason::None => {
+            eprintln!("[GC] Incremental marking fallback: unknown reason (atomic not set)");
+        }
         FallbackReason::DirtyPagesExceeded => {
             eprintln!("[GC] Incremental marking fallback: dirty pages exceeded threshold");
         }
