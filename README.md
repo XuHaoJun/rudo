@@ -86,6 +86,79 @@ rudo-gc = { version = "0.7", default-features = false }
 
 Lazy sweep is recommended for applications where latency matters more than peak throughput. The eager sweep path (when disabled) may perform better in batch processing workloads.
 
+## Migration from v0.6 to v0.7
+
+Version 0.7 introduces incremental marking and a redesigned `GcCell` API. This guide helps you migrate your code.
+
+### GcCell API Changes
+
+In v0.6, `GcCell::borrow_mut()` required `T: GcCapture`, which caused compilation errors for types like `GcCell<i32>`. In v0.7, this has been fixed.
+
+#### v0.6 Code (Breaking)
+
+```rust
+// v0.6: Error - requires GcCapture!
+let cell = GcCell::new(42);
+*cell.borrow_mut() = 100;  // Compile error!
+```
+
+#### v0.7 Code (Fixed)
+
+```rust
+// v0.7: Works!
+let cell = GcCell::new(42);
+*cell.borrow_mut() = 100;  // Works!
+```
+
+### New SATB Barrier Method
+
+For types containing GC pointers that require SATB (Snapshot-At-The-Beginning) barrier correctness:
+
+```rust
+use rudo_gc::{Gc, GcCell};
+
+// Use borrow_mut_with_satb() for SATB correctness
+let cell = GcCell::new(Gc::new(Data));
+*cell.borrow_mut_with_satb() = new_data;  // Full barrier with SATB
+```
+
+### Incremental Marking
+
+Enable incremental marking to reduce major GC pause times by 50-80%:
+
+```toml
+[dependencies]
+rudo-gc = { version = "0.7", features = ["incremental"] }
+```
+
+```rust
+use rudo_gc::IncrementalConfig;
+
+let config = IncrementalConfig {
+    enabled: true,
+    increment_size: 1000,
+    ..Default::default()
+};
+rudo_gc::set_incremental_config(config);
+```
+
+### API Summary
+
+| Method | v0.6 | v0.7 |
+|--------|-------|-------|
+| `GcCell<i32>::borrow_mut()` | ❌ Error | ✅ Works |
+| `GcCell<Gc<T>>::borrow_mut()` | ✅ Works | ✅ Works |
+| `GcCell::borrow_mut_with_satb()` | ❌ | ✅ New |
+| `GcCell::borrow_mut_gen_only()` | ❌ | ✅ New |
+
+### Summary of Changes
+
+| Change | v0.6 | v0.7 |
+|--------|-------|-------|
+| GcCell<i32> support | ❌ Requires GcCapture | ✅ Works |
+| SATB barrier | Manual opt-in | Explicit via `borrow_mut_with_satb()` |
+| Incremental marking | ❌ | ✅ Available |
+
 ## Quick Start
 
 ```rust
