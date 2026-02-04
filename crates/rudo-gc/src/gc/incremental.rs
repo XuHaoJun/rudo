@@ -401,15 +401,40 @@ pub fn write_barrier_needed() -> bool {
     state.config().enabled && !state.fallback_requested() && is_write_barrier_active()
 }
 
+#[allow(clippy::significant_drop_tightening)]
+fn stop_all_mutators_for_snapshot() {
+    let registry = crate::heap::thread_registry().lock().unwrap();
+
+    crate::heap::GC_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    for tcb in &registry.threads {
+        tcb.gc_requested
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    drop(registry);
+
+    loop {
+        let registry = crate::heap::thread_registry().lock().unwrap();
+        let active = registry
+            .active_count
+            .load(std::sync::atomic::Ordering::Acquire);
+
+        if active == 1 {
+            break;
+        }
+    }
+}
+
 pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
+    stop_all_mutators_for_snapshot();
+
     let state = IncrementalMarkState::global();
     state.set_phase(MarkPhase::Snapshot);
     state.stats().reset();
     state.reset_fallback();
     state.set_initial_worklist_size(state.worklist_len());
     state.reset_worklist();
-
-    state.start_slice();
 
     let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
 
@@ -451,6 +476,11 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
 
     let root_count = state.worklist_len();
     state.set_phase(MarkPhase::Marking);
+    debug_assert!(
+        write_barrier_needed(),
+        "Write barrier must be active before resuming mutators"
+    );
+    state.start_slice();
     root_count
 }
 
