@@ -241,26 +241,6 @@ fn log_fallback_reason(reason: FallbackReason) {
     }
 }
 
-fn handle_incremental_fallback(_heap: &LocalHeap) {
-    let state = IncrementalMarkState::global();
-    let mark_stats = state.stats();
-
-    let reason = {
-        let guard = mark_stats.fallback_reason.lock();
-        guard.unwrap_or(FallbackReason::DirtyPagesExceeded)
-    };
-
-    log_fallback_reason(reason);
-
-    let config = state.config();
-
-    if config.enabled {
-        eprintln!(
-            "[GC] Incremental marking fallback triggered, completing marking STW (reason: {reason:?})"
-        );
-    }
-}
-
 /// Perform a garbage collection.
 ///
 /// Decides between Minor and Major collection based on heuristics.

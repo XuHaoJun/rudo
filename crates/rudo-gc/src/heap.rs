@@ -1344,6 +1344,11 @@ pub struct LocalHeap {
     /// Batched page recording to reduce lock contention.
     remembered_buffer: Vec<NonNull<PageHeader>>,
     remembered_buffer_capacity: usize,
+
+    /// Per-thread SATB buffer for capturing old pointer values.
+    /// Records old values before they're overwritten during incremental marking.
+    satb_old_values: Vec<NonNull<GcBox<()>>>,
+    satb_buffer_capacity: usize,
 }
 
 impl LocalHeap {
@@ -1372,6 +1377,8 @@ impl LocalHeap {
             dirty_page_history: [16; 4],
             remembered_buffer: Vec::with_capacity(32),
             remembered_buffer_capacity: 32,
+            satb_old_values: Vec::with_capacity(32),
+            satb_buffer_capacity: 32,
         }
     }
 
@@ -1505,6 +1512,31 @@ impl LocalHeap {
     /// Clear the remembered buffer.
     pub fn clear_remembered_buffer(&mut self) {
         self.remembered_buffer.clear();
+    }
+
+    // ========================================================================
+    // SATB Buffer for incremental marking
+    // ========================================================================
+
+    /// Record an old pointer value for SATB preservation.
+    /// Called during write barrier before a pointer is overwritten.
+    pub fn record_satb_old_value(&mut self, gc_box: NonNull<GcBox<()>>) {
+        self.satb_old_values.push(gc_box);
+        if self.satb_old_values.len() >= self.satb_buffer_capacity {
+            let _ = self.flush_satb_buffer();
+        }
+    }
+
+    /// Flush the SATB buffer, returning captured old values.
+    /// The caller is responsible for marking these objects.
+    #[must_use]
+    pub fn flush_satb_buffer(&mut self) -> Vec<NonNull<GcBox<()>>> {
+        std::mem::take(&mut self.satb_old_values)
+    }
+
+    /// Clear the SATB buffer without processing.
+    pub fn clear_satb_buffer(&mut self) {
+        self.satb_old_values.clear();
     }
 
     /// Allocate space for a value of type T.

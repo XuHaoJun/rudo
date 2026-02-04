@@ -101,6 +101,24 @@ impl Default for IncrementalConfig {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
+pub struct IncrementalMarkState {
+    phase: AtomicUsize,
+    worklist: UnsafeCell<SegQueue<*const GcBox<()>>>,
+    config: Mutex<IncrementalConfig>,
+    stats: MarkStats,
+    fallback_requested: AtomicBool,
+    initial_worklist_size: AtomicUsize,
+    slice_start_time: Mutex<Option<Instant>>,
+    slice_counter: AtomicUsize,
+    /// Reserved for future parallel marking coordination. Currently unused.
+    workers_at_barrier: AtomicUsize,
+    /// Reserved for future parallel marking coordination. Currently unused.
+    total_workers: AtomicUsize,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
 pub struct MarkStats {
     pub objects_marked: AtomicUsize,
     pub dirty_pages_scanned: AtomicUsize,
@@ -143,19 +161,6 @@ impl MarkStats {
         self.fallback_occurred.store(true, Ordering::SeqCst);
         *self.fallback_reason.lock() = Some(reason);
     }
-}
-
-pub struct IncrementalMarkState {
-    phase: AtomicUsize,
-    worklist: UnsafeCell<SegQueue<*const GcBox<()>>>,
-    config: Mutex<IncrementalConfig>,
-    stats: MarkStats,
-    fallback_requested: AtomicBool,
-    initial_worklist_size: AtomicUsize,
-    slice_start_time: Mutex<Option<Instant>>,
-    slice_counter: AtomicUsize,
-    workers_at_barrier: AtomicUsize,
-    total_workers: AtomicUsize,
 }
 
 unsafe impl Send for IncrementalMarkState {}
@@ -293,12 +298,34 @@ impl IncrementalMarkState {
         self.initial_worklist_size.load(Ordering::SeqCst)
     }
 
+    #[allow(dead_code)]
     pub fn set_total_workers(&self, count: usize) {
         self.total_workers.store(count, Ordering::SeqCst);
     }
 
+    #[allow(dead_code)]
     pub fn total_workers(&self) -> usize {
         self.total_workers.load(Ordering::SeqCst)
+    }
+
+    // ========================================================================
+    // Barrier coordination for future parallel marking
+    // ========================================================================
+    // These functions are reserved for parallel marking where multiple worker
+    // threads need to synchronize at slice boundaries. Currently unused
+    // because incremental marking runs single-threaded (mutator + GC thread).
+
+    #[allow(dead_code)]
+    pub fn wait_at_barrier(&self) {
+        self.workers_at_barrier.fetch_add(1, Ordering::SeqCst);
+        while self.workers_at_barrier.load(Ordering::Acquire) < self.total_workers() {
+            std::hint::spin_loop();
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn reset_barrier(&self) {
+        self.workers_at_barrier.store(0, Ordering::SeqCst);
     }
 
     pub fn slice_counter(&self) -> usize {
@@ -307,17 +334,6 @@ impl IncrementalMarkState {
 
     pub fn increment_slice_counter(&self) -> usize {
         self.slice_counter.fetch_add(1, Ordering::SeqCst)
-    }
-
-    pub fn wait_at_barrier(&self) {
-        self.workers_at_barrier.fetch_add(1, Ordering::SeqCst);
-        while self.workers_at_barrier.load(Ordering::Acquire) < self.total_workers() {
-            std::hint::spin_loop();
-        }
-    }
-
-    pub fn reset_barrier(&self) {
-        self.workers_at_barrier.store(0, Ordering::SeqCst);
     }
 
     pub fn config(&self) -> parking_lot::MutexGuard<'_, IncrementalConfig> {
@@ -559,17 +575,7 @@ unsafe fn scan_page_for_marked_refs(
 }
 
 pub fn incremental_mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
-    let result = mark_slice(heap, budget);
-
-    let state = IncrementalMarkState::global();
-    match result {
-        MarkSliceResult::Pending { .. } | MarkSliceResult::Complete { .. } => {
-            state.wait_at_barrier();
-        }
-        MarkSliceResult::Fallback { .. } => {}
-    }
-
-    result
+    mark_slice(heap, budget)
 }
 
 pub fn count_dirty_pages(heap: &LocalHeap) -> usize {
@@ -589,6 +595,15 @@ pub fn execute_final_mark(heap: &mut LocalHeap) -> bool {
     state.set_phase(MarkPhase::FinalMark);
 
     let mut remaining = state.worklist_len();
+
+    // Process SATB buffer: mark all captured old values
+    let satb_values = heap.flush_satb_buffer();
+    let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
+    for gc_box in satb_values {
+        unsafe {
+            crate::gc::gc::mark_object(gc_box, &mut visitor);
+        }
+    }
 
     let snapshot_count = heap.take_dirty_pages_snapshot();
     for page_ptr in heap.dirty_pages_iter() {
