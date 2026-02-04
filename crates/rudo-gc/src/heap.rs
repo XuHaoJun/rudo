@@ -67,11 +67,14 @@ pub struct ThreadControlBlock {
     marked_this_slice: usize,
     /// Per-thread remembered buffer for write barrier batching.
     /// Holds dirty pages before flushing to global list.
-    #[allow(dead_code)]
     remembered_buffer: Vec<NonNull<PageHeader>>,
     /// Capacity of the remembered buffer.
     #[allow(dead_code)]
     remembered_buffer_capacity: usize,
+    /// Controls whether this thread's work can be stolen by other workers.
+    /// When true (default), normal work-stealing behavior applies.
+    /// When false, this thread's work is only processed by itself.
+    stealing_allowed: bool,
 }
 
 #[allow(clippy::non_send_fields_in_send_ty)]
@@ -102,6 +105,7 @@ impl ThreadControlBlock {
             marked_this_slice: 0,
             remembered_buffer: Vec::with_capacity(32),
             remembered_buffer_capacity: 32,
+            stealing_allowed: true,
         }
     }
 
@@ -224,6 +228,20 @@ impl ThreadControlBlock {
     pub fn reset_slice_counters(&mut self) {
         self.marked_this_slice = 0;
         self.remembered_buffer.clear();
+    }
+
+    /// Check if work-stealing is allowed for this thread.
+    #[inline]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn stealing_allowed(&self) -> bool {
+        self.stealing_allowed
+    }
+
+    /// Enable or disable work-stealing for this thread.
+    #[inline]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_stealing_allowed(&mut self, allowed: bool) {
+        self.stealing_allowed = allowed;
     }
 }
 

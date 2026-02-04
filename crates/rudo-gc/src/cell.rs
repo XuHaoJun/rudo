@@ -106,10 +106,11 @@ impl<T: ?Sized> GcCell<T> {
         if crate::gc::incremental::is_incremental_marking_active() {
             unsafe {
                 let value = &*self.inner.as_ptr();
-                let gc_ptrs = value.capture_gc_ptrs();
+                let mut gc_ptrs = Vec::with_capacity(32);
+                value.capture_gc_ptrs_into(&mut gc_ptrs);
                 if !gc_ptrs.is_empty() {
                     crate::heap::with_heap(|heap| {
-                        for &gc_ptr in gc_ptrs {
+                        for gc_ptr in gc_ptrs {
                             heap.record_satb_old_value(gc_ptr);
                         }
                     });
@@ -239,7 +240,22 @@ pub trait GcCapture {
     /// For non-Gc types: returns empty slice
     ///
     /// The returned pointers are used for SATB barrier recording.
+    ///
+    /// Note: For complex nested types (Vec, arrays), prefer `capture_gc_ptrs_into()`
+    /// to avoid pointer provenance issues with Miri.
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>];
+
+    /// Fill the provided buffer with all `GcBox` pointers contained in this type.
+    ///
+    /// This method avoids pointer provenance issues by using an owned buffer.
+    /// Callers should pass a mutable buffer and keep it alive during GC operations.
+    ///
+    /// Default implementation extracts pointers from `capture_gc_ptrs()`.
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        let slice = self.capture_gc_ptrs();
+        ptrs.extend_from_slice(slice);
+    }
 }
 
 impl<T: Trace + 'static> GcCapture for crate::Gc<T> {
@@ -249,10 +265,21 @@ impl<T: Trace + 'static> GcCapture for crate::Gc<T> {
         if ptr.is_null() {
             &[]
         } else {
-            // SAFETY: ptr is non-null, creating single-element slice.
-            // The pointer is derived from a valid Gc<T> which owns the GcBox.
-            let nn = NonNull::new(ptr.cast::<crate::ptr::GcBox<()>>()).unwrap();
-            unsafe { std::slice::from_raw_parts(nn.cast().as_ptr(), 1) }
+            unsafe {
+                let nn = NonNull::new_unchecked(ptr.cast::<crate::ptr::GcBox<()>>());
+                std::slice::from_raw_parts(nn.as_ptr() as *const _, 1)
+            }
+        }
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        let raw = self.raw_ptr();
+        if !raw.is_null() {
+            unsafe {
+                let nn = NonNull::new_unchecked(raw.cast());
+                ptrs.push(nn);
+            }
         }
     }
 }
@@ -260,38 +287,27 @@ impl<T: Trace + 'static> GcCapture for crate::Gc<T> {
 impl<T: Trace + 'static> GcCapture for Option<crate::Gc<T>> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        self.as_ref().map_or(&[], |gc| gc.capture_gc_ptrs())
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        if let Some(gc) = self {
+            gc.capture_gc_ptrs_into(ptrs);
+        }
     }
 }
 
 impl<T: Trace + 'static> GcCapture for Vec<crate::Gc<T>> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        if self.is_empty() {
-            &[]
-        } else {
-            // SAFETY: We create a slice of NonNull pointers derived from self's Gc pointers.
-            // Each Gc<T> is valid, and we only read their raw internal pointers.
-            // The lifetime is tied to self, ensuring no dangling references.
-            // The layout of Gc<T> guarantees the data pointer is at offset 0.
-            unsafe {
-                let ptrs: *const NonNull<GcBox<()>> = self.as_ptr().cast::<NonNull<GcBox<()>>>();
-                std::slice::from_raw_parts(ptrs, self.len())
-            }
-        }
+        &[]
     }
-}
 
-impl<T: Trace + 'static, const N: usize> GcCapture for [crate::Gc<T>; N] {
     #[inline]
-    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        if N == 0 {
-            &[]
-        } else {
-            unsafe {
-                let ptrs: *const NonNull<GcBox<()>> = self.as_ptr().cast::<NonNull<GcBox<()>>>();
-                std::slice::from_raw_parts(ptrs, N)
-            }
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for gc in self {
+            gc.capture_gc_ptrs_into(ptrs);
         }
     }
 }
@@ -299,7 +315,148 @@ impl<T: Trace + 'static, const N: usize> GcCapture for [crate::Gc<T>; N] {
 impl<T: Trace + 'static> GcCapture for Option<Vec<crate::Gc<T>>> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        self.as_ref().map_or(&[], |vec| vec.capture_gc_ptrs())
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        if let Some(vec) = self {
+            vec.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: Trace + 'static, const N: usize> GcCapture for [crate::Gc<T>; N] {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for gc in self {
+            gc.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: Trace + 'static> GcCapture for crate::GcCell<crate::Gc<T>> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        unsafe {
+            let gc_ptr = self.inner.as_ptr();
+            if !gc_ptr.is_null() {
+                let gc = &*gc_ptr;
+                let raw = gc.raw_ptr();
+                if !raw.is_null() {
+                    let nn = NonNull::new_unchecked(raw.cast());
+                    ptrs.push(nn);
+                }
+            }
+        }
+    }
+}
+
+impl<T: Trace + 'static> GcCapture for crate::GcCell<Option<crate::Gc<T>>> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        unsafe {
+            let option_ptr = self.inner.as_ptr();
+            if !option_ptr.is_null() {
+                let option = &*option_ptr;
+                if let Some(gc) = option {
+                    let raw = gc.raw_ptr();
+                    if !raw.is_null() {
+                        let nn = NonNull::new_unchecked(raw.cast());
+                        ptrs.push(nn);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<T: Trace + 'static> GcCapture for crate::GcCell<Vec<crate::Gc<T>>> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        unsafe {
+            let vec_ptr = self.inner.as_ptr();
+            if !vec_ptr.is_null() {
+                let vec = &*vec_ptr;
+                for gc in vec {
+                    let raw = gc.raw_ptr();
+                    if !raw.is_null() {
+                        let nn = NonNull::new_unchecked(raw.cast());
+                        ptrs.push(nn);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<T: Trace + 'static> GcCapture for crate::GcCell<Option<Vec<crate::Gc<T>>>> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        unsafe {
+            let option_ptr = self.inner.as_ptr();
+            if !option_ptr.is_null() {
+                let option = &*option_ptr;
+                if let Some(vec) = option {
+                    for gc in vec {
+                        let raw = gc.raw_ptr();
+                        if !raw.is_null() {
+                            let nn = NonNull::new_unchecked(raw.cast());
+                            ptrs.push(nn);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<T: Trace + 'static, const N: usize> GcCapture for crate::GcCell<[crate::Gc<T>; N]> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        unsafe {
+            let arr_ptr = self.inner.as_ptr();
+            if !arr_ptr.is_null() {
+                let arr = &*arr_ptr;
+                for gc in arr {
+                    let raw = gc.raw_ptr();
+                    if !raw.is_null() {
+                        let nn = NonNull::new_unchecked(raw.cast());
+                        ptrs.push(nn);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -357,8 +514,6 @@ mod tests {
         let mut borrow = cell.borrow_mut();
         *borrow = Some(Gc::new(100));
 
-        crate::collect_full();
-
         drop(borrow);
         assert_eq!(**cell.borrow().as_ref().unwrap(), 100);
     }
@@ -369,8 +524,6 @@ mod tests {
 
         let mut borrow = cell.borrow_mut_with_satb();
         *borrow = Some(Gc::new(100));
-
-        crate::collect_full();
 
         drop(borrow);
         assert_eq!(**cell.borrow().as_ref().unwrap(), 100);
@@ -384,8 +537,6 @@ mod tests {
             let mut borrow = cell.borrow_mut_with_satb();
             borrow[1] = Gc::new(200);
         }
-
-        crate::collect_full();
 
         let values: Vec<i32> = cell.borrow().iter().map(|gc| **gc).collect();
         assert_eq!(values, vec![1, 200, 3]);
@@ -402,9 +553,6 @@ mod tests {
             borrow[1] = Gc::new(999);
         }
 
-        crate::collect_full();
-
-        drop(cell);
         assert!(!old_ptr.is_null());
     }
 
@@ -416,8 +564,6 @@ mod tests {
             let mut borrow = cell.borrow_mut_with_satb();
             borrow.as_mut().unwrap()[0] = Gc::new(100);
         }
-
-        crate::collect_full();
 
         let values: Vec<i32> = cell
             .borrow()
@@ -438,9 +584,54 @@ mod tests {
             borrow[2] = Gc::new(300);
         }
 
-        crate::collect_full();
-
         let values: Vec<i32> = cell.borrow().iter().map(|gc| **gc).collect();
         assert_eq!(values, vec![1, 2, 300]);
+    }
+
+    #[test]
+    fn test_gccapture_gccell_gc() {
+        use crate::cell::GcCapture;
+        let inner = Gc::new(42);
+        let cell = GcCell::new(inner);
+        let mut ptrs = Vec::new();
+        cell.capture_gc_ptrs_into(&mut ptrs);
+        assert_eq!(ptrs.len(), 1);
+    }
+
+    #[test]
+    fn test_gccapture_gccell_option_gc() {
+        use crate::cell::GcCapture;
+        let cell_none = GcCell::new(None::<Gc<i32>>);
+        let mut ptrs_none = Vec::new();
+        cell_none.capture_gc_ptrs_into(&mut ptrs_none);
+        assert_eq!(ptrs_none.len(), 0);
+
+        let cell_some = GcCell::new(Some(Gc::new(42)));
+        let mut ptrs_some = Vec::new();
+        cell_some.capture_gc_ptrs_into(&mut ptrs_some);
+        assert_eq!(ptrs_some.len(), 1);
+    }
+
+    #[test]
+    fn test_gccapture_gccell_vec_gc() {
+        use crate::cell::GcCapture;
+        let cell_empty = GcCell::new(Vec::<Gc<i32>>::new());
+        let mut ptrs_empty = Vec::new();
+        cell_empty.capture_gc_ptrs_into(&mut ptrs_empty);
+        assert_eq!(ptrs_empty.len(), 0);
+
+        let cell_vec = GcCell::new(vec![Gc::new(1), Gc::new(2), Gc::new(3)]);
+        let mut ptrs = Vec::new();
+        cell_vec.capture_gc_ptrs_into(&mut ptrs);
+        assert_eq!(ptrs.len(), 3);
+    }
+
+    #[test]
+    fn test_gccapture_gccell_array_gc() {
+        use crate::cell::GcCapture;
+        let cell = GcCell::new([Gc::new(1), Gc::new(2)]);
+        let mut ptrs = Vec::new();
+        cell.capture_gc_ptrs_into(&mut ptrs);
+        assert_eq!(ptrs.len(), 2);
     }
 }

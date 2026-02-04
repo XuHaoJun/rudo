@@ -191,14 +191,18 @@ unsafe impl Send for IncrementalMarkState {}
 
 /// SAFETY: `IncrementalMarkState` is accessed as a process-level singleton via `global()`.
 ///
-/// The `UnsafeCell<SegQueue>` in the `worklist` field is currently **unused** and reserved
-/// for future parallel marking coordination. All current access patterns are single-threaded
-/// from the GC thread during mark slices.
+/// The `UnsafeCell<SegQueue>` in the `worklist` field is accessed single-threaded from the
+/// GC thread during mark slices via `push_work()` and `pop_work()`. For parallel marking,
+/// this field MUST be protected with proper synchronization (Mutex or atomic operations).
+///
+/// Currently, the blanket `unsafe impl Sync` is justified because:
+/// 1. All access to `worklist` occurs from the GC thread during synchronized mark slices
+/// 2. No concurrent access from mutator threads
 ///
 /// When parallel marking is implemented:
-/// 1. The `worklist` field MUST be protected with proper synchronization (Mutex or atomic ops)
+/// 1. The `worklist` field MUST be protected with proper synchronization
 /// 2. The blanket `unsafe impl Sync` MUST be replaced with field-level synchronization
-/// 3. Concurrent access to `worklist` without synchronization is undefined behavior
+/// 3. Concurrent access without synchronization is undefined behavior
 unsafe impl Sync for IncrementalMarkState {}
 
 impl Default for IncrementalMarkState {

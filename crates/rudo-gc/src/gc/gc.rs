@@ -1174,10 +1174,15 @@ fn mark_major_roots_parallel(
 }
 
 /// Minor Collection: Collect Young Generation only.
+///
+/// # FR-009 Compliance
+///
+/// Per spec requirement FR-009: "System MUST prevent minor GC from running during
+/// incremental major marking." This implementation blocks until incremental major
+/// marking completes rather than skipping minor GC entirely.
 fn collect_minor(heap: &mut LocalHeap) -> usize {
-    // Block minor GC during incremental major marking to avoid nested collections
     if crate::gc::incremental::is_incremental_marking_active() {
-        return 0;
+        crate::heap::wait_for_gc_complete();
     }
 
     // 1. Mark Phase
@@ -1230,6 +1235,18 @@ fn promote_young_pages(heap: &mut LocalHeap) {
 }
 
 /// Major Collection: Collect Entire Heap.
+///
+/// # Design Note
+///
+/// The spec's data model (specs/008-incremental-marking/data-model.md section 2.4) defines
+/// a `GcRequest` struct with `CollectionType::IncrementalMajor` as the trigger mechanism.
+/// This implementation uses a different approach:
+///
+/// 1. The `gc_requested: AtomicBool` flag in `ThreadControlBlock` serves as the GC trigger
+/// 2. `IncrementalConfig::enabled` controls whether incremental marking is used
+/// 3. `CollectionType::IncrementalMajor` in `metrics.rs` records what *happened* for telemetry
+///
+/// This avoids introducing a `GcRequest` struct when the existing flag-based approach works.
 fn collect_major(heap: &mut LocalHeap) -> usize {
     let config = crate::gc::incremental::IncrementalMarkState::global().config();
 
