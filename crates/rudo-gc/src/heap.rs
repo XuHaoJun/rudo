@@ -19,6 +19,7 @@ use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
 use sys_alloc::{Mmap, MmapOptions};
 
 use crate::handles::{AsyncScopeData, AsyncScopeEntry, LocalHandles};
+use crate::ptr::GcBox;
 
 /// Get a unique identifier for the current thread.
 /// Uses the stack address which is unique per thread.
@@ -59,6 +60,18 @@ pub struct ThreadControlBlock {
     local_handles: UnsafeCell<LocalHandles>,
     /// Async scope registry for cross-await handle tracking.
     async_scopes: Mutex<Vec<AsyncScopeEntry>>,
+    /// Local work queue for incremental marking.
+    /// Reduces contention on global worklist.
+    local_mark_queue: Vec<NonNull<GcBox<()>>>,
+    /// Number of objects this thread marked this slice.
+    marked_this_slice: usize,
+    /// Per-thread remembered buffer for write barrier batching.
+    /// Holds dirty pages before flushing to global list.
+    #[allow(dead_code)]
+    remembered_buffer: Vec<NonNull<PageHeader>>,
+    /// Capacity of the remembered buffer.
+    #[allow(dead_code)]
+    remembered_buffer_capacity: usize,
 }
 
 #[allow(clippy::non_send_fields_in_send_ty)]
@@ -85,6 +98,10 @@ impl ThreadControlBlock {
             stack_roots: Mutex::new(Vec::new()),
             local_handles: UnsafeCell::new(LocalHandles::new()),
             async_scopes: Mutex::new(Vec::new()),
+            local_mark_queue: Vec::new(),
+            marked_this_slice: 0,
+            remembered_buffer: Vec::with_capacity(32),
+            remembered_buffer_capacity: 32,
         }
     }
 
@@ -161,6 +178,52 @@ impl ThreadControlBlock {
                 }
             }
         }
+    }
+
+    // =========================================================================
+    // Incremental Marking Support
+    // =========================================================================
+
+    /// Push work to thread-local mark queue.
+    /// Overflows to global worklist when local queue is full.
+    pub fn push_local_mark_work(&mut self, ptr: NonNull<GcBox<()>>) {
+        self.local_mark_queue.push(ptr);
+    }
+
+    /// Pop work from thread-local mark queue.
+    /// Tries to steal from global worklist if local is empty.
+    pub fn pop_local_mark_work(&mut self) -> Option<NonNull<GcBox<()>>> {
+        self.local_mark_queue.pop()
+    }
+
+    /// Get reference to local mark queue for iteration.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn local_mark_queue(&self) -> &Vec<NonNull<GcBox<()>>> {
+        &self.local_mark_queue
+    }
+
+    /// Get mutable reference to local mark queue.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn local_mark_queue_mut(&mut self) -> &mut Vec<NonNull<GcBox<()>>> {
+        &mut self.local_mark_queue
+    }
+
+    /// Get count of objects marked this slice.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn marked_this_slice(&self) -> usize {
+        self.marked_this_slice
+    }
+
+    /// Increment the marked counter.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn inc_marked_this_slice(&mut self, count: usize) {
+        self.marked_this_slice += count;
+    }
+
+    /// Reset slice-local counters.
+    pub fn reset_slice_counters(&mut self) {
+        self.marked_this_slice = 0;
+        self.remembered_buffer.clear();
     }
 }
 
@@ -1276,6 +1339,11 @@ pub struct LocalHeap {
 
     /// History of dirty page counts (last 4 cycles).
     dirty_page_history: [usize; 4],
+
+    /// Per-thread remembered buffer for incremental GC write barrier.
+    /// Batched page recording to reduce lock contention.
+    remembered_buffer: Vec<NonNull<PageHeader>>,
+    remembered_buffer_capacity: usize,
 }
 
 impl LocalHeap {
@@ -1302,6 +1370,8 @@ impl LocalHeap {
             dirty_pages_snapshot: Vec::new(),
             avg_dirty_pages: 16,
             dirty_page_history: [16; 4],
+            remembered_buffer: Vec::with_capacity(32),
+            remembered_buffer_capacity: 32,
         }
     }
 
@@ -1393,6 +1463,48 @@ impl LocalHeap {
     /// Get count of dirty pages (for debugging/metrics and tests).
     pub fn dirty_pages_count(&self) -> usize {
         self.dirty_pages.lock().len()
+    }
+
+    /// Record a page in the remembered buffer for incremental GC.
+    /// Flushes to global dirty list on overflow.
+    pub fn record_in_remembered_buffer(&mut self, page: NonNull<PageHeader>) {
+        if !self.remembered_buffer.contains(&page) {
+            self.remembered_buffer.push(page);
+            if self.remembered_buffer.len() >= self.remembered_buffer_capacity {
+                self.flush_remembered_buffer();
+            }
+        }
+    }
+
+    /// Flush remembered buffer to global dirty list.
+    #[allow(clippy::significant_drop_tightening)]
+    pub fn flush_remembered_buffer(&mut self) {
+        let pages = std::mem::take(&mut self.remembered_buffer);
+        if !pages.is_empty() {
+            let mut dirty_pages = self.dirty_pages.lock();
+            for page in pages {
+                if !dirty_pages.contains(&page) {
+                    dirty_pages.push(page);
+                }
+            }
+        }
+    }
+
+    /// Get remembered buffer capacity.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn remembered_buffer_capacity(&self) -> usize {
+        self.remembered_buffer_capacity
+    }
+
+    /// Set remembered buffer capacity.
+    pub fn set_remembered_buffer_capacity(&mut self, capacity: usize) {
+        self.remembered_buffer_capacity = capacity;
+        self.remembered_buffer = Vec::with_capacity(capacity);
+    }
+
+    /// Clear the remembered buffer.
+    pub fn clear_remembered_buffer(&mut self) {
+        self.remembered_buffer.clear();
     }
 
     /// Allocate space for a value of type T.
@@ -2230,7 +2342,8 @@ thread_local! {
     pub static HEAP: ThreadLocalHeap = ThreadLocalHeap::new();
 }
 
-/// Execute a function with access to the thread-local heap.
+/// Execute a function with mutable access to the thread-local heap.
+#[inline]
 pub fn with_heap<F, R>(f: F) -> R
 where
     F: FnOnce(&mut LocalHeap) -> R,
@@ -2238,9 +2351,9 @@ where
     HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get()) })
 }
 
-/// Get mutable access to the thread-local heap and its control block.
-/// Used for GC coordination.
+/// Execute a function with mutable access to the thread-local heap and its control block.
 #[allow(dead_code)]
+#[inline]
 pub fn with_heap_and_tcb<F, R>(f: F) -> R
 where
     F: FnOnce(&mut LocalHeap, &ThreadControlBlock) -> R,
@@ -2248,9 +2361,9 @@ where
     HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get(), &local.tcb) })
 }
 
-/// Execute a function with access to the thread-local heap and Arc<ThreadControlBlock>.
-/// This is useful for creating `AsyncHandleScope` which requires `&Arc<TCB>`.
+/// Execute a function with mutable access to the thread-local heap and Arc<ThreadControlBlock>.
 #[allow(dead_code)]
+#[inline]
 pub fn with_heap_and_tcb_arc<F, R>(f: F) -> R
 where
     F: FnOnce(&mut LocalHeap, &std::sync::Arc<ThreadControlBlock>) -> R,

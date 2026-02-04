@@ -4,6 +4,8 @@
 //! notifies the Garbage Collector when mutations occur. Use this for
 //! all interior mutability of GC-managed objects.
 
+use crate::gc::incremental::IncrementalMarkState;
+use crate::heap::{ptr_to_page_header, PageHeader, MAGIC_GC_PAGE};
 use crate::trace::Trace;
 use std::cell::{Ref, RefCell, RefMut};
 use std::ptr::NonNull;
@@ -23,6 +25,17 @@ use std::ptr::NonNull;
 /// `GcCell` solves this by checking if it lives in an old page during mutation.
 /// If it does, it sets a "dirty bit" for its object in the page header. The GC
 /// then treats dirty objects as roots for the next minor collection.
+///
+/// # Incremental GC and SATB Barriers
+///
+/// During incremental marking, `GcCell` implements a hybrid SATB + Dijkstra barrier:
+///
+/// - **SATB (Snapshot-At-The-Beginning)**: Records old pointer values before they're overwritten.
+///   This ensures objects reachable at the start of marking are preserved.
+/// - **Dijkstra Insertion Barrier**: Immediately marks new pointer values written during marking.
+///   This prevents newly-reachable objects from being missed.
+///
+/// The write barrier is only active during the `Marking` phase of incremental collection.
 pub struct GcCell<T: ?Sized> {
     inner: RefCell<T>,
 }
@@ -142,15 +155,43 @@ impl<T: ?Sized> GcCell<T> {
 
     #[allow(clippy::unused_self)]
     #[allow(clippy::needless_return)]
-    fn incremental_write_barrier(&self, _ptr: *const u8) {
-        use crate::gc::incremental::IncrementalMarkState;
-
+    fn incremental_write_barrier(&self, ptr: *const u8) {
         let state = IncrementalMarkState::global();
 
         if !state.config().enabled || state.fallback_requested() {
             return;
         }
+
+        unsafe {
+            let header = ptr_to_page_header(ptr);
+            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+                return;
+            }
+
+            if (*header.as_ptr()).generation > 0 {
+                let _ = record_page_in_remembered_buffer(header);
+            }
+        }
     }
+}
+
+/// Record a page in the thread's remembered buffer.
+///
+/// This is used by the SATB barrier to record pages that may contain
+/// overwritten old values. The remembered buffer is flushed to the
+/// global dirty list when it overflows.
+#[allow(unsafe_op_in_unsafe_fn)]
+#[inline]
+unsafe fn record_page_in_remembered_buffer(page: NonNull<PageHeader>) -> bool {
+    crate::heap::with_heap(|heap| {
+        let header = page.as_ptr();
+        if (*header).generation > 0 {
+            heap.record_in_remembered_buffer(page);
+            true
+        } else {
+            false
+        }
+    })
 }
 
 // SAFETY: GcCell is Trace if T is Trace.

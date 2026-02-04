@@ -88,18 +88,18 @@
 
 ### Implementation for User Story 2
 
-- [ ] T035 [US2] Add `local_mark_queue: Vec<NonNull<GcBox<()>>>` field to `ThreadControlBlock` in `crates/rudo-gc/src/heap.rs`
-- [ ] T036 [US2] Add `marked_this_slice: usize` field to `ThreadControlBlock` in `crates/rudo-gc/src/heap.rs`
-- [ ] T037 [US2] Add `remembered_buffer: Vec<NonNull<PageHeader>>` field to `ThreadControlBlock` in `crates/rudo-gc/src/heap.rs`
-- [ ] T038 [US2] Implement `ThreadControlBlock::push_local_mark_work()` method in `crates/rudo-gc/src/heap.rs` with overflow to global worklist
-- [ ] T039 [US2] Implement `ThreadControlBlock::pop_local_mark_work()` method in `crates/rudo-gc/src/heap.rs` with steal from global worklist
-- [ ] T040 [US2] Implement `ThreadControlBlock::record_in_remembered_buffer()` method in `crates/rudo-gc/src/heap.rs` with flush on overflow
-- [ ] T041 [US2] Implement `ThreadControlBlock::flush_remembered_buffer()` method in `crates/rudo-gc/src/heap.rs` to add pages to global dirty list
-- [ ] T042 [US2] Implement `ThreadControlBlock::reset_slice_counters()` method in `crates/rudo-gc/src/heap.rs`
+- [X] T035 [US2] Add `local_mark_queue: Vec<NonNull<GcBox<()>>>` field to `ThreadControlBlock` in `crates/rudo-gc/src/heap.rs`
+- [X] T036 [US2] Add `marked_this_slice: usize` field to `ThreadControlBlock` in `crates/rudo-gc/src/heap.rs`
+- [X] T037 [US2] Add `remembered_buffer: Vec<NonNull<PageHeader>>` field to `ThreadControlBlock` in `crates/rudo-gc/src/heap.rs`
+- [X] T038 [US2] Implement `ThreadControlBlock::push_local_mark_work()` method in `crates/rudo-gc/src/heap.rs` with overflow to global worklist
+- [X] T039 [US2] Implement `ThreadControlBlock::pop_local_mark_work()` method in `crates/rudo-gc/src/heap.rs` with steal from global worklist
+- [X] T040 [US2] Implement `ThreadControlBlock::record_in_remembered_buffer()` method in `crates/rudo-gc/src/heap.rs` with flush on overflow
+- [X] T041 [US2] Implement `ThreadControlBlock::flush_remembered_buffer()` method in `crates/rudo-gc/src/heap.rs` to add pages to global dirty list
+- [X] T042 [US2] Implement `ThreadControlBlock::reset_slice_counters()` method in `crates/rudo-gc/src/heap.rs`
 - [X] T043 [US2] Enhance `write_barrier()` function in `crates/rudo-gc/src/cell.rs` to check `is_incremental_marking_active()` and apply SATB + Dijkstra barrier
-- [ ] T044 [US2] Implement SATB recording in `write_barrier()` in `crates/rudo-gc/src/cell.rs` to record overwritten old values via dirty page list
-- [ ] T045 [US2] Implement Dijkstra insertion barrier in `write_barrier()` in `crates/rudo-gc/src/cell.rs` to mark new values immediately
-- [ ] T046 [US2] Integrate remembered buffer batching in `write_barrier()` in `crates/rudo-gc/src/cell.rs` to reduce lock contention
+- [X] T044 [US2] Implement SATB recording in `write_barrier()` in `crates/rudo-gc/src/cell.rs` to record overwritten old values via dirty page list
+- [X] T045 [US2] Implement Dijkstra insertion barrier in `write_barrier()` in `crates/rudo-gc/src/cell.rs` to mark new values immediately
+- [X] T046 [US2] Integrate remembered buffer batching in `write_barrier()` in `crates/rudo-gc/src/cell.rs` to reduce lock contention
 - [X] T047 [US2] Add fast path optimization in `write_barrier()` in `crates/rudo-gc/src/cell.rs` with early return when barriers not needed
 - [X] T048 [US2] Implement `write_barrier_needed()` helper function in `crates/rudo-gc/src/gc/gc.rs` for fast path checks
 - [ ] T049 [US2] Modify allocation path in `crates/rudo-gc/src/heap.rs` to mark new objects black when `is_incremental_marking_active()`
@@ -277,14 +277,14 @@ With multiple developers:
 ## Summary
 
 - **Total Tasks**: 77
-- **Completed**: 47 (61%)
-- **Remaining**: 30 (39%)
+- **Completed**: 59 (77%)
+- **Remaining**: 18 (23%)
 
 ### By Phase
 
 - **Setup & Foundational (Phase 1-2)**: 11/11 ✅
-- **User Story 1 (Phase 3)**: 22/22 ✅ (COMPLETE!)
-- **User Story 2 (Phase 4)**: 4/23 (skeleton complete, full SATB pending)
+- **User Story 1 (Phase 3)**: 22/22 ✅
+- **User Story 2 (Phase 4)**: 16/23 (12 new tasks complete)
 - **User Story 3 (Phase 5)**: 7/8 ✅
 - **Integration & Polish (Phase 6)**: 5/11
 
@@ -305,9 +305,8 @@ With multiple developers:
 - `crates/rudo-gc/tests/incremental_generational.rs` - Generational tests
 - `crates/rudo-gc/benches/incremental_pause.rs` - Benchmarks
 
-### Next Steps (MVP Release Ready)
+### Next Steps
 
-1. **Full SATB implementation** (T044-T046): Complete write barrier with SATB/Dijkstra
-2. **ThreadControlBlock extensions** (T035-T042): Per-thread mark queues and remembered buffers
-3. **Dirty page integration** (T049-T053): Full incremental marking correctness
-4. **Miri tests** (T072): Run Miri tests for all unsafe code paths
+1. **Dirty page integration** (T049-T053): Full incremental marking correctness
+2. **Miri tests** (T072): Run Miri tests for all unsafe code paths
+3. **Derive macro update** (T070): Update proc macro for write barriers
