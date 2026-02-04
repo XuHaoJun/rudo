@@ -130,7 +130,11 @@ pub fn get_incremental_config() -> gc::incremental::IncrementalConfig {
 /// ```
 pub fn yield_now() {
     if crate::gc::incremental::is_incremental_marking_active() {
-        std::thread::yield_now();
+        let config = get_incremental_config();
+        let budget = config.increment_size;
+        crate::heap::with_heap(|heap| {
+            let _ = crate::gc::incremental::incremental_mark_slice(heap, budget);
+        });
     }
 }
 pub use gc::{

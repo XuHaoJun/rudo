@@ -1277,7 +1277,8 @@ fn collect_major_incremental(heap: &mut LocalHeap) -> usize {
     let state = IncrementalMarkState::global();
     let config = state.config();
 
-    execute_snapshot(heap);
+    let heaps: [&LocalHeap; 1] = [&*heap];
+    execute_snapshot(&heaps);
 
     let per_worker_budget = config.increment_size;
 
@@ -1300,7 +1301,8 @@ fn collect_major_incremental(heap: &mut LocalHeap) -> usize {
     let remaining = state.worklist_len();
     let dirty_pages = count_dirty_pages(heap);
     if remaining > 0 || dirty_pages > 0 {
-        execute_final_mark(heap);
+        let heaps_mut: &mut [&mut LocalHeap; 1] = &mut [heap];
+        execute_final_mark(heaps_mut);
     }
 
     state.set_phase(MarkPhase::Sweeping);

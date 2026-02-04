@@ -196,7 +196,10 @@ fn test_execute_snapshot_captures_roots() {
     let state = IncrementalMarkState::global();
     assert_eq!(state.phase(), MarkPhase::Idle);
 
-    let root_count = rudo_gc::heap::with_heap(rudo_gc::gc::incremental::execute_snapshot);
+    let root_count = rudo_gc::heap::with_heap(|heap: &mut rudo_gc::heap::LocalHeap| {
+        let heaps: [&rudo_gc::heap::LocalHeap; 1] = [heap];
+        rudo_gc::gc::incremental::execute_snapshot(&heaps)
+    });
 
     assert!(
         root_count >= 1,
@@ -217,7 +220,10 @@ fn test_root_capture_with_nested_objects() {
     let _outer = Gc::new(NestedData { inner, value: 20 });
 
     let state = IncrementalMarkState::global();
-    let root_count = rudo_gc::heap::with_heap(rudo_gc::gc::incremental::execute_snapshot);
+    let root_count = rudo_gc::heap::with_heap(|heap: &mut rudo_gc::heap::LocalHeap| {
+        let heaps: [&rudo_gc::heap::LocalHeap; 1] = [heap];
+        rudo_gc::gc::incremental::execute_snapshot(&heaps)
+    });
 
     assert!(
         root_count >= 2,

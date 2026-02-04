@@ -401,7 +401,7 @@ pub fn write_barrier_needed() -> bool {
     state.config().enabled && !state.fallback_requested() && is_write_barrier_active()
 }
 
-pub fn execute_snapshot(heap: &mut LocalHeap) -> usize {
+pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
     let state = IncrementalMarkState::global();
     state.set_phase(MarkPhase::Snapshot);
     state.stats().reset();
@@ -412,30 +412,34 @@ pub fn execute_snapshot(heap: &mut LocalHeap) -> usize {
     state.start_slice();
 
     let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
-    unsafe {
-        crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
-            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
-                crate::gc::gc::mark_object(gc_box, &mut visitor);
-            }
-        });
 
-        #[cfg(any(test, feature = "test-util"))]
-        {
-            crate::test_util::iter_test_roots(|roots: &std::cell::RefCell<Vec<*const u8>>| {
-                for &ptr in roots.borrow().iter() {
-                    if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
-                        crate::gc::gc::mark_object(gc_box, &mut visitor);
-                    }
-                }
-            });
-        }
-
-        #[cfg(feature = "tokio")]
-        {
-            use crate::tokio::GcRootSet;
-            for &ptr in &GcRootSet::global().snapshot(heap) {
+    for heap in heaps {
+        unsafe {
+            crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                     crate::gc::gc::mark_object(gc_box, &mut visitor);
+                }
+            });
+
+            #[cfg(any(test, feature = "test-util"))]
+            {
+                crate::test_util::iter_test_roots(|roots: &std::cell::RefCell<Vec<*const u8>>| {
+                    for &ptr in roots.borrow().iter() {
+                        if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                            crate::gc::gc::mark_object(gc_box, &mut visitor);
+                        }
+                    }
+                });
+            }
+
+            #[cfg(feature = "tokio")]
+            {
+                use crate::tokio::GcRootSet;
+                for &ptr in &GcRootSet::global().snapshot(heap) {
+                    if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8)
+                    {
+                        crate::gc::gc::mark_object(gc_box, &mut visitor);
+                    }
                 }
             }
         }
@@ -503,9 +507,13 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
         }
     }
     heap.clear_dirty_pages_snapshot();
+    state
+        .stats()
+        .dirty_pages_scanned
+        .fetch_add(dirty_scanned, Ordering::SeqCst);
 
-    let additional_marked = state.worklist_len().saturating_sub(objects_marked);
-    objects_marked = objects_marked.min(state.worklist_len());
+    let total_marked = objects_marked.saturating_add(dirty_scanned);
+    objects_marked = total_marked.min(state.worklist_len());
     state.stats().slices_executed.fetch_add(1, Ordering::SeqCst);
     state
         .stats()
@@ -618,37 +626,45 @@ pub fn clear_dirty_pages_snapshot(heap: &mut LocalHeap) {
     heap.clear_dirty_pages_snapshot();
 }
 
-pub fn execute_final_mark(heap: &mut LocalHeap) -> bool {
+pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
     let state = IncrementalMarkState::global();
     state.set_phase(MarkPhase::FinalMark);
 
-    let mut remaining = state.worklist_len();
-
-    // Process SATB buffer: mark all captured old values
-    let satb_values = heap.flush_satb_buffer();
+    let mut total_marked = 0;
     let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
-    for gc_box in satb_values {
-        unsafe {
-            crate::gc::gc::mark_object(gc_box, &mut visitor);
+
+    for h in heaps {
+        let heap = h;
+        let satb_values = heap.flush_satb_buffer();
+        for gc_box in satb_values {
+            unsafe {
+                crate::gc::gc::mark_object(gc_box, &mut visitor);
+            }
+            total_marked += 1;
         }
+
+        let snapshot_count = heap.take_dirty_pages_snapshot();
+        for page_ptr in heap.dirty_pages_iter() {
+            unsafe {
+                scan_page_for_unmarked_refs(page_ptr, state.stats());
+            }
+        }
+        heap.clear_dirty_pages_snapshot();
     }
 
-    let snapshot_count = heap.take_dirty_pages_snapshot();
-    for page_ptr in heap.dirty_pages_iter() {
-        unsafe {
-            scan_page_for_unmarked_refs(page_ptr, state.stats());
-        }
+    while let Some(ptr) = visitor.worklist.pop() {
+        state.push_work(ptr);
+        total_marked += 1;
     }
-    heap.clear_dirty_pages_snapshot();
-    remaining += state.worklist_len();
 
+    let remaining = state.worklist_len();
     if remaining > 0 {
         state.set_phase(MarkPhase::Marking);
-        return false;
+    } else {
+        state.set_phase(MarkPhase::Sweeping);
     }
 
-    state.set_phase(MarkPhase::Sweeping);
-    true
+    total_marked
 }
 
 #[allow(unsafe_op_in_unsafe_fn)]
