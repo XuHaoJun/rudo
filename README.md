@@ -20,6 +20,7 @@ The library is built on a **BiBOP (Big Bag of Pages)** memory layout, which allo
 - **Conservative Stack Scanning**: Automatically discovers roots on the stack and in registers, minimizing the need for manual root registration. Now supports **Linux, macOS, and Windows**.
 - **Address Space Coloring**: Uses heap capability hints to place memory in safe regions, reducing false positives during conservative stack scanning.
 - **Write Barriers**: Efficiently tracks old-to-young pointers using card-marking (dirty bitmaps) for fast minor collections.
+- **Incremental Marking**: Splits major GC mark phase into cooperative increments, reducing pause times by 50-80%. Uses hybrid SATB + Dijkstra insertion barrier.
 - **Large Object Space (LOS)**: Specialized handling for objects larger than 2KB to prevent fragmentation.
 - **Weak References**: Support for `Weak<T>` pointers with proper lifecycle management.
 - **ZST Optimization**: Zero-Sized Types (like `()`) are handled with zero heap allocation overhead.
@@ -35,21 +36,43 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rudo-gc = "0.1.0"
+rudo-gc = "0.7"
 ```
 
 If you want to use the `#[derive(Trace)]` macro, enable the `derive` feature:
 
 ```toml
 [dependencies]
-rudo-gc = { version = "0.1.0", features = ["derive"] }
+rudo-gc = { version = "0.7", features = ["derive"] }
 ```
 
 For Tokio async/await integration:
 
 ```toml
 [dependencies]
-rudo-gc = { version = "0.1.0", features = ["derive", "tokio"] }
+rudo-gc = { version = "0.7", features = ["derive", "tokio"] }
+```
+
+### Incremental Marking (Opt-in)
+
+Incremental marking is available starting from v0.7. Enable it to reduce major GC pause times:
+
+```toml
+[dependencies]
+rudo-gc = { version = "0.7", features = ["incremental"] }
+```
+
+Then configure it in your code:
+
+```rust
+use rudo_gc::IncrementalConfig;
+
+let config = IncrementalConfig {
+    enabled: true,
+    increment_size: 1000,
+    ..Default::default()
+};
+rudo_gc::set_incremental_config(config);
 ```
 
 ### Lazy Sweep (Enabled by Default)
@@ -58,7 +81,7 @@ The `lazy-sweep` feature (enabled by default) defers memory reclamation to alloc
 
 ```toml
 [dependencies]
-rudo-gc = { version = "0.1.0", default-features = false }
+rudo-gc = { version = "0.7", default-features = false }
 ```
 
 Lazy sweep is recommended for applications where latency matters more than peak throughput. The eager sweep path (when disabled) may perform better in batch processing workloads.
@@ -89,6 +112,36 @@ let node = Gc::new(Node {
 
 // Mutating a GC-managed object
 *node.next.borrow_mut() = None;
+```
+
+## GcCell API
+
+`GcCell<T>` provides interior mutability with write barriers for GC-managed objects. The API offers three methods with different barrier levels:
+
+### API Comparison
+
+| Method | T Bound | Barrier Type | Use Case |
+|--------|----------|--------------|----------|
+| `borrow_mut()` | `Trace` | Generational + Incremental | General use (recommended) |
+| `borrow_mut_with_satb()` | `GcCapture` | Full (incl. SATB) | Types with GC pointers |
+| `borrow_mut_gen_only()` | - | None | Performance optimization |
+
+### Usage Examples
+
+```rust
+use rudo_gc::{Gc, GcCell};
+
+// General use - works with any type
+let cell = GcCell::new(42);
+*cell.borrow_mut() = 100;  // Works!
+
+// With GC pointers - use borrow_mut_with_satb() for SATB
+let cell = GcCell::new(Gc::new(Data));
+*cell.borrow_mut_with_satb() = new_data;  // Full barrier with SATB
+
+// Performance optimization - no barriers
+let cell = GcCell::new(expensive_computation());
+*cell.borrow_mut_gen_only() = result;  // Fastest option
 ```
 
 ## HandleScope  - Optional
@@ -182,7 +235,7 @@ Enable the `tokio` feature for async/await support:
 
 ```toml
 [dependencies]
-rudo-gc = { version = "0.1.0", features = ["derive", "tokio"] }
+rudo-gc = { version = "0.7", features = ["derive", "tokio"] }
 ```
 
 ### Root Guards
@@ -245,9 +298,10 @@ async fn main() {
 3.  **Sweeping**: By default, uses lazy sweep to defer reclamation to allocation time, reducing STW pauses. Eager sweeping is available when the `lazy-sweep` feature is disabled.
 4.  **Lazy Sweep**: Pages with dead objects are marked during collection but swept lazily during subsequent allocations. This amortizes sweep work across allocations, reducing pause times.
 4.  **Generations**: Objects start in "Generation 0" and are promoted to "Generation 1" if they survive a Minor GC.
-5.  **Interior Mutability**: `GcCell<T>` provides a `RefCell`-like API with integrated write barriers to track old-to-young pointers.
-6.  **Safe Points**: Cooperative rendezvous protocol for multi-threaded GC coordination. Use `safepoint()` in long-running loops.
-7.  **Thread Safety**: Multi-threaded GC with thread coordination and parallel marking.
+5.  **Interior Mutability**: `GcCell<T>` provides a `RefCell`-like API with integrated write barriers to track old-to-young pointers. Supports both generational and incremental (SATB) barriers.
+6.  **Incremental Marking**: Reduces major GC pause times by splitting the mark phase into cooperative increments. Uses hybrid SATB + Dijkstra insertion barrier approach.
+7.  **Safe Points**: Cooperative rendezvous protocol for multi-threaded GC coordination. Use `safepoint()` in long-running loops.
+8.  **Thread Safety**: Multi-threaded GC with thread coordination and parallel marking.
 
 ## Trace Trait
 

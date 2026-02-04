@@ -85,7 +85,7 @@ impl TestAppState {
     }
 
     pub fn set_view(&self, view: TestViewStruct) {
-        *self.view.borrow_mut_unchecked() = Some(view);
+        *self.view.borrow_mut() = Some(view);
     }
 
     #[allow(clippy::needless_pass_by_value)]

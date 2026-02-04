@@ -288,43 +288,82 @@ pub fn write_barrier_needed() -> bool;
 
 ```rust
 impl<T> GcCell<T> {
-    /// Mutably borrows the wrapped value with automatic SATB barrier.
+    /// Mutably borrows the wrapped value with generational and incremental barriers.
     ///
-    /// **Design Rationale**: This method requires `T: GcCapture` because the SATB
-    /// (Snapshot-At-The-Beginning) barrier must record old GC pointer values before
-    /// mutation to guarantee correctness during incremental marking. For types without
-    /// GC pointers (primitives, non-Gc structs), this requirement is moot but maintained
-    /// for API consistency.
+    /// **Barrier Type**: Generational + Incremental (no SATB)
     ///
-    /// **Migration**:
-    /// - For types containing GC pointers: Use `borrow_mut()` - no change needed
-    /// - For types without GC pointers: Use `borrow_mut_unchecked()` as escape hatch
+    /// This is the recommended method for general use. It works with any type
+    /// implementing `Trace` and provides generational and incremental barrier protection.
+    /// For types containing GC pointers that require SATB barrier during incremental
+    /// marking, use `borrow_mut_with_satb()` instead.
     ///
-    /// **Why Not Unconditional**: The compiler enforces `GcCapture` to ensure developers
-    /// consciously choose the barrier mode. Silent no-op barriers would hide correctness
-    /// bugs where GC pointers are expected but not captured.
+    /// **Use Case**: General purpose - works with all T: Trace types
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Works with any type:
+    /// let cell = GcCell::new(42);
+    /// *cell.borrow_mut() = 100;
+    ///
+    /// let cell = GcCell::new(String::from("hello"));
+    /// *cell.borrow_mut() = "world".to_string();
+    /// ```
     ///
     /// # Panics
     ///
     /// Panics if the value is currently borrowed.
     pub fn borrow_mut(&self) -> RefMut<'_, T>
     where
-        T: GcCapture;
+        T: Trace;
 
-    /// Mutably borrows the wrapped value without GC tracking.
+    /// Mutably borrows the wrapped value with SATB barrier.
     ///
-    /// **Use Cases**:
-    /// - Types that do not contain GC pointers (e.g., `GcCell<i32>`, `GcCell<String>`)
-    /// - Performance-critical code where SATB overhead is measurable and proven unnecessary
-    /// - FFI boundaries or unsafe code requiring unchecked access
+    /// **Barrier Type**: Full (Generational + Incremental + SATB)
     ///
-    /// **Warning**: Using this on types containing GC pointers during incremental marking
-    /// may cause incorrect collection of reachable objects.
+    /// This method captures old GC pointer values before mutation, enabling correct
+    /// incremental marking. Use this for `GcCell<Gc<T>>`, `GcCell<Vec<Gc<T>>>`,
+    /// and similar types containing GC pointers.
+    ///
+    /// **Use Case**: Types with GC pointers requiring SATB correctness
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let cell = GcCell::new(Gc::new(Data));
+    /// *cell.borrow_mut_with_satb() = new_data;  // SATB active
+    /// ```
     ///
     /// # Panics
     ///
     /// Panics if the value is currently borrowed.
-    pub fn borrow_mut_unchecked(&self) -> RefMut<'_, T>;
+    pub fn borrow_mut_with_satb(&self) -> RefMut<'_, T>
+    where
+        T: GcCapture;
+
+    /// Mutably borrows the wrapped value with generational barrier only.
+    ///
+    /// **Barrier Type**: Generational only
+    ///
+    /// This is an escape hatch for performance-critical code where incremental
+    /// barrier overhead is measurable. The SATB barrier is skipped.
+    ///
+    /// **Warning**: Using this on types containing GC pointers during incremental
+    /// marking may cause reachable objects to be incorrectly collected.
+    ///
+    /// **Use Case**: Performance optimization - when SATB is not needed
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let cell = GcCell::new(expensive_computation());
+    /// *cell.borrow_mut_gen_only() = result;  // Only generational barrier
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value is currently borrowed.
+    pub fn borrow_mut_gen_only(&self) -> RefMut<'_, T>;
 }
 ```
 

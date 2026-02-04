@@ -104,55 +104,53 @@ When mutation rates are very high, the system may accumulate too many dirty page
 
 ## Breaking API Changes
 
-The `GcCell::borrow_mut()` method now requires `T: GcCapture` bound. This is an **intentional design decision**, not a bug.
+This section documents API changes introduced in v0.7.0.
 
-### Rationale
+### v0.7.0: GcCell API Redesign
 
-SATB (Snapshot-At-The-Beginning) barriers require recording old GC pointer values before mutation. By requiring `GcCapture`, the API ensures:
-1. Correctness by default - SATB barriers cannot be accidentally omitted
-2. Compile-time safety - developers must consciously opt-in/out
-3. Zero-overhead for non-Gc types - the bound is statically resolved
+The `GcCell` API has been redesigned to be backward compatible while maintaining correctness.
+
+**Key Changes**:
+- `borrow_mut()` now requires `T: Trace` instead of `T: GcCapture`
+- Added `borrow_mut_with_satb()` for types requiring SATB barrier
+- Added `borrow_mut_gen_only()` for performance optimization
+
+### API Comparison
+
+| Method                   | T Bound   | Barrier Type              | Use Case                          |
+|--------------------------|-----------|---------------------------|-----------------------------------|
+| `borrow_mut()`           | `Trace`   | Generational + Incremental| General use (recommended)         |
+| `borrow_mut_with_satb()` | `GcCapture` | Full (incl. SATB)       | Types with GC pointers            |
+| `borrow_mut_gen_only()`  | -         | Generational only         | Performance optimization          |
 
 ### Before vs After
 
-| Aspect | Before | After |
-|--------|--------|-------|
-| `GcCell::borrow_mut()` availability | All `T` | Only `T: GcCapture` |
-| SATB barrier | None | Automatic for types with GC pointers |
-| Escape hatch | N/A | `borrow_mut_unchecked()` |
-
-### Types Implementing `GcCapture`
-
-- `Gc<T>`
-- `Option<Gc<T>>`
-- `Vec<Gc<T>>`
-- `GcCell<Gc<T>>`
-- `GcCell<Option<Gc<T>>>`
-- `GcCell<Vec<Gc<T>>>`
+| Aspect | v0.6.x | v0.7.x |
+|--------|--------|--------|
+| `GcCell<i32>::borrow_mut()` | ✅ Works | ✅ Works |
+| `GcCell<Gc<T>>::borrow_mut()` | ✅ Works | ✅ Works |
+| SATB for GC pointers | Automatic | Opt-in via `borrow_mut_with_satb()` |
 
 ### Migration Guide
 
 ```rust
-// Case 1: GcCell<Gc<T>> - No change needed, GcCapture is implemented
+// Case 1: GcCell<Gc<T>> - Works with both methods
 let cell = GcCell::new(Gc::new(Data));
-let mut_ref = cell.borrow_mut();  // Works
+*cell.borrow_mut() = new_data;              // Generational + Incremental (recommended)
+*cell.borrow_mut_with_satb() = new_data;    // Full (explicit SATB)
 
-// Case 2: GcCell<i32> - Cannot implement GcCapture (no GC pointers)
+// Case 2: GcCell<i32> - Works with borrow_mut()
 let cell = GcCell::new(42);
-let mut_ref = cell.borrow_mut_unchecked();  // Use escape hatch
+*cell.borrow_mut() = 100;  // Works! (generational + incremental barrier)
+
+// Case 3: Performance optimization
+let cell = GcCell::new(expensive_computation());
+*cell.borrow_mut_gen_only() = result;  // Generational barrier only
 ```
 
-### Why Not Unconditional?
+### Why This Design?
 
-A silent no-op barrier would hide correctness bugs. Consider:
-
-```rust
-// If borrow_mut() had no GcCapture bound:
-struct MyStruct {
-    gc_ptr: Gc<Something>,  // Developer expects SATB
-}
-let cell = GcCell::new(MyStruct { gc_ptr: ... });
-cell.borrow_mut().gc_ptr = new_value;  // SATB silently NOT triggered!
-```
-
-The compiler enforcing `GcCapture` prevents this class of memory corruption bugs.
+1. **Backward Compatible**: Existing code continues to work
+2. **Correctness by Default**: `borrow_mut()` provides generational + incremental barriers
+3. **Opt-in SATB**: `borrow_mut_with_satb()` for types requiring SATB
+4. **Performance Path**: `borrow_mut_gen_only()` for hot paths
