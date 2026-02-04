@@ -12,8 +12,8 @@ use std::sync::PoisonError;
 
 use crate::gc::incremental::FallbackReason;
 use crate::gc::incremental::{
-    count_dirty_pages, execute_final_mark, execute_snapshot, mark_slice, start_incremental_mark,
-    IncrementalMarkState, MarkPhase, MarkSliceResult, MarkStats,
+    count_dirty_pages, execute_final_mark, execute_snapshot, mark_slice, IncrementalMarkState,
+    MarkPhase, MarkSliceResult, MarkStats,
 };
 use crate::gc::marker::{
     worker_mark_loop, worker_mark_loop_with_registry, GcWorkerRegistry, ParallelMarkConfig,
@@ -132,6 +132,15 @@ pub fn register_test_root(ptr: *const u8) {
 /// Clear all registered test roots.
 pub fn clear_test_roots() {
     TEST_ROOTS.with(|roots| roots.borrow_mut().clear());
+}
+
+/// Iterate over registered test roots.
+#[cfg(any(test, feature = "test-util"))]
+pub fn iter_test_roots<F, R>(f: F) -> R
+where
+    F: FnOnce(&std::cell::RefCell<Vec<*const u8>>) -> R,
+{
+    TEST_ROOTS.with(f)
 }
 
 /// Notify that a Gc was created.
@@ -1267,11 +1276,8 @@ fn collect_major_stw(heap: &mut LocalHeap) -> usize {
 fn collect_major_incremental(heap: &mut LocalHeap) -> usize {
     let state = IncrementalMarkState::global();
     let config = state.config();
-    let num_workers = 1;
 
     execute_snapshot(heap);
-
-    start_incremental_mark(heap, num_workers);
 
     let per_worker_budget = config.increment_size;
 

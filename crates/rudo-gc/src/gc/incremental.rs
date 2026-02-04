@@ -358,7 +358,7 @@ pub fn write_barrier_needed() -> bool {
     state.config().enabled && !state.fallback_requested() && is_write_barrier_active()
 }
 
-pub fn execute_snapshot(heap: &mut LocalHeap) {
+pub fn execute_snapshot(heap: &mut LocalHeap) -> usize {
     let state = IncrementalMarkState::global();
     state.set_phase(MarkPhase::Snapshot);
     state.stats().reset();
@@ -369,21 +369,43 @@ pub fn execute_snapshot(heap: &mut LocalHeap) {
     state.reset_barrier();
     state.start_slice();
 
+    let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
+    unsafe {
+        crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                crate::gc::gc::mark_object(gc_box, &mut visitor);
+            }
+        });
+
+        #[cfg(any(test, feature = "test-util"))]
+        {
+            crate::test_util::iter_test_roots(|roots: &std::cell::RefCell<Vec<*const u8>>| {
+                for &ptr in roots.borrow().iter() {
+                    if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
+                        crate::gc::gc::mark_object(gc_box, &mut visitor);
+                    }
+                }
+            });
+        }
+
+        #[cfg(feature = "tokio")]
+        {
+            use crate::tokio::GcRootSet;
+            for &ptr in &GcRootSet::global().snapshot(heap) {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                    crate::gc::gc::mark_object(gc_box, &mut visitor);
+                }
+            }
+        }
+    }
+
+    while let Some(ptr) = visitor.worklist.pop() {
+        state.push_work(ptr);
+    }
+
+    let root_count = state.worklist_len();
     state.set_phase(MarkPhase::Marking);
-}
-
-pub fn start_incremental_mark(heap: &mut LocalHeap, num_workers: usize) {
-    let state = IncrementalMarkState::global();
-    state.set_phase(MarkPhase::Snapshot);
-    state.stats().reset();
-    state.reset_fallback();
-    state.reset_worklist();
-
-    state.set_total_workers(num_workers);
-    state.reset_barrier();
-    state.start_slice();
-
-    state.set_phase(MarkPhase::Marking);
+    root_count
 }
 
 #[allow(clippy::significant_drop_tightening)]
@@ -403,6 +425,16 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
     let mut objects_marked = 0;
 
     while objects_marked < budget {
+        if state.fallback_requested() {
+            return MarkSliceResult::Fallback {
+                reason: state
+                    .stats()
+                    .fallback_reason
+                    .lock()
+                    .clone()
+                    .unwrap_or(FallbackReason::SliceTimeout),
+            };
+        }
         match state.pop_work() {
             Some(ptr) => {
                 #[allow(clippy::unnecessary_cast)]

@@ -187,14 +187,43 @@ fn test_concurrent_allocation_stress() {
 }
 
 #[test]
-fn test_nested_gc_allocation() {
+fn test_execute_snapshot_captures_roots() {
     test_util::reset();
 
-    let inner = Gc::new(Data { value: 42 });
-    let outer = Gc::new(NestedData { inner, value: 100 });
+    let gc = Gc::new(Data { value: 42 });
+    assert_eq!(gc.value, 42);
 
-    assert_eq!(outer.inner.value, 42);
-    assert_eq!(outer.value, 100);
+    let state = IncrementalMarkState::global();
+    assert_eq!(state.phase(), MarkPhase::Idle);
+
+    let root_count = rudo_gc::heap::with_heap(rudo_gc::gc::incremental::execute_snapshot);
+
+    assert!(
+        root_count >= 1,
+        "execute_snapshot should capture at least 1 root"
+    );
+    assert_eq!(state.phase(), MarkPhase::Marking);
+    assert!(
+        !state.worklist_is_empty(),
+        "worklist should not be empty after root capture"
+    );
+}
+
+#[test]
+fn test_root_capture_with_nested_objects() {
+    test_util::reset();
+
+    let inner = Gc::new(Data { value: 10 });
+    let _outer = Gc::new(NestedData { inner, value: 20 });
+
+    let state = IncrementalMarkState::global();
+    let root_count = rudo_gc::heap::with_heap(rudo_gc::gc::incremental::execute_snapshot);
+
+    assert!(
+        root_count >= 2,
+        "should capture both outer and reachable inner as roots"
+    );
+    assert!(state.worklist_len() >= root_count);
 }
 
 #[test]

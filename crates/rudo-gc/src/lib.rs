@@ -155,6 +155,9 @@ pub use rudo_gc_derive::Trace;
 pub mod test_util {
     pub use crate::gc::{clear_test_roots, register_test_root};
 
+    #[cfg(any(test, feature = "test-util"))]
+    pub use crate::gc::iter_test_roots;
+
     /// Get the internal `GcBox` pointer.
     pub fn internal_ptr<T: crate::Trace>(gc: &crate::Gc<T>) -> *const u8 {
         crate::Gc::internal_ptr(gc)

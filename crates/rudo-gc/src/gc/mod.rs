@@ -24,6 +24,9 @@ pub use gc::{
     set_collect_condition, CollectInfo,
 };
 
+#[cfg(any(test, feature = "test-util"))]
+pub use gc::iter_test_roots;
+
 #[cfg(feature = "lazy-sweep")]
 pub use gc::{pending_sweep_count, sweep_pending, sweep_specific_page};
 
