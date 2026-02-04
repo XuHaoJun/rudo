@@ -284,7 +284,51 @@ pub fn write_barrier<T: Trace>(
 pub fn write_barrier_needed() -> bool;
 ```
 
-### 2.4 Thread-Local Operations
+### 2.5 GcCell SATB Barrier API
+
+```rust
+impl<T> GcCell<T> {
+    /// Mutably borrows the wrapped value with automatic SATB barrier.
+    ///
+    /// **Design Rationale**: This method requires `T: GcCapture` because the SATB
+    /// (Snapshot-At-The-Beginning) barrier must record old GC pointer values before
+    /// mutation to guarantee correctness during incremental marking. For types without
+    /// GC pointers (primitives, non-Gc structs), this requirement is moot but maintained
+    /// for API consistency.
+    ///
+    /// **Migration**:
+    /// - For types containing GC pointers: Use `borrow_mut()` - no change needed
+    /// - For types without GC pointers: Use `borrow_mut_unchecked()` as escape hatch
+    ///
+    /// **Why Not Unconditional**: The compiler enforces `GcCapture` to ensure developers
+    /// consciously choose the barrier mode. Silent no-op barriers would hide correctness
+    /// bugs where GC pointers are expected but not captured.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value is currently borrowed.
+    pub fn borrow_mut(&self) -> RefMut<'_, T>
+    where
+        T: GcCapture;
+
+    /// Mutably borrows the wrapped value without GC tracking.
+    ///
+    /// **Use Cases**:
+    /// - Types that do not contain GC pointers (e.g., `GcCell<i32>`, `GcCell<String>`)
+    /// - Performance-critical code where SATB overhead is measurable and proven unnecessary
+    /// - FFI boundaries or unsafe code requiring unchecked access
+    ///
+    /// **Warning**: Using this on types containing GC pointers during incremental marking
+    /// may cause incorrect collection of reachable objects.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value is currently borrowed.
+    pub fn borrow_mut_unchecked(&self) -> RefMut<'_, T>;
+}
+```
+
+### 2.6 Thread-Local Operations
 
 ```rust
 impl ThreadControlBlock {

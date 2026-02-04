@@ -99,3 +99,60 @@ When mutation rates are very high, the system may accumulate too many dirty page
 - **SC-005**: Write barrier overhead adds less than 10% performance cost compared to generational GC alone
 - **SC-006**: System correctly falls back to STW marking within 1 second when resource thresholds are exceeded
 - **SC-007**: All existing GC tests pass without modification, ensuring backward compatibility
+
+---
+
+## Breaking API Changes
+
+The `GcCell::borrow_mut()` method now requires `T: GcCapture` bound. This is an **intentional design decision**, not a bug.
+
+### Rationale
+
+SATB (Snapshot-At-The-Beginning) barriers require recording old GC pointer values before mutation. By requiring `GcCapture`, the API ensures:
+1. Correctness by default - SATB barriers cannot be accidentally omitted
+2. Compile-time safety - developers must consciously opt-in/out
+3. Zero-overhead for non-Gc types - the bound is statically resolved
+
+### Before vs After
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| `GcCell::borrow_mut()` availability | All `T` | Only `T: GcCapture` |
+| SATB barrier | None | Automatic for types with GC pointers |
+| Escape hatch | N/A | `borrow_mut_unchecked()` |
+
+### Types Implementing `GcCapture`
+
+- `Gc<T>`
+- `Option<Gc<T>>`
+- `Vec<Gc<T>>`
+- `GcCell<Gc<T>>`
+- `GcCell<Option<Gc<T>>>`
+- `GcCell<Vec<Gc<T>>>`
+
+### Migration Guide
+
+```rust
+// Case 1: GcCell<Gc<T>> - No change needed, GcCapture is implemented
+let cell = GcCell::new(Gc::new(Data));
+let mut_ref = cell.borrow_mut();  // Works
+
+// Case 2: GcCell<i32> - Cannot implement GcCapture (no GC pointers)
+let cell = GcCell::new(42);
+let mut_ref = cell.borrow_mut_unchecked();  // Use escape hatch
+```
+
+### Why Not Unconditional?
+
+A silent no-op barrier would hide correctness bugs. Consider:
+
+```rust
+// If borrow_mut() had no GcCapture bound:
+struct MyStruct {
+    gc_ptr: Gc<Something>,  // Developer expects SATB
+}
+let cell = GcCell::new(MyStruct { gc_ptr: ... });
+cell.borrow_mut().gc_ptr = new_value;  // SATB silently NOT triggered!
+```
+
+The compiler enforcing `GcCapture` prevents this class of memory corruption bugs.
