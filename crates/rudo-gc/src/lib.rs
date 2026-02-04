@@ -146,7 +146,7 @@ pub use handles::{
     MaybeHandle, SealedHandleScope,
 };
 pub use metrics::{last_gc_metrics, CollectionType, GcMetrics};
-pub use ptr::{Gc, Weak};
+pub use ptr::{Gc, GcBox, Weak};
 pub use scan::scan_heap_region_conservatively;
 pub use trace::{Trace, Visitor};
 pub use trace_closure::TraceClosure;

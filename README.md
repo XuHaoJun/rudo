@@ -29,6 +29,7 @@ The library is built on a **BiBOP (Big Bag of Pages)** memory layout, which allo
 - **Lazy Sweep**: Defers memory reclamation to allocation time, reducing STW pause times (enabled by default).
 - **HandleScope**: V8-style explicit rooting for maximum performance and compiler-checked safety.
 - **Tokio Async Integration**: Full support for async/await with `spawn_with_gc!`, `AsyncHandleScope`, and `#[gc::main]` macro.
+- **GcCell Derive Macro**: `#[derive(GcCell)]` automatically implements `GcCapture` for types with `Gc<T>` fields, simplifying SATB barrier usage.
 
 ## Installation
 
@@ -88,91 +89,60 @@ Lazy sweep is recommended for applications where latency matters more than peak 
 
 ## Migration from v0.6 to v0.7
 
-Version 0.7 introduces incremental marking and a redesigned `GcCell` API. This guide helps you migrate your code.
+Version 0.7 introduces a simplified `GcCell` API.
 
-### GcCell API Changes
+### Key Changes
 
-In v0.6, `GcCell::borrow_mut()` required `T: GcCapture`, which caused compilation errors for types like `GcCell<i32>`. In v0.7, this has been fixed.
+1. **`GcCell::borrow_mut()` is now the primary method** - It automatically handles all barrier types correctly
+2. **Types need `#[derive(GcCell)]`** to work with `GcCell<T>` containing `Gc<T>` fields
+3. **`borrow_mut_with_satb()` is deprecated** - Use `borrow_mut()` instead
 
-#### v0.6 Code (Breaking)
-
-```rust
-// v0.6: Error - requires GcCapture!
-let cell = GcCell::new(42);
-*cell.borrow_mut() = 100;  // Compile error!
-```
-
-#### v0.7 Code (Fixed)
+### Before (v0.6)
 
 ```rust
-// v0.7: Works!
-let cell = GcCell::new(42);
-*cell.borrow_mut() = 100;  // Works!
+#[derive(Trace)]
+struct Node {
+    next: GcCell<Option<Gc<Node>>>,  // Error - needs GcCapture!
+}
+
+let cell = GcCell::new(Node { ... });
+*cell.borrow_mut() = ...;  // Error!
 ```
 
-### New SATB Barrier Method
-
-For types containing GC pointers that require SATB (Snapshot-At-The-Beginning) barrier correctness:
+### After (v0.7)
 
 ```rust
-use rudo_gc::{Gc, GcCell};
+#[derive(Trace, GcCell)]  // Add GcCell derive
+struct Node {
+    next: GcCell<Option<Gc<Node>>>,
+}
 
-// Use borrow_mut_with_satb() for SATB correctness
-let cell = GcCell::new(Gc::new(Data));
-*cell.borrow_mut_with_satb() = new_data;  // Full barrier with SATB
+let cell = GcCell::new(Node { ... });
+*cell.borrow_mut() = ...;  // Works!
 ```
-
-### Incremental Marking
-
-Enable incremental marking to reduce major GC pause times by 50-80%:
-
-```toml
-[dependencies]
-rudo-gc = { version = "0.7", features = ["incremental"] }
-```
-
-```rust
-use rudo_gc::IncrementalConfig;
-
-let config = IncrementalConfig {
-    enabled: true,
-    increment_size: 1000,
-    ..Default::default()
-};
-rudo_gc::set_incremental_config(config);
-```
-
-### API Summary
-
-| Method | v0.6 | v0.7 |
-|--------|-------|-------|
-| `GcCell<i32>::borrow_mut()` | ❌ Error | ✅ Works |
-| `GcCell<Gc<T>>::borrow_mut()` | ✅ Works | ✅ Works |
-| `GcCell::borrow_mut_with_satb()` | ❌ | ✅ New |
-| `GcCell::borrow_mut_gen_only()` | ❌ | ✅ New |
 
 ### Summary of Changes
 
 | Change | v0.6 | v0.7 |
 |--------|-------|-------|
-| GcCell<i32> support | ❌ Requires GcCapture | ✅ Works |
-| SATB barrier | Manual opt-in | Explicit via `borrow_mut_with_satb()` |
-| Incremental marking | ❌ | ✅ Available |
+| `GcCell<Gc<T>>::borrow_mut()` | Error | ✅ Works |
+| Derive required | ❌ | ✅ `#[derive(GcCell)]` |
+| Barrier complexity | Multiple methods | Single method `borrow_mut()` |
 
 ## Quick Start
 
 ```rust
-use rudo_gc::{Gc, Trace, cell::GcCell};
+use rudo_gc::{Gc, Trace, cell::GcCell, GcCell};
 
 // Simple allocation
 let x = Gc::new(42);
 println!("Value: {}", *x);
 
 // Custom types with derive
-#[derive(Trace)]
+#[derive(Trace, GcCell)]
 struct Node {
     value: i32,
-    next: GcCell<Option<Gc<Node>>>, // Use GcCell for interior mutability
+    next: GcCell<Option<Gc<Node>>>,
 }
 
 let node = Gc::new(Node {
@@ -189,33 +159,101 @@ let node = Gc::new(Node {
 
 ## GcCell API
 
-`GcCell<T>` provides interior mutability with write barriers for GC-managed objects. The API offers three methods with different barrier levels:
+`GcCell<T>` provides interior mutability with write barriers for GC-managed objects.
 
-### API Comparison
-
-| Method | T Bound | Barrier Type | Use Case |
-|--------|----------|--------------|----------|
-| `borrow_mut()` | `Trace` | Generational + Incremental | General use (recommended) |
-| `borrow_mut_with_satb()` | `GcCapture` | Full (incl. SATB) | Types with GC pointers |
-| `borrow_mut_gen_only()` | - | None | Performance optimization |
-
-### Usage Examples
+### Simple Usage
 
 ```rust
-use rudo_gc::{Gc, GcCell};
+use rudo_gc::{Gc, Trace, cell::GcCell, GcCell};
 
-// General use - works with any type
-let cell = GcCell::new(42);
-*cell.borrow_mut() = 100;  // Works!
+// Derive GcCell for types that will be used with GcCell
+#[derive(Trace, GcCell)]
+struct Node {
+    value: i32,
+    next: GcCell<Option<Gc<Node>>>,
+}
 
-// With GC pointers - use borrow_mut_with_satb() for SATB
-let cell = GcCell::new(Gc::new(Data));
-*cell.borrow_mut_with_satb() = new_data;  // Full barrier with SATB
-
-// Performance optimization - no barriers
-let cell = GcCell::new(expensive_computation());
-*cell.borrow_mut_gen_only() = result;  // Fastest option
+// Use borrow_mut() for mutation
+let cell = GcCell::new(Node {
+    value: 1,
+    next: GcCell::new(None),
+});
+*cell.borrow_mut() = Node {
+    value: 100,
+    next: GcCell::new(None),
+};
 ```
+
+### Advanced Usage
+
+For performance-critical code, use `borrow_mut_gen_only()`:
+
+```rust
+// No barriers - fastest option but may cause incorrect GC
+let cell = GcCell::new(expensive_computation());
+*cell.borrow_mut_gen_only() = result;
+```
+
+**Note**: `borrow_mut_gen_only()` is unsafe if the type contains `Gc<T>` pointers.
+
+## GcCell Derive Macro
+
+The `#[derive(GcCell)]` macro automatically implements `GcCapture` for types containing `Gc<T>` fields, enabling SATB barrier correctness without manual implementation.
+
+### Usage
+
+```rust
+use rudo_gc::{Gc, Trace, cell::GcCell, GcCell};
+
+// Derive GcCell for types with Gc<T> fields
+#[derive(Trace, GcCell)]
+struct Node {
+    value: i32,
+    next: GcCell<Option<Gc<Node>>>,  // Automatically implements GcCapture
+}
+
+// Types without Gc<T> fields get an empty GcCapture impl
+#[derive(Trace, GcCell)]
+struct SimpleStruct {
+    value: i32,
+    name: String,
+}
+```
+
+### What It Generates
+
+For types with `Gc<T>` fields:
+
+```rust
+impl GcCapture for Node {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        self.next.capture_gc_ptrs_into(ptrs);
+    }
+}
+```
+
+### Supported Types
+
+- `Gc<T>`
+- `Vec<Gc<T>>`
+- `Option<Gc<T>>`
+- `GcCell<Gc<T>>`
+- `GcCell<Vec<Gc<T>>>`
+- `GcCell<Option<Gc<T>>>`
+- Unnamed structs (tuple-like)
+- Nested types (types that implement `GcCapture`)
+
+### Limitations
+
+- Enums: Not supported (use manual implementation)
+- Generic types: Not supported (use manual implementation)
+- Recursive types: Not supported (use manual implementation)
 
 ## HandleScope  - Optional
 

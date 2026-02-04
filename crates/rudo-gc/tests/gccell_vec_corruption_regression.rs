@@ -2,6 +2,7 @@
 //! This reproduces the issue seen in Rvue's layout example
 
 use rudo_gc::{collect, Gc, GcCell, Trace};
+use rudo_gc_derive::GcCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Simplified Component structure matching Rvue's Component
@@ -61,7 +62,7 @@ impl TestEffect {
 }
 
 /// `TestViewStruct` like in Rvue
-#[derive(Trace)]
+#[derive(Trace, GcCell)]
 pub struct TestViewStruct {
     pub root_component: Gc<TestComponent>,
     pub effects: GcCell<Vec<Gc<TestEffect>>>,

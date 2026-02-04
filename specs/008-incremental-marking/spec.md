@@ -106,51 +106,59 @@ When mutation rates are very high, the system may accumulate too many dirty page
 
 This section documents API changes introduced in v0.7.0.
 
-### v0.7.0: GcCell API Redesign
+### v0.7.0: Simplified GcCell API
 
-The `GcCell` API has been redesigned to be backward compatible while maintaining correctness.
+The `GcCell` API has been simplified for better ergonomics.
 
 **Key Changes**:
-- `borrow_mut()` now requires `T: Trace` instead of `T: GcCapture`
-- Added `borrow_mut_with_satb()` for types requiring SATB barrier
-- Added `borrow_mut_gen_only()` for performance optimization
+- `borrow_mut()` now requires `T: GcCapture` instead of `T: Trace`
+- Added `#[derive(GcCell)]` macro for automatic `GcCapture` implementation
+- Added blanket `GcCapture` impls for common container types (`Option<T>`, `Vec<T>`, etc.)
+- `borrow_mut_with_satb()` is deprecated (equivalent to `borrow_mut()`)
+- `borrow_mut_gen_only()` remains for performance-critical code
+
+### Usage
+
+```rust
+use rudo_gc::{Gc, Trace, cell::GcCell, GcCell};
+
+#[derive(Trace, GcCell)]
+struct Node {
+    value: i32,
+    next: GcCell<Option<Gc<Node>>>,
+}
+
+let cell = GcCell::new(Node {
+    value: 42,
+    next: GcCell::new(None),
+});
+
+// Use borrow_mut() for safe mutation
+*cell.borrow_mut() = Node {
+    value: 100,
+    next: GcCell::new(None),
+};
+```
 
 ### API Comparison
 
-| Method                   | T Bound   | Barrier Type              | Use Case                          |
-|--------------------------|-----------|---------------------------|-----------------------------------|
-| `borrow_mut()`           | `Trace`   | Generational + Incremental| General use (recommended)         |
-| `borrow_mut_with_satb()` | `GcCapture` | Full (incl. SATB)       | Types with GC pointers            |
-| `borrow_mut_gen_only()`  | -         | Generational only         | Performance optimization          |
+| Method | T Bound | Barrier Type | Deprecated |
+|--------|--------|--------------|-------------|
+| `borrow_mut()` | `GcCapture` | Full (incl. SATB) | No |
+| `borrow_mut_with_satb()` | `GcCapture` | Full (incl. SATB) | Yes |
+| `borrow_mut_gen_only()` | - | None | No |
 
 ### Before vs After
 
 | Aspect | v0.6.x | v0.7.x |
 |--------|--------|--------|
-| `GcCell<i32>::borrow_mut()` | ✅ Works | ✅ Works |
-| `GcCell<Gc<T>>::borrow_mut()` | ✅ Works | ✅ Works |
-| SATB for GC pointers | Automatic | Opt-in via `borrow_mut_with_satb()` |
-
-### Migration Guide
-
-```rust
-// Case 1: GcCell<Gc<T>> - Works with both methods
-let cell = GcCell::new(Gc::new(Data));
-*cell.borrow_mut() = new_data;              // Generational + Incremental (recommended)
-*cell.borrow_mut_with_satb() = new_data;    // Full (explicit SATB)
-
-// Case 2: GcCell<i32> - Works with borrow_mut()
-let cell = GcCell::new(42);
-*cell.borrow_mut() = 100;  // Works! (generational + incremental barrier)
-
-// Case 3: Performance optimization
-let cell = GcCell::new(expensive_computation());
-*cell.borrow_mut_gen_only() = result;  // Generational barrier only
-```
+| `GcCell<Gc<T>>::borrow_mut()` | Error | ✅ Works |
+| Derive required | ❌ | ✅ `#[derive(GcCell)]` |
+| Container support | Limited | ✅ Blanket impls |
 
 ### Why This Design?
 
-1. **Backward Compatible**: Existing code continues to work
-2. **Correctness by Default**: `borrow_mut()` provides generational + incremental barriers
-3. **Opt-in SATB**: `borrow_mut_with_satb()` for types requiring SATB
-4. **Performance Path**: `borrow_mut_gen_only()` for hot paths
+1. **Simple**: Users only need to know one method (`borrow_mut()`)
+2. **Correct**: `borrow_mut()` always performs the correct barriers
+3. **Easy to use**: `#[derive(GcCell)]` handles `GcCapture` automatically
+4. **Performance escape hatch**: `borrow_mut_gen_only()` for hot paths

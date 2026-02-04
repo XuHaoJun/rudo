@@ -109,43 +109,17 @@ impl<T: ?Sized> GcCell<T> {
     /// Mutably borrows the wrapped value with automatic SATB barrier.
     ///
     /// This method performs generational and incremental write barriers,
-    /// ensuring correct GC behavior. For types containing GC pointers
-    /// that require SATB barrier during incremental marking, use
-    /// `borrow_mut_with_satb()` instead.
+    /// plus SATB (Snapshot-At-The-Beginning) barrier to capture old pointer
+    /// values during incremental marking. This ensures correct GC behavior
+    /// for all types.
+    ///
+    /// Use this as the primary mutation method for `GcCell<T>`.
     ///
     /// # Panics
     ///
     /// Panics if the value is currently borrowed.
     #[inline]
     pub fn borrow_mut(&self) -> RefMut<'_, T>
-    where
-        T: Trace,
-    {
-        let ptr = std::ptr::from_ref(self).cast::<u8>();
-
-        self.generational_write_barrier(ptr);
-        self.incremental_write_barrier(ptr);
-
-        self.inner.borrow_mut()
-    }
-
-    /// Mutably borrows the wrapped value with SATB barrier.
-    ///
-    /// This method captures old GC pointer values before mutation,
-    /// enabling correct incremental marking. Use this for `GcCell<Gc<T>>`,
-    /// `GcCell<Option<Gc<T>>>`, `GcCell<Vec<Gc<T>>>`,
-    /// and similar types containing GC pointers.
-    ///
-    /// # When to Use
-    ///
-    /// Use this method when you need SATB barrier for correctness during
-    /// incremental marking. For types without GC pointers, use `borrow_mut()`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the value is currently borrowed.
-    #[inline]
-    pub fn borrow_mut_with_satb(&self) -> RefMut<'_, T>
     where
         T: GcCapture,
     {
@@ -172,6 +146,28 @@ impl<T: ?Sized> GcCell<T> {
         self.inner.borrow_mut()
     }
 
+    /// Mutably borrows the wrapped value with SATB barrier.
+    ///
+    /// This method is equivalent to `borrow_mut()`. It captures old GC pointer
+    /// values before mutation, enabling correct incremental marking.
+    ///
+    /// # Deprecated
+    ///
+    /// This method is deprecated. Use `borrow_mut()` instead, which now includes
+    /// the same SATB barrier behavior.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the value is currently borrowed.
+    #[deprecated(since = "0.7.0", note = "Use borrow_mut() instead")]
+    #[inline]
+    pub fn borrow_mut_with_satb(&self) -> RefMut<'_, T>
+    where
+        T: GcCapture,
+    {
+        self.borrow_mut()
+    }
+
     /// Mutably borrows the wrapped value with generational barrier only.
     ///
     /// This is an escape hatch for performance-critical code where
@@ -180,7 +176,9 @@ impl<T: ?Sized> GcCell<T> {
     /// # Safety
     ///
     /// Using this may cause incorrect collection during GC for types
-    /// containing GC pointers. Use with caution.
+    /// containing GC pointers. Use with caution and only when:
+    /// 1. The type does not contain any `Gc<T>` pointers
+    /// 2. Performance is critical and barriers are proven to be the bottleneck
     ///
     /// # Panics
     ///
@@ -301,6 +299,51 @@ unsafe fn record_page_in_remembered_buffer(page: NonNull<PageHeader>) -> bool {
 
 /// Trait for types that can participate in SATB barrier.
 /// Implement this to enable automatic old-value capture during write barriers.
+///
+/// # Overview
+///
+/// `GcCapture` is used by the SATB barrier to record old GC pointer values
+/// before they are overwritten during incremental marking.
+///
+/// # Implementations Provided
+///
+/// The trait is automatically implemented for standard library types:
+/// - `Gc<T>`
+/// - `Option<Gc<T>>`, `Vec<Gc<T>>`, `[Gc<T>; N]`
+/// - `GcCell<Gc<T>>`, `GcCell<Vec<Gc<T>>>`, etc.
+///
+/// # Derive Macro
+///
+/// For custom types, use `#[derive(GcCell)]` to automatically implement this trait:
+///
+/// ```
+/// use rudo_gc::{Gc, Trace, cell::GcCell};
+///
+/// #[derive(Trace, GcCell)]
+/// struct MyStruct {
+///     gc_field: Gc<Other>,      // Automatically implements GcCapture
+///     regular_field: i32,        // No GcCapture needed
+/// }
+/// ```
+///
+/// # Manual Implementation
+///
+/// For complex types (generics, recursion), implement manually:
+///
+/// ```
+/// use rudo_gc::{Gc, Trace, cell::{GcCell, GcCapture, GcBox}};
+/// use std::ptr::NonNull;
+///
+/// struct MyStruct<T> {
+///     gc_field: Gc<T>,
+/// }
+///
+/// unsafe impl<T: Trace + 'static> GcCapture for MyStruct<T> {
+///     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+///         self.gc_field.capture_gc_ptrs_into(ptrs);
+///     }
+/// }
+/// ```
 pub trait GcCapture {
     /// Returns a slice of all `GcBox` pointers contained in this type.
     ///
@@ -353,7 +396,7 @@ impl<T: Trace + 'static> GcCapture for crate::Gc<T> {
     }
 }
 
-impl<T: Trace + 'static> GcCapture for Option<crate::Gc<T>> {
+impl<T: GcCapture + 'static> GcCapture for Option<T> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
@@ -361,13 +404,13 @@ impl<T: Trace + 'static> GcCapture for Option<crate::Gc<T>> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Some(gc) = self {
-            gc.capture_gc_ptrs_into(ptrs);
+        if let Some(value) = self {
+            value.capture_gc_ptrs_into(ptrs);
         }
     }
 }
 
-impl<T: Trace + 'static> GcCapture for Vec<crate::Gc<T>> {
+impl<T: GcCapture + 'static> GcCapture for Vec<T> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
@@ -375,13 +418,13 @@ impl<T: Trace + 'static> GcCapture for Vec<crate::Gc<T>> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        for gc in self {
-            gc.capture_gc_ptrs_into(ptrs);
+        for value in self {
+            value.capture_gc_ptrs_into(ptrs);
         }
     }
 }
 
-impl<T: Trace + 'static> GcCapture for Option<Vec<crate::Gc<T>>> {
+impl<T: GcCapture + 'static, const N: usize> GcCapture for [T; N] {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
@@ -389,151 +432,16 @@ impl<T: Trace + 'static> GcCapture for Option<Vec<crate::Gc<T>>> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Some(vec) = self {
-            vec.capture_gc_ptrs_into(ptrs);
-        }
-    }
-}
-
-impl<T: Trace + 'static, const N: usize> GcCapture for [crate::Gc<T>; N] {
-    #[inline]
-    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        &[]
-    }
-
-    #[inline]
-    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        for gc in self {
-            gc.capture_gc_ptrs_into(ptrs);
-        }
-    }
-}
-
-impl<T: Trace + 'static> GcCapture for crate::GcCell<crate::Gc<T>> {
-    #[inline]
-    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        &[]
-    }
-
-    #[inline]
-    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        unsafe {
-            let gc_ptr = self.inner.as_ptr();
-            if !gc_ptr.is_null() {
-                let gc = &*gc_ptr;
-                let raw = gc.raw_ptr();
-                if !raw.is_null() {
-                    let nn = NonNull::new_unchecked(raw.cast());
-                    ptrs.push(nn);
-                }
-            }
-        }
-    }
-}
-
-impl<T: Trace + 'static> GcCapture for crate::GcCell<Option<crate::Gc<T>>> {
-    #[inline]
-    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        &[]
-    }
-
-    #[inline]
-    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        unsafe {
-            let option_ptr = self.inner.as_ptr();
-            if !option_ptr.is_null() {
-                let option = &*option_ptr;
-                if let Some(gc) = option {
-                    let raw = gc.raw_ptr();
-                    if !raw.is_null() {
-                        let nn = NonNull::new_unchecked(raw.cast());
-                        ptrs.push(nn);
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl<T: Trace + 'static> GcCapture for crate::GcCell<Vec<crate::Gc<T>>> {
-    #[inline]
-    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        &[]
-    }
-
-    #[inline]
-    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        unsafe {
-            let vec_ptr = self.inner.as_ptr();
-            if !vec_ptr.is_null() {
-                let vec = &*vec_ptr;
-                for gc in vec {
-                    let raw = gc.raw_ptr();
-                    if !raw.is_null() {
-                        let nn = NonNull::new_unchecked(raw.cast());
-                        ptrs.push(nn);
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl<T: Trace + 'static> GcCapture for crate::GcCell<Option<Vec<crate::Gc<T>>>> {
-    #[inline]
-    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        &[]
-    }
-
-    #[inline]
-    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        unsafe {
-            let option_ptr = self.inner.as_ptr();
-            if !option_ptr.is_null() {
-                let option = &*option_ptr;
-                if let Some(vec) = option {
-                    for gc in vec {
-                        let raw = gc.raw_ptr();
-                        if !raw.is_null() {
-                            let nn = NonNull::new_unchecked(raw.cast());
-                            ptrs.push(nn);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl<T: Trace + 'static, const N: usize> GcCapture for crate::GcCell<[crate::Gc<T>; N]> {
-    #[inline]
-    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        &[]
-    }
-
-    #[inline]
-    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        unsafe {
-            let arr_ptr = self.inner.as_ptr();
-            if !arr_ptr.is_null() {
-                let arr = &*arr_ptr;
-                for gc in arr {
-                    let raw = gc.raw_ptr();
-                    if !raw.is_null() {
-                        let nn = NonNull::new_unchecked(raw.cast());
-                        ptrs.push(nn);
-                    }
-                }
-            }
+        for value in self {
+            value.capture_gc_ptrs_into(ptrs);
         }
     }
 }
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-#[allow(clippy::implicit_hasher)]
-impl<K: Trace + 'static, V: Trace + 'static, S: std::hash::BuildHasher + Default> GcCapture
-    for HashMap<crate::Gc<K>, crate::Gc<V>, S>
+impl<K: GcCapture + 'static, V: GcCapture + 'static, S: std::hash::BuildHasher + Default> GcCapture
+    for HashMap<K, V, S>
 {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
@@ -542,13 +450,13 @@ impl<K: Trace + 'static, V: Trace + 'static, S: std::hash::BuildHasher + Default
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        for gc in self.values() {
-            gc.capture_gc_ptrs_into(ptrs);
+        for value in self.values() {
+            value.capture_gc_ptrs_into(ptrs);
         }
     }
 }
 
-impl<K: Trace + 'static, V: Trace + 'static> GcCapture for BTreeMap<crate::Gc<K>, crate::Gc<V>> {
+impl<K: GcCapture + 'static, V: GcCapture + 'static> GcCapture for BTreeMap<K, V> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
@@ -556,16 +464,13 @@ impl<K: Trace + 'static, V: Trace + 'static> GcCapture for BTreeMap<crate::Gc<K>
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        for gc in self.values() {
-            gc.capture_gc_ptrs_into(ptrs);
+        for value in self.values() {
+            value.capture_gc_ptrs_into(ptrs);
         }
     }
 }
 
-#[allow(clippy::implicit_hasher)]
-impl<T: Trace + 'static, S: std::hash::BuildHasher + Default> GcCapture
-    for HashSet<crate::Gc<T>, S>
-{
+impl<T: GcCapture + 'static, S: std::hash::BuildHasher + Default> GcCapture for HashSet<T, S> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
@@ -573,13 +478,13 @@ impl<T: Trace + 'static, S: std::hash::BuildHasher + Default> GcCapture
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        for gc in self {
-            gc.capture_gc_ptrs_into(ptrs);
+        for value in self {
+            value.capture_gc_ptrs_into(ptrs);
         }
     }
 }
 
-impl<T: Trace + 'static> GcCapture for BTreeSet<crate::Gc<T>> {
+impl<T: GcCapture + 'static> GcCapture for BTreeSet<T> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
@@ -587,8 +492,23 @@ impl<T: Trace + 'static> GcCapture for BTreeSet<crate::Gc<T>> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        for gc in self {
-            gc.capture_gc_ptrs_into(ptrs);
+        for value in self {
+            value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: GcCapture + ?Sized> GcCapture for GcCell<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        unsafe {
+            let value = &*self.inner.as_ptr();
+            value.capture_gc_ptrs_into(ptrs);
         }
     }
 }
