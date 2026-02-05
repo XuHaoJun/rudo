@@ -230,6 +230,22 @@ impl<T: ?Sized> GcCell<T> {
         }
     }
 
+    #[inline]
+    #[allow(clippy::unused_self)]
+    fn is_gc_heap_pointer(&self, ptr: *const u8) -> bool {
+        let ptr_addr = ptr as usize;
+        let heap_start = crate::heap::heap_start();
+        let heap_end = crate::heap::heap_end();
+
+        if ptr_addr < heap_start || ptr_addr > heap_end {
+            return false;
+        }
+
+        let _page_addr = ptr_addr & crate::heap::page_mask();
+        let header = unsafe { crate::heap::ptr_to_page_header(ptr) };
+        unsafe { (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE }
+    }
+
     /// Records a write to an old-generation object for generational GC.
     ///
     /// This implements the generational GC invariant: all OLD→YOUNG references
@@ -240,6 +256,10 @@ impl<T: ?Sized> GcCell<T> {
     /// `FinalMark` must still be recorded for correctness.
     #[allow(clippy::unused_self)]
     fn generational_write_barrier(&self, ptr: *const u8) {
+        if !self.is_gc_heap_pointer(ptr) {
+            return;
+        }
+
         unsafe {
             crate::heap::with_heap(|heap| {
                 let page_addr = (ptr as usize) & crate::heap::page_mask();
@@ -295,6 +315,10 @@ impl<T: ?Sized> GcCell<T> {
     #[allow(clippy::unused_self)]
     #[allow(clippy::needless_return)]
     fn incremental_write_barrier(&self, ptr: *const u8) {
+        if !self.is_gc_heap_pointer(ptr) {
+            return;
+        }
+
         let state = IncrementalMarkState::global();
 
         if !state.config().enabled || state.fallback_requested() {
@@ -424,6 +448,10 @@ impl<T: Trace + 'static> GcCapture for crate::Gc<T> {
         let raw = self.raw_ptr();
         if !raw.is_null() {
             unsafe {
+                // SAFETY: The cast from *mut GcBox<T> to *mut GcBox<()> is valid because:
+                // 1. GcBox<T> has repr(C) layout for all T
+                // 2. The pointer has valid provenance from raw_ptr() allocated by GC heap
+                // 3. NonNull::new_unchecked is safe because we checked is_null() above
                 let nn = NonNull::new_unchecked(raw.cast());
                 ptrs.push(nn);
             }
@@ -560,6 +588,9 @@ impl<T: GcCapture + ?Sized> GcCapture for GcCell<T> {
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
         unsafe {
+            // SAFETY: We read the inner value of RefCell by pointer.
+            // RefCell::as_ptr() is always valid after construction.
+            // The ptr cannot be null because GcCell::new() always initializes inner.
             let ptr = self.inner.as_ptr();
             if ptr.is_null() {
                 return;
