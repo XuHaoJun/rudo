@@ -250,6 +250,30 @@ pub fn main(
     expanded.into()
 }
 
+/// Derive macro for the `Trace` trait.
+///
+/// This macro generates implementations of the `Trace` trait for structs and enums.
+/// The generated implementation calls `trace()` on each field recursively.
+///
+/// # Write Barrier Compatibility
+///
+/// The derived `Trace` implementation is compatible with incremental marking write barriers.
+/// When incremental marking is active, mutations to `Gc<T>` fields are tracked via the
+/// `GcCell<T>` write barrier, ensuring correctness under concurrent mutation.
+///
+/// For types that need custom write barrier behavior, implement `Trace` manually.
+///
+/// # Example
+///
+/// ```rust
+/// use rudo_gc::Trace;
+///
+/// #[derive(Trace)]
+/// struct MyStruct {
+///     field1: Gc<OtherStruct>,
+///     field2: Vec<Gc<AnotherStruct>>,
+/// }
+/// ```
 #[proc_macro_derive(Trace, attributes(rudo_gc))]
 pub fn derive_trace(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -406,4 +430,355 @@ fn generate_enum_trace(rudo_gc: &Path, name: &Ident, data: &syn::DataEnum) -> To
             #(#match_arms)*
         }
     }
+}
+
+/// Derive macro for `GcCell` compatibility.
+///
+/// This macro automatically implements `GcCapture` for types containing `Gc<T>` fields,
+/// enabling SATB barrier recording during incremental marking.
+///
+/// # Usage
+///
+/// ```rust
+/// use rudo_gc::{Gc, Trace, cell::GcCell};
+///
+/// #[derive(Trace, GcCell)]
+/// struct MyStruct {
+///     gc_field: Gc<Other>,      // Auto-implements GcCapture
+///     regular_field: i32,        // No GcCapture needed
+/// }
+/// ```
+///
+/// # What It Generates
+///
+/// For types containing `Gc<T>` fields, the macro generates:
+/// ```rust
+/// unsafe impl GcCapture for MyStruct {
+///     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+///         self.gc_field.capture_gc_ptrs_into(ptrs);
+///     }
+/// }
+/// ```
+///
+/// For types without `Gc<T>` fields, no impl is generated (no SATB barrier needed).
+///
+/// # Limitations
+///
+/// - Enums: Not supported (use manual implementation)
+/// - Generic types: Not supported (use manual implementation)
+/// - Recursive types: Not supported (use manual implementation)
+///
+/// # Example
+///
+/// ```
+/// use rudo_gc::{Gc, Trace, cell::GcCell};
+///
+/// #[derive(Trace, GcCell)]
+/// struct Node {
+///     value: i32,
+///     next: GcCell<Option<Gc<Node>>>,
+/// }
+///
+/// fn example() {
+///     let cell = GcCell::new(Node {
+///         value: 42,
+///         next: GcCell::new(None),
+///     });
+///     *cell.borrow_mut() = Node {
+///         value: 100,
+///         next: GcCell::new(None),
+///     };
+/// }
+/// ```
+#[proc_macro_derive(GcCell, attributes(rudo_gc))]
+pub fn derive_gc_cell(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let mut rudo_gc: Path = parse_quote!(::rudo_gc);
+
+    for attr in &input.attrs {
+        if !attr.path().is_ident("rudo_gc") {
+            continue;
+        }
+
+        let result = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("crate") {
+                rudo_gc = meta.value()?.parse()?;
+                Ok(())
+            } else {
+                Err(meta.error("unsupported attribute"))
+            }
+        });
+
+        if let Err(err) = result {
+            return err.into_compile_error().into();
+        }
+    }
+
+    let name = &input.ident;
+
+    let gc_fields = match &input.data {
+        Data::Struct(struct_data) => analyze_struct_fields(&struct_data.fields),
+        _ => Vec::new(),
+    };
+
+    let generics = add_gc_capture_bounds(&rudo_gc, input.generics, &gc_fields);
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    match &input.data {
+        Data::Struct(_struct_data) => {
+            if gc_fields.is_empty() {
+                let gc_capture_body = generate_empty_gc_capture_body(&rudo_gc);
+                let expanded = quote! {
+                    impl #impl_generics #rudo_gc::cell::GcCapture
+                        for #name #ty_generics #where_clause {
+                        #gc_capture_body
+                    }
+                };
+                return expanded.into();
+            }
+
+            let gc_capture_body = generate_gc_capture_body(&rudo_gc, &gc_fields);
+
+            let expanded = quote! {
+                impl #impl_generics #rudo_gc::cell::GcCapture
+                    for #name #ty_generics #where_clause {
+                    #[inline]
+                    fn capture_gc_ptrs(&self) -> &[std::ptr::NonNull<#rudo_gc::GcBox<()>>] {
+                        &[]
+                    }
+
+                    #[inline]
+                    fn capture_gc_ptrs_into(
+                        &self,
+                        ptrs: &mut Vec<std::ptr::NonNull<#rudo_gc::GcBox<()>>>
+                    ) {
+                        #gc_capture_body
+                    }
+                }
+            };
+            expanded.into()
+        }
+        Data::Enum(_) => syn::Error::new_spanned(
+            name,
+            "GcCell derive does not support enums. Use manual implementation.",
+        )
+        .into_compile_error()
+        .into(),
+        Data::Union(_) => syn::Error::new_spanned(name, "GcCell derive does not support unions.")
+            .into_compile_error()
+            .into(),
+    }
+}
+
+/// Analyzes struct fields and returns those that contain `Gc<T>`.
+fn analyze_struct_fields(fields: &syn::Fields) -> Vec<FieldInfo<'_>> {
+    match fields {
+        syn::Fields::Named(named) => {
+            let mut gc_fields = Vec::new();
+            for field in &named.named {
+                if field_contains_gc(&field.ty) {
+                    gc_fields.push(FieldInfo {
+                        ident: field.ident.clone(),
+                        index: None,
+                        ty: &field.ty,
+                    });
+                }
+            }
+            gc_fields
+        }
+        syn::Fields::Unnamed(unnamed) => {
+            let mut gc_fields = Vec::new();
+            for (i, field) in unnamed.unnamed.iter().enumerate() {
+                if field_contains_gc(&field.ty) {
+                    gc_fields.push(FieldInfo {
+                        ident: Some(format_ident!("field_{}", i)),
+                        index: Some(i),
+                        ty: &field.ty,
+                    });
+                }
+            }
+            gc_fields
+        }
+        syn::Fields::Unit => Vec::new(),
+    }
+}
+
+/// Field information for code generation.
+struct FieldInfo<'a> {
+    ident: Option<syn::Ident>,
+    index: Option<usize>,
+    #[allow(dead_code)]
+    ty: &'a syn::Type,
+}
+
+/// Checks if a type contains `Gc<T>`.
+fn field_contains_gc(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Path(syn::TypePath { qself: None, path }) => {
+            // Check if the path is `Gc` or `Gc<T>` (including fully qualified paths like ::Gc or module::Gc)
+            if let Some(first_seg) = path.segments.first() {
+                if first_seg.ident == "Gc" {
+                    return true;
+                }
+            }
+
+            // Check for generic types like Vec<Gc<T>>, Option<Gc<T>>, GcCell<Gc<T>>
+            if let Some(last_seg) = path.segments.last() {
+                if last_seg.ident == "Vec"
+                    || last_seg.ident == "Option"
+                    || last_seg.ident == "GcCell"
+                {
+                    if let syn::PathArguments::AngleBracketed(args) = &last_seg.arguments {
+                        for arg in &args.args {
+                            if let syn::GenericArgument::Type(inner_ty) = arg {
+                                if field_contains_gc(inner_ty) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(seg) = path.segments.last() {
+                if seg.ident == "Gc"
+                    || seg.ident == "Vec"
+                    || seg.ident == "Option"
+                    || seg.ident == "GcCell"
+                {
+                    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                        for arg in &args.args {
+                            if let syn::GenericArgument::Type(inner_ty) = arg {
+                                if field_contains_gc(inner_ty) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            false
+        }
+        syn::Type::Array(syn::TypeArray { elem, .. }) => {
+            // Check [T; N] where T is Gc<T>
+            field_contains_gc(elem)
+        }
+        _ => false,
+    }
+}
+
+/// Generates the body for `GcCapture::capture_gc_ptrs_into`.
+fn generate_gc_capture_body(rudo_gc: &syn::Path, fields: &[FieldInfo]) -> TokenStream {
+    let calls: Vec<TokenStream> = fields
+        .iter()
+        .map(|field| {
+            let field_access = match (field.index, &field.ident) {
+                (Some(index), _) => {
+                    let idx = Index::from(index);
+                    quote! { self.#idx }
+                }
+                (None, Some(ident)) => quote! { self.#ident },
+                (None, None) => panic!("FieldInfo must have either ident or index"),
+            };
+            quote! {
+                #rudo_gc::cell::GcCapture::capture_gc_ptrs_into(&#field_access, ptrs);
+            }
+        })
+        .collect();
+
+    quote! {
+        #(#calls)*
+    }
+}
+
+/// Generates an empty `GcCapture` impl for types without Gc<T> fields.
+fn generate_empty_gc_capture_body(rudo_gc: &syn::Path) -> TokenStream {
+    quote! {
+        #[inline]
+        fn capture_gc_ptrs(&self) -> &[std::ptr::NonNull<#rudo_gc::GcBox<()>>] {
+            &[]
+        }
+
+        #[inline]
+        fn capture_gc_ptrs_into(&self, _ptrs: &mut Vec<std::ptr::NonNull<#rudo_gc::GcBox<()>>>) {
+            // No Gc<T> fields - nothing to capture
+        }
+    }
+}
+
+/// Checks if a type contains a specific type parameter.
+fn type_contains_param(ty: &syn::Type, target_param: &syn::Ident) -> bool {
+    match ty {
+        syn::Type::Path(syn::TypePath { qself: None, path }) => {
+            if path.segments.len() == 1 && path.segments[0].ident == *target_param {
+                return true;
+            }
+            for seg in &path.segments {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    for arg in &args.args {
+                        if let syn::GenericArgument::Type(inner_ty) = arg {
+                            if type_contains_param(inner_ty, target_param) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        }
+        syn::Type::Array(syn::TypeArray { elem, .. })
+        | syn::Type::Slice(syn::TypeSlice { elem, .. }) => type_contains_param(elem, target_param),
+        syn::Type::Tuple(syn::TypeTuple { elems, .. }) => {
+            elems.iter().any(|t| type_contains_param(t, target_param))
+        }
+        syn::Type::Reference(syn::TypeReference { elem, .. }) => {
+            type_contains_param(elem, target_param)
+        }
+        syn::Type::BareFn(syn::TypeBareFn { inputs, output, .. }) => {
+            inputs
+                .iter()
+                .any(|arg| type_contains_param(&arg.ty, target_param))
+                || match output {
+                    syn::ReturnType::Default => false,
+                    syn::ReturnType::Type(_, ty) => type_contains_param(ty, target_param),
+                }
+        }
+        _ => false,
+    }
+}
+
+/// Adds `GcCapture` bounds to type parameters that appear in Gc-containing fields.
+fn add_gc_capture_bounds(
+    rudo_gc: &Path,
+    mut generics: Generics,
+    gc_fields: &[FieldInfo],
+) -> Generics {
+    for param in &mut generics.params {
+        if let GenericParam::Type(ref mut type_param) = *param {
+            let needs_gc_capture = gc_fields
+                .iter()
+                .any(|field| type_contains_param(field.ty, &type_param.ident));
+
+            if needs_gc_capture {
+                let has_gc_capture = type_param.bounds.iter().any(|b| {
+                    if let syn::TypeParamBound::Trait(t) = b {
+                        t.path
+                            .segments
+                            .last()
+                            .is_some_and(|s| s.ident == "GcCapture")
+                    } else {
+                        false
+                    }
+                });
+
+                if !has_gc_capture {
+                    type_param
+                        .bounds
+                        .push(parse_quote!(#rudo_gc::cell::GcCapture));
+                }
+            }
+        }
+    }
+    generics
 }

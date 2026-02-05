@@ -19,6 +19,7 @@ use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
 use sys_alloc::{Mmap, MmapOptions};
 
 use crate::handles::{AsyncScopeData, AsyncScopeEntry, LocalHandles};
+use crate::ptr::GcBox;
 
 /// Get a unique identifier for the current thread.
 /// Uses the stack address which is unique per thread.
@@ -59,6 +60,21 @@ pub struct ThreadControlBlock {
     local_handles: UnsafeCell<LocalHandles>,
     /// Async scope registry for cross-await handle tracking.
     async_scopes: Mutex<Vec<AsyncScopeEntry>>,
+    /// Local work queue for incremental marking.
+    /// Reduces contention on global worklist.
+    local_mark_queue: Vec<NonNull<GcBox<()>>>,
+    /// Number of objects this thread marked this slice.
+    marked_this_slice: usize,
+    /// Per-thread remembered buffer for write barrier batching.
+    /// Holds dirty pages before flushing to global list.
+    remembered_buffer: Vec<NonNull<PageHeader>>,
+    /// Capacity of the remembered buffer.
+    #[allow(dead_code)]
+    remembered_buffer_capacity: usize,
+    /// Controls whether this thread's work can be stolen by other workers.
+    /// When true (default), normal work-stealing behavior applies.
+    /// When false, this thread's work is only processed by itself.
+    stealing_allowed: bool,
 }
 
 #[allow(clippy::non_send_fields_in_send_ty)]
@@ -85,6 +101,11 @@ impl ThreadControlBlock {
             stack_roots: Mutex::new(Vec::new()),
             local_handles: UnsafeCell::new(LocalHandles::new()),
             async_scopes: Mutex::new(Vec::new()),
+            local_mark_queue: Vec::new(),
+            marked_this_slice: 0,
+            remembered_buffer: Vec::with_capacity(32),
+            remembered_buffer_capacity: 32,
+            stealing_allowed: true,
         }
     }
 
@@ -161,6 +182,66 @@ impl ThreadControlBlock {
                 }
             }
         }
+    }
+
+    // =========================================================================
+    // Incremental Marking Support
+    // =========================================================================
+
+    /// Push work to thread-local mark queue.
+    /// Overflows to global worklist when local queue is full.
+    pub fn push_local_mark_work(&mut self, ptr: NonNull<GcBox<()>>) {
+        self.local_mark_queue.push(ptr);
+    }
+
+    /// Pop work from thread-local mark queue.
+    /// Tries to steal from global worklist if local is empty.
+    pub fn pop_local_mark_work(&mut self) -> Option<NonNull<GcBox<()>>> {
+        self.local_mark_queue.pop()
+    }
+
+    /// Get reference to local mark queue for iteration.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn local_mark_queue(&self) -> &Vec<NonNull<GcBox<()>>> {
+        &self.local_mark_queue
+    }
+
+    /// Get mutable reference to local mark queue.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn local_mark_queue_mut(&mut self) -> &mut Vec<NonNull<GcBox<()>>> {
+        &mut self.local_mark_queue
+    }
+
+    /// Get count of objects marked this slice.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn marked_this_slice(&self) -> usize {
+        self.marked_this_slice
+    }
+
+    /// Increment the marked counter.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn inc_marked_this_slice(&mut self, count: usize) {
+        self.marked_this_slice += count;
+    }
+
+    /// Reset slice-local counters.
+    pub fn reset_slice_counters(&mut self) {
+        self.marked_this_slice = 0;
+        self.remembered_buffer.clear();
+    }
+
+    /// Check if work-stealing is allowed for this thread.
+    #[inline]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn stealing_allowed(&self) -> bool {
+        self.stealing_allowed
+    }
+
+    /// Enable or disable work-stealing for this thread.
+    #[inline]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn set_stealing_allowed(&mut self, allowed: bool) {
+        self.stealing_allowed = allowed;
     }
 }
 
@@ -272,16 +353,10 @@ fn enter_rendezvous() {
         return;
     };
 
-    // CRITICAL FIX: Check per-thread gc_requested flag BEFORE doing any state transitions
-    // If this thread was created after request_gc_handshake(), its gc_requested flag
-    // will be false even though global GC_REQUESTED is true. We must NOT participate
-    // in rendezvous in this case, otherwise we'll:
-    // 1. Transition to SAFEPOINT state (incorrectly)
-    // 2. Decrement active_count (incorrectly)
-    // 3. Return immediately (since gc_requested is false)
-    // 4. Continue running while in SAFEPOINT state
-    // This causes data race when collector accesses our heap concurrently.
-    if !tcb.gc_requested.load(Ordering::Acquire) {
+    let gc_global = GC_REQUESTED.load(Ordering::Acquire);
+    let gc_local = tcb.gc_requested.load(Ordering::Acquire);
+
+    if !gc_global && !gc_local {
         return;
     }
 
@@ -296,10 +371,6 @@ fn enter_rendezvous() {
         return;
     }
 
-    // CRITICAL: Capture and store stack roots BEFORE decrementing active_count
-    // This ensures that when collector sees active_count == 1, all threads have
-    // already stored their complete stack roots. Otherwise, collector may read
-    // empty/incomplete roots and miss live objects, causing memory corruption.
     let mut roots = Vec::new();
     unsafe {
         crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
@@ -308,7 +379,6 @@ fn enter_rendezvous() {
     }
     *tcb.stack_roots.lock().unwrap() = roots;
 
-    // Now decrement active_count to signal completion to collector
     thread_registry()
         .lock()
         .unwrap()
@@ -1276,6 +1346,21 @@ pub struct LocalHeap {
 
     /// History of dirty page counts (last 4 cycles).
     dirty_page_history: [usize; 4],
+
+    /// Per-thread remembered buffer for incremental GC write barrier.
+    /// Batched page recording to reduce lock contention.
+    remembered_buffer: Vec<NonNull<PageHeader>>,
+    remembered_buffer_capacity: usize,
+
+    /// Per-thread SATB buffer for capturing old pointer values.
+    /// Records old values before they're overwritten during incremental marking.
+    satb_old_values: Vec<NonNull<GcBox<()>>>,
+    satb_buffer_capacity: usize,
+
+    /// Per-thread overflow buffer for SATB values.
+    /// When the main SATB buffer overflows, values are preserved here
+    /// until they can be processed during fallback/final mark.
+    satb_overflow_buffer: Vec<NonNull<GcBox<()>>>,
 }
 
 impl LocalHeap {
@@ -1302,6 +1387,11 @@ impl LocalHeap {
             dirty_pages_snapshot: Vec::new(),
             avg_dirty_pages: 16,
             dirty_page_history: [16; 4],
+            remembered_buffer: Vec::with_capacity(32),
+            remembered_buffer_capacity: 32,
+            satb_old_values: Vec::with_capacity(32),
+            satb_buffer_capacity: 32,
+            satb_overflow_buffer: Vec::with_capacity(64),
         }
     }
 
@@ -1393,6 +1483,99 @@ impl LocalHeap {
     /// Get count of dirty pages (for debugging/metrics and tests).
     pub fn dirty_pages_count(&self) -> usize {
         self.dirty_pages.lock().len()
+    }
+
+    /// Record a page in the remembered buffer for incremental GC.
+    /// Flushes to global dirty list on overflow.
+    ///
+    /// Note: We accept duplicates here for O(1) insert performance.
+    /// Duplicates are filtered out during flush to the global dirty list.
+    #[inline]
+    pub fn record_in_remembered_buffer(&mut self, page: NonNull<PageHeader>) {
+        self.remembered_buffer.push(page);
+        if self.remembered_buffer.len() >= self.remembered_buffer_capacity {
+            self.flush_remembered_buffer();
+        }
+    }
+
+    /// Flush remembered buffer to global dirty list with deduplication.
+    #[inline]
+    pub fn flush_remembered_buffer(&mut self) {
+        let pages = std::mem::take(&mut self.remembered_buffer);
+        if pages.is_empty() {
+            return;
+        }
+
+        let mut dirty_pages = self.dirty_pages.lock();
+        let needed = dirty_pages.len() + pages.len();
+        let mut unique_pages: std::collections::HashSet<_> =
+            std::collections::HashSet::with_capacity(needed);
+        unique_pages.extend(dirty_pages.iter().copied());
+        unique_pages.extend(pages);
+
+        dirty_pages.clear();
+        dirty_pages.extend(unique_pages);
+    }
+
+    /// Get remembered buffer capacity.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn remembered_buffer_capacity(&self) -> usize {
+        self.remembered_buffer_capacity
+    }
+
+    /// Set remembered buffer capacity.
+    pub fn set_remembered_buffer_capacity(&mut self, capacity: usize) {
+        self.remembered_buffer_capacity = capacity;
+        self.remembered_buffer = Vec::with_capacity(capacity);
+    }
+
+    /// Clear the remembered buffer.
+    pub fn clear_remembered_buffer(&mut self) {
+        self.remembered_buffer.clear();
+    }
+
+    // ========================================================================
+    // SATB Buffer for incremental marking
+    // ========================================================================
+
+    /// Record an old pointer value for SATB preservation.
+    /// Called during write barrier before a pointer is overwritten.
+    ///
+    /// Returns `true` if the value was stored successfully, `false` if the buffer
+    /// overflowed and fallback was requested.
+    pub fn record_satb_old_value(&mut self, gc_box: NonNull<GcBox<()>>) -> bool {
+        self.satb_old_values.push(gc_box);
+        if self.satb_old_values.len() >= self.satb_buffer_capacity {
+            self.satb_buffer_overflowed()
+        } else {
+            true
+        }
+    }
+
+    fn satb_buffer_overflowed(&mut self) -> bool {
+        self.satb_overflow_buffer.append(&mut self.satb_old_values);
+        crate::gc::incremental::IncrementalMarkState::global()
+            .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
+        false
+    }
+
+    /// Flush the SATB buffer, returning captured old values.
+    /// The caller is responsible for marking these objects.
+    #[must_use]
+    pub fn flush_satb_buffer(&mut self) -> Vec<NonNull<GcBox<()>>> {
+        std::mem::take(&mut self.satb_old_values)
+    }
+
+    /// Clear the SATB buffer without processing.
+    pub fn clear_satb_buffer(&mut self) {
+        self.satb_old_values.clear();
+    }
+
+    /// Flush the SATB overflow buffer, returning captured old values.
+    /// Called during final mark to process overflowed SATB values.
+    #[must_use]
+    pub fn flush_satb_overflow_buffer(&mut self) -> Vec<NonNull<GcBox<()>>> {
+        std::mem::take(&mut self.satb_overflow_buffer)
     }
 
     /// Allocate space for a value of type T.
@@ -2230,7 +2413,8 @@ thread_local! {
     pub static HEAP: ThreadLocalHeap = ThreadLocalHeap::new();
 }
 
-/// Execute a function with access to the thread-local heap.
+/// Execute a function with mutable access to the thread-local heap.
+#[inline]
 pub fn with_heap<F, R>(f: F) -> R
 where
     F: FnOnce(&mut LocalHeap) -> R,
@@ -2238,9 +2422,9 @@ where
     HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get()) })
 }
 
-/// Get mutable access to the thread-local heap and its control block.
-/// Used for GC coordination.
+/// Execute a function with mutable access to the thread-local heap and its control block.
 #[allow(dead_code)]
+#[inline]
 pub fn with_heap_and_tcb<F, R>(f: F) -> R
 where
     F: FnOnce(&mut LocalHeap, &ThreadControlBlock) -> R,
@@ -2248,9 +2432,9 @@ where
     HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get(), &local.tcb) })
 }
 
-/// Execute a function with access to the thread-local heap and Arc<ThreadControlBlock>.
-/// This is useful for creating `AsyncHandleScope` which requires `&Arc<TCB>`.
+/// Execute a function with mutable access to the thread-local heap and Arc<ThreadControlBlock>.
 #[allow(dead_code)]
+#[inline]
 pub fn with_heap_and_tcb_arc<F, R>(f: F) -> R
 where
     F: FnOnce(&mut LocalHeap, &std::sync::Arc<ThreadControlBlock>) -> R,

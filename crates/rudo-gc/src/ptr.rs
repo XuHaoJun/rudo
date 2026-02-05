@@ -3,12 +3,15 @@
 //! This module provides the primary user-facing type for garbage-collected
 //! memory management.
 
+#![allow(clippy::ptr_as_ptr, clippy::ptr_cast_constness)]
+
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
+use crate::gc::incremental::mark_new_object_black;
 use crate::gc::notify_dropped_gc;
 use crate::heap::{with_heap, LocalHeap};
 use crate::trace::{GcVisitor, Trace, Visitor};
@@ -511,6 +514,11 @@ impl<T: Trace> Gc<T> {
         }
 
         let gc_box_ptr = unsafe { NonNull::new_unchecked(gc_box) };
+
+        // Mark as black (live) during incremental marking
+        // This is the SATB "black allocation" optimization
+        #[allow(clippy::ptr_as_ptr)]
+        let _ = mark_new_object_black(ptr.as_ptr() as *const u8);
 
         // Notify that we created a Gc
         crate::gc::notify_created_gc();

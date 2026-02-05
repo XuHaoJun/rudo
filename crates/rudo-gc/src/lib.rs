@@ -57,6 +57,9 @@
 #![warn(clippy::pedantic)]
 #![warn(clippy::nursery)]
 #![allow(clippy::module_name_repetitions)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+#![allow(clippy::clone_on_copy)]
 
 pub mod cell;
 pub mod gc;
@@ -79,6 +82,61 @@ pub mod heap;
 
 // Re-export public API
 pub use cell::GcCell;
+pub use gc::incremental::{
+    is_incremental_marking_active, is_write_barrier_active, mark_new_object_black,
+    IncrementalConfig, IncrementalMarkState, MarkPhase, MarkSliceResult, MarkStats,
+};
+
+/// Configure incremental marking settings.
+///
+/// Use this to enable and configure incremental marking for reduced GC pause times.
+pub fn set_incremental_config(config: gc::incremental::IncrementalConfig) {
+    IncrementalMarkState::global().set_config(config);
+}
+
+/// Check if incremental GC is enabled.
+#[must_use]
+pub fn is_incremental_gc_enabled() -> bool {
+    IncrementalMarkState::global().config().enabled
+}
+
+/// Get the current incremental marking configuration.
+#[must_use]
+pub fn get_incremental_config() -> gc::incremental::IncrementalConfig {
+    *IncrementalMarkState::global().config()
+}
+
+/// Yield to the garbage collector for cooperative scheduling.
+///
+/// This function allows the GC to run during long-running computations,
+/// which is particularly useful when incremental marking is enabled.
+/// When incremental marking is not active, this is a no-op.
+///
+/// # Examples
+///
+/// ```ignore
+/// use rudo_gc::Gc;
+///
+/// fn process_large_dataset(items: &[Item]) {
+///     for (i, item) in items.iter().enumerate() {
+///         process_item(item);
+///
+///         // Yield every 1000 items to allow GC marking
+///         if i % 1000 == 0 {
+///             Gc::<()>::yield_now();
+///         }
+///     }
+/// }
+/// ```
+pub fn yield_now() {
+    if crate::gc::incremental::is_incremental_marking_active() {
+        let config = get_incremental_config();
+        let budget = config.increment_size;
+        crate::heap::with_heap(|heap| {
+            let _ = crate::gc::incremental::incremental_mark_slice(heap, budget);
+        });
+    }
+}
 pub use gc::{
     collect, collect_full, default_collect_condition, safepoint, set_collect_condition,
     CollectInfo, PerThreadMarkQueue, StealQueue,
@@ -88,18 +146,21 @@ pub use handles::{
     MaybeHandle, SealedHandleScope,
 };
 pub use metrics::{last_gc_metrics, CollectionType, GcMetrics};
-pub use ptr::{Gc, Weak};
+pub use ptr::{Gc, GcBox, Weak};
 pub use scan::scan_heap_region_conservatively;
 pub use trace::{Trace, Visitor};
 pub use trace_closure::TraceClosure;
 
-// Re-export derive macro when feature is enabled
+// Re-export derive macros when feature is enabled
 #[cfg(feature = "derive")]
 pub use rudo_gc_derive::Trace;
 
 #[doc(hidden)]
 pub mod test_util {
     pub use crate::gc::{clear_test_roots, register_test_root};
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub use crate::gc::iter_test_roots;
 
     /// Get the internal `GcBox` pointer.
     pub fn internal_ptr<T: crate::Trace>(gc: &crate::Gc<T>) -> *const u8 {
@@ -155,6 +216,7 @@ pub mod test_util {
     pub fn reset() {
         unsafe { crate::heap::reset_for_testing() };
         clear_test_roots();
+        crate::gc::incremental::IncrementalMarkState::global().reset();
     }
 }
 

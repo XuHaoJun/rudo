@@ -11,6 +11,7 @@
 #[allow(clippy::module_inception)]
 mod gc;
 
+pub mod incremental;
 pub mod mark;
 pub mod marker;
 pub mod sync;
@@ -22,6 +23,9 @@ pub use gc::{
     mark_object_minor, notify_created_gc, notify_dropped_gc, register_test_root, safepoint,
     set_collect_condition, CollectInfo,
 };
+
+#[cfg(any(test, feature = "test-util"))]
+pub use gc::iter_test_roots;
 
 #[cfg(feature = "lazy-sweep")]
 pub use gc::{pending_sweep_count, sweep_pending, sweep_specific_page};

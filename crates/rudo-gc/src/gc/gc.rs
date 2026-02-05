@@ -10,6 +10,11 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::PoisonError;
 
+use crate::gc::incremental::FallbackReason;
+use crate::gc::incremental::{
+    count_dirty_pages, execute_final_mark, execute_snapshot, mark_slice, IncrementalMarkState,
+    MarkPhase, MarkSliceResult, MarkStats,
+};
 use crate::gc::marker::{
     worker_mark_loop, worker_mark_loop_with_registry, GcWorkerRegistry, ParallelMarkConfig,
     PerThreadMarkQueue,
@@ -129,6 +134,15 @@ pub fn clear_test_roots() {
     TEST_ROOTS.with(|roots| roots.borrow_mut().clear());
 }
 
+/// Iterate over registered test roots.
+#[cfg(any(test, feature = "test-util"))]
+pub fn iter_test_roots<F, R>(f: F) -> R
+where
+    F: FnOnce(&std::cell::RefCell<Vec<*const u8>>) -> R,
+{
+    TEST_ROOTS.with(f)
+}
+
 /// Notify that a Gc was created.
 pub fn notify_created_gc() {
     N_EXISTING.with(|n| n.set(n.get() + 1));
@@ -211,6 +225,27 @@ pub fn safepoint() {
 // ============================================================================
 
 const MAJOR_THRESHOLD: usize = 10 * 1024 * 1024; // 10MB
+
+#[inline]
+fn log_fallback_reason(reason: FallbackReason) {
+    match reason {
+        FallbackReason::None => {
+            eprintln!("[GC] Incremental marking fallback: unknown reason (atomic not set)");
+        }
+        FallbackReason::DirtyPagesExceeded => {
+            eprintln!("[GC] Incremental marking fallback: dirty pages exceeded threshold");
+        }
+        FallbackReason::SliceTimeout => {
+            eprintln!("[GC] Incremental marking fallback: slice timeout exceeded");
+        }
+        FallbackReason::WorklistUnbounded => {
+            eprintln!("[GC] Incremental marking fallback: worklist grew unbounded");
+        }
+        FallbackReason::SatbBufferOverflow => {
+            eprintln!("[GC] Incremental marking fallback: SATB buffer overflowed");
+        }
+    }
+}
 
 /// Perform a garbage collection.
 ///
@@ -1145,7 +1180,17 @@ fn mark_major_roots_parallel(
 }
 
 /// Minor Collection: Collect Young Generation only.
+///
+/// # FR-009 Compliance
+///
+/// Per spec requirement FR-009: "System MUST prevent minor GC from running during
+/// incremental major marking." This implementation blocks until incremental major
+/// marking completes rather than skipping minor GC entirely.
 fn collect_minor(heap: &mut LocalHeap) -> usize {
+    if crate::gc::incremental::is_incremental_marking_active() {
+        crate::heap::wait_for_gc_complete();
+    }
+
     // 1. Mark Phase
     mark_minor_roots(heap);
 
@@ -1196,18 +1241,81 @@ fn promote_young_pages(heap: &mut LocalHeap) {
 }
 
 /// Major Collection: Collect Entire Heap.
+///
+/// # Design Note
+///
+/// The spec's data model (specs/008-incremental-marking/data-model.md section 2.4) defines
+/// a `GcRequest` struct with `CollectionType::IncrementalMajor` as the trigger mechanism.
+/// This implementation uses a different approach:
+///
+/// 1. The `gc_requested: AtomicBool` flag in `ThreadControlBlock` serves as the GC trigger
+/// 2. `IncrementalConfig::enabled` controls whether incremental marking is used
+/// 3. `CollectionType::IncrementalMajor` in `metrics.rs` records what *happened* for telemetry
+///
+/// This avoids introducing a `GcRequest` struct when the existing flag-based approach works.
 fn collect_major(heap: &mut LocalHeap) -> usize {
-    // 1. Mark Phase
-    // Clear marks first
+    let config = crate::gc::incremental::IncrementalMarkState::global().config();
+
+    if config.enabled {
+        collect_major_incremental(heap)
+    } else {
+        collect_major_stw(heap)
+    }
+}
+
+fn collect_major_stw(heap: &mut LocalHeap) -> usize {
     clear_all_marks_and_dirty(heap);
     mark_major_roots(heap);
 
-    // 2. Sweep Phase
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
 
-    // 3. Promotion Phase (All to Old)
     promote_all_pages(heap);
+
+    reclaimed + reclaimed_large
+}
+
+#[allow(clippy::significant_drop_tightening)]
+fn collect_major_incremental(heap: &mut LocalHeap) -> usize {
+    let state = IncrementalMarkState::global();
+    let config = state.config();
+
+    let heaps: [&LocalHeap; 1] = [&*heap];
+    execute_snapshot(&heaps);
+
+    let per_worker_budget = config.increment_size;
+
+    loop {
+        let result = mark_slice(heap, per_worker_budget);
+
+        match result {
+            MarkSliceResult::Complete { .. } => {
+                break;
+            }
+            MarkSliceResult::Pending { .. } => {}
+            MarkSliceResult::Fallback { reason } => {
+                log_fallback_reason(reason);
+                state.set_phase(MarkPhase::FinalMark);
+                break;
+            }
+        }
+    }
+
+    let remaining = state.worklist_len();
+    let dirty_pages = count_dirty_pages(heap);
+    if remaining > 0 || dirty_pages > 0 {
+        let heaps_mut: &mut [&mut LocalHeap; 1] = &mut [heap];
+        execute_final_mark(heaps_mut);
+    }
+
+    state.set_phase(MarkPhase::Sweeping);
+
+    let reclaimed = sweep_segment_pages(heap, false);
+    let reclaimed_large = sweep_large_objects(heap, false);
+
+    promote_all_pages(heap);
+
+    state.set_phase(MarkPhase::Idle);
 
     reclaimed + reclaimed_large
 }
