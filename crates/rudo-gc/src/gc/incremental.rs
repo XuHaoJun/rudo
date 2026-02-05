@@ -439,6 +439,13 @@ pub fn write_barrier_needed() -> bool {
         && is_write_barrier_active()
 }
 
+pub fn is_generational_barrier_active() -> bool {
+    let state = IncrementalMarkState::global();
+    state.enabled.load(Ordering::Relaxed)
+        && !state.fallback_requested()
+        && is_incremental_marking_active()
+}
+
 #[allow(clippy::significant_drop_tightening)]
 fn stop_all_mutators_for_snapshot() {
     let state = IncrementalMarkState::global();
@@ -724,6 +731,14 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
 
     for h in heaps {
         let heap = h;
+        let overflow_values = heap.flush_satb_overflow_buffer();
+        for gc_box in overflow_values {
+            unsafe {
+                crate::gc::gc::mark_object(gc_box, &mut visitor);
+            }
+            total_marked += 1;
+        }
+
         let satb_values = heap.flush_satb_buffer();
         for gc_box in satb_values {
             unsafe {

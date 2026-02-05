@@ -220,13 +220,23 @@ impl<T: ?Sized> GcCell<T> {
     fn write_barrier(&self) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
+        if crate::gc::incremental::is_generational_barrier_active() {
+            self.generational_write_barrier(ptr);
+        }
+
         if crate::gc::incremental::is_incremental_marking_active() {
             self.incremental_write_barrier(ptr);
-        } else {
-            self.generational_write_barrier(ptr);
         }
     }
 
+    /// Records a write to an old-generation object for generational GC.
+    ///
+    /// This implements the generational GC invariant: all OLD→YOUNG references
+    /// must be tracked so minor collections can find roots without scanning old gen.
+    ///
+    /// **Important**: This barrier remains active through ALL phases of incremental
+    /// marking (including `FinalMark`), not just during Marking. Mutations during
+    /// `FinalMark` must still be recorded for correctness.
     #[allow(clippy::unused_self)]
     fn generational_write_barrier(&self, ptr: *const u8) {
         unsafe {

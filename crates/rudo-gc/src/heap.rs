@@ -1356,6 +1356,11 @@ pub struct LocalHeap {
     /// Records old values before they're overwritten during incremental marking.
     satb_old_values: Vec<NonNull<GcBox<()>>>,
     satb_buffer_capacity: usize,
+
+    /// Per-thread overflow buffer for SATB values.
+    /// When the main SATB buffer overflows, values are preserved here
+    /// until they can be processed during fallback/final mark.
+    satb_overflow_buffer: Vec<NonNull<GcBox<()>>>,
 }
 
 impl LocalHeap {
@@ -1386,6 +1391,7 @@ impl LocalHeap {
             remembered_buffer_capacity: 32,
             satb_old_values: Vec::with_capacity(32),
             satb_buffer_capacity: 32,
+            satb_overflow_buffer: Vec::with_capacity(64),
         }
     }
 
@@ -1540,11 +1546,9 @@ impl LocalHeap {
     }
 
     fn satb_buffer_overflowed(&mut self) -> bool {
-        let flushed = std::mem::take(&mut self.satb_old_values);
-        if !flushed.is_empty() {
-            crate::gc::incremental::IncrementalMarkState::global()
-                .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
-        }
+        self.satb_overflow_buffer.append(&mut self.satb_old_values);
+        crate::gc::incremental::IncrementalMarkState::global()
+            .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
         false
     }
 
@@ -1558,6 +1562,13 @@ impl LocalHeap {
     /// Clear the SATB buffer without processing.
     pub fn clear_satb_buffer(&mut self) {
         self.satb_old_values.clear();
+    }
+
+    /// Flush the SATB overflow buffer, returning captured old values.
+    /// Called during final mark to process overflowed SATB values.
+    #[must_use]
+    pub fn flush_satb_overflow_buffer(&mut self) -> Vec<NonNull<GcBox<()>>> {
+        std::mem::take(&mut self.satb_overflow_buffer)
     }
 
     /// Allocate space for a value of type T.
