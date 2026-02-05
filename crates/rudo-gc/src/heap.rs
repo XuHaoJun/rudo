@@ -1487,27 +1487,34 @@ impl LocalHeap {
 
     /// Record a page in the remembered buffer for incremental GC.
     /// Flushes to global dirty list on overflow.
+    ///
+    /// Note: We accept duplicates here for O(1) insert performance.
+    /// Duplicates are filtered out during flush to the global dirty list.
+    #[inline]
     pub fn record_in_remembered_buffer(&mut self, page: NonNull<PageHeader>) {
-        if !self.remembered_buffer.contains(&page) {
-            self.remembered_buffer.push(page);
-            if self.remembered_buffer.len() >= self.remembered_buffer_capacity {
-                self.flush_remembered_buffer();
-            }
+        self.remembered_buffer.push(page);
+        if self.remembered_buffer.len() >= self.remembered_buffer_capacity {
+            self.flush_remembered_buffer();
         }
     }
 
-    /// Flush remembered buffer to global dirty list.
-    #[allow(clippy::significant_drop_tightening)]
+    /// Flush remembered buffer to global dirty list with deduplication.
+    #[inline]
     pub fn flush_remembered_buffer(&mut self) {
         let pages = std::mem::take(&mut self.remembered_buffer);
-        if !pages.is_empty() {
-            let mut dirty_pages = self.dirty_pages.lock();
-            for page in pages {
-                if !dirty_pages.contains(&page) {
-                    dirty_pages.push(page);
-                }
-            }
+        if pages.is_empty() {
+            return;
         }
+
+        let mut dirty_pages = self.dirty_pages.lock();
+        let needed = dirty_pages.len() + pages.len();
+        let mut unique_pages: std::collections::HashSet<_> =
+            std::collections::HashSet::with_capacity(needed);
+        unique_pages.extend(dirty_pages.iter().copied());
+        unique_pages.extend(pages);
+
+        dirty_pages.clear();
+        dirty_pages.extend(unique_pages);
     }
 
     /// Get remembered buffer capacity.

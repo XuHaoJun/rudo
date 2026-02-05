@@ -8,9 +8,10 @@ use crate::gc::incremental::IncrementalMarkState;
 use crate::heap::{ptr_to_page_header, PageHeader, MAGIC_GC_PAGE};
 use crate::ptr::GcBox;
 use crate::trace::Trace;
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
+use std::sync::RwLock;
 
 /// A memory location with interior mutability that triggers a write barrier.
 ///
@@ -569,8 +570,52 @@ impl<T: GcCapture + ?Sized> GcCapture for GcCell<T> {
     }
 }
 
+impl<T: GcCapture + Copy + 'static> GcCapture for Cell<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        let value = self.get();
+        value.capture_gc_ptrs_into(ptrs);
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for RefCell<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        let value = self.borrow();
+        value.capture_gc_ptrs_into(ptrs);
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for RwLock<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        if let Ok(value) = self.try_read() {
+            value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
 // SAFETY: GcCell is Trace if T is Trace.
 // It just traces the inner value.
+//
+// For GcCapture: GcCell<T> where T: GcCapture forwards to the inner value.
+// If T is borrowed mutably (RefCell), capture_gc_ptrs_into will skip capturing.
+// This is consistent with RefCell's normal semantics.
 unsafe impl<T: Trace + ?Sized> Trace for GcCell<T> {
     #[inline]
     fn trace(&self, visitor: &mut impl crate::trace::Visitor) {
