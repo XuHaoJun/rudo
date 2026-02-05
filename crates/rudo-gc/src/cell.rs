@@ -132,16 +132,14 @@ impl<T: ?Sized> GcCell<T> {
         if crate::gc::incremental::is_incremental_marking_active() {
             unsafe {
                 let value = &*self.inner.as_ptr();
-                if !value.capture_gc_ptrs().is_empty() {
-                    let mut gc_ptrs = Vec::with_capacity(32);
-                    value.capture_gc_ptrs_into(&mut gc_ptrs);
-                    if !gc_ptrs.is_empty() {
-                        crate::heap::with_heap(|heap| {
-                            for gc_ptr in gc_ptrs {
-                                heap.record_satb_old_value(gc_ptr);
-                            }
-                        });
-                    }
+                let mut gc_ptrs = Vec::with_capacity(32);
+                value.capture_gc_ptrs_into(&mut gc_ptrs);
+                if !gc_ptrs.is_empty() {
+                    crate::heap::with_heap(|heap| {
+                        for gc_ptr in gc_ptrs {
+                            heap.record_satb_old_value(gc_ptr);
+                        }
+                    });
                 }
             }
         }
@@ -376,16 +374,28 @@ pub trait GcCapture {
     }
 }
 
+use std::cell::UnsafeCell;
+
+thread_local! {
+    static GC_PTR_BUFFER: UnsafeCell<[NonNull<GcBox<()>>; 1]> = const { UnsafeCell::new([
+        NonNull::dangling(),
+    ]) };
+}
+
 impl<T: Trace + 'static> GcCapture for crate::Gc<T> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        let ptr = self.raw_ptr();
-        if ptr.is_null() {
+        let raw = self.raw_ptr();
+        if raw.is_null() {
             &[]
         } else {
             unsafe {
-                let nn = NonNull::new_unchecked(ptr.cast::<crate::ptr::GcBox<()>>());
-                std::slice::from_raw_parts(nn.as_ptr() as *const _, 1)
+                let nn = NonNull::new_unchecked(raw.cast());
+                GC_PTR_BUFFER.with(|buffer| {
+                    let ptr = buffer.get().cast::<[NonNull<GcBox<()>>; 1]>();
+                    (*ptr)[0] = nn;
+                    std::slice::from_raw_parts((*ptr).as_ptr(), 1)
+                })
             }
         }
     }
@@ -446,7 +456,7 @@ impl<T: GcCapture + 'static, const N: usize> GcCapture for [T; N] {
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-impl<K: 'static, V: GcCapture + 'static, S: std::hash::BuildHasher + Default> GcCapture
+impl<K: GcCapture + 'static, V: GcCapture + 'static, S: std::hash::BuildHasher + Default> GcCapture
     for HashMap<K, V, S>
 {
     #[inline]
@@ -456,13 +466,16 @@ impl<K: 'static, V: GcCapture + 'static, S: std::hash::BuildHasher + Default> Gc
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for key in self.keys() {
+            key.capture_gc_ptrs_into(ptrs);
+        }
         for value in self.values() {
             value.capture_gc_ptrs_into(ptrs);
         }
     }
 }
 
-impl<K: 'static, V: GcCapture + 'static> GcCapture for BTreeMap<K, V> {
+impl<K: GcCapture + 'static, V: GcCapture + 'static> GcCapture for BTreeMap<K, V> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
@@ -470,6 +483,9 @@ impl<K: 'static, V: GcCapture + 'static> GcCapture for BTreeMap<K, V> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for key in self.keys() {
+            key.capture_gc_ptrs_into(ptrs);
+        }
         for value in self.values() {
             value.capture_gc_ptrs_into(ptrs);
         }
@@ -501,6 +517,18 @@ impl<T: GcCapture + 'static> GcCapture for BTreeSet<T> {
         for value in self {
             value.capture_gc_ptrs_into(ptrs);
         }
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for Box<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        (**self).capture_gc_ptrs_into(ptrs);
     }
 }
 

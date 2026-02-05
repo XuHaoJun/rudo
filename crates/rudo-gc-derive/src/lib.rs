@@ -635,14 +635,21 @@ fn field_contains_gc(ty: &syn::Type) -> bool {
                 }
             }
 
-            // Check for array types [Gc<T>; N]
             if let Some(seg) = path.segments.last() {
                 if seg.ident == "Gc"
                     || seg.ident == "Vec"
                     || seg.ident == "Option"
                     || seg.ident == "GcCell"
                 {
-                    return true;
+                    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                        for arg in &args.args {
+                            if let syn::GenericArgument::Type(inner_ty) = arg {
+                                if field_contains_gc(inner_ty) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
