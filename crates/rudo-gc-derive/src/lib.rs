@@ -610,10 +610,9 @@ struct FieldInfo<'a> {
 fn field_contains_gc(ty: &syn::Type) -> bool {
     match ty {
         syn::Type::Path(syn::TypePath { qself: None, path }) => {
-            // Check if the path is `Gc` or `Gc<T>`
-            if path.segments.len() == 1 {
-                let seg = &path.segments[0];
-                if seg.ident == "Gc" {
+            // Check if the path is `Gc` or `Gc<T>` (including fully qualified paths like ::Gc or module::Gc)
+            if let Some(first_seg) = path.segments.first() {
+                if first_seg.ident == "Gc" {
                     return true;
                 }
             }

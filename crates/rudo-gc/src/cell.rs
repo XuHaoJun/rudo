@@ -115,6 +115,10 @@ impl<T: ?Sized> GcCell<T> {
     ///
     /// Use this as the primary mutation method for `GcCell<T>`.
     ///
+    /// # Type Bounds
+    ///
+    /// - `T: GcCapture` - Required for SATB barrier. Add `#[derive(GcCell)]` to your type.
+    ///
     /// # Panics
     ///
     /// Panics if the value is currently borrowed.
@@ -128,14 +132,16 @@ impl<T: ?Sized> GcCell<T> {
         if crate::gc::incremental::is_incremental_marking_active() {
             unsafe {
                 let value = &*self.inner.as_ptr();
-                let mut gc_ptrs = Vec::with_capacity(32);
-                value.capture_gc_ptrs_into(&mut gc_ptrs);
-                if !gc_ptrs.is_empty() {
-                    crate::heap::with_heap(|heap| {
-                        for gc_ptr in gc_ptrs {
-                            heap.record_satb_old_value(gc_ptr);
-                        }
-                    });
+                if !value.capture_gc_ptrs().is_empty() {
+                    let mut gc_ptrs = Vec::with_capacity(32);
+                    value.capture_gc_ptrs_into(&mut gc_ptrs);
+                    if !gc_ptrs.is_empty() {
+                        crate::heap::with_heap(|heap| {
+                            for gc_ptr in gc_ptrs {
+                                heap.record_satb_old_value(gc_ptr);
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -440,7 +446,7 @@ impl<T: GcCapture + 'static, const N: usize> GcCapture for [T; N] {
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-impl<K: GcCapture + 'static, V: GcCapture + 'static, S: std::hash::BuildHasher + Default> GcCapture
+impl<K: 'static, V: GcCapture + 'static, S: std::hash::BuildHasher + Default> GcCapture
     for HashMap<K, V, S>
 {
     #[inline]
@@ -456,7 +462,7 @@ impl<K: GcCapture + 'static, V: GcCapture + 'static, S: std::hash::BuildHasher +
     }
 }
 
-impl<K: GcCapture + 'static, V: GcCapture + 'static> GcCapture for BTreeMap<K, V> {
+impl<K: 'static, V: GcCapture + 'static> GcCapture for BTreeMap<K, V> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
