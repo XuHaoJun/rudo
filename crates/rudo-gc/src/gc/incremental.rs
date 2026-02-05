@@ -147,6 +147,7 @@ pub struct IncrementalMarkState {
     phase: AtomicUsize,
     worklist: UnsafeCell<SegQueue<*const GcBox<()>>>,
     config: Mutex<IncrementalConfig>,
+    enabled: AtomicBool,
     stats: MarkStats,
     fallback_requested: AtomicBool,
     root_count: AtomicUsize,
@@ -239,6 +240,7 @@ impl IncrementalMarkState {
             phase: AtomicUsize::new(MarkPhase::Idle as usize),
             worklist: UnsafeCell::new(SegQueue::new()),
             config: Mutex::new(IncrementalConfig::default()),
+            enabled: AtomicBool::new(false),
             stats: MarkStats::new(),
             fallback_requested: AtomicBool::new(false),
             root_count: AtomicUsize::new(0),
@@ -369,6 +371,7 @@ impl IncrementalMarkState {
 
     pub fn set_config(&self, config: IncrementalConfig) {
         *self.config.lock() = config;
+        self.enabled.store(config.enabled, Ordering::Relaxed);
     }
 
     pub fn stats(&self) -> &MarkStats {
@@ -399,7 +402,9 @@ pub fn is_write_barrier_active() -> bool {
 
 pub fn write_barrier_needed() -> bool {
     let state = IncrementalMarkState::global();
-    state.config().enabled && !state.fallback_requested() && is_write_barrier_active()
+    state.enabled.load(Ordering::Relaxed)
+        && !state.fallback_requested()
+        && is_write_barrier_active()
 }
 
 #[allow(clippy::significant_drop_tightening)]
@@ -425,6 +430,17 @@ fn stop_all_mutators_for_snapshot() {
             break;
         }
     }
+}
+
+fn resume_all_mutators() {
+    let registry = crate::heap::thread_registry().lock().unwrap();
+    for tcb in &registry.threads {
+        tcb.gc_requested
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        tcb.park_cond.notify_all();
+    }
+    drop(registry);
+    crate::heap::GC_REQUESTED.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
@@ -481,6 +497,7 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
         write_barrier_needed(),
         "Write barrier must be active before resuming mutators"
     );
+    resume_all_mutators();
     state.start_slice();
     count
 }
@@ -673,6 +690,8 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
             }
             total_marked += 1;
         }
+
+        heap.flush_remembered_buffer();
 
         let snapshot_count = heap.take_dirty_pages_snapshot();
         for page_ptr in heap.dirty_pages_iter() {

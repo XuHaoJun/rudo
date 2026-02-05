@@ -288,26 +288,30 @@ pub fn write_barrier_needed() -> bool;
 
 ```rust
 impl<T> GcCell<T> {
-    /// Mutably borrows the wrapped value with generational and incremental barriers.
+    /// Mutably borrows the wrapped value with generational, incremental, and SATB barriers.
     ///
-    /// **Barrier Type**: Generational + Incremental (no SATB)
+    /// **Barrier Type**: Full (Generational + Incremental + SATB)
     ///
-    /// This is the recommended method for general use. It works with any type
-    /// implementing `Trace` and provides generational and incremental barrier protection.
-    /// For types containing GC pointers that require SATB barrier during incremental
-    /// marking, use `borrow_mut_with_satb()` instead.
+    /// This method captures old GC pointer values before mutation, enabling correct
+    /// incremental marking. Uses `GcCapture` trait to capture old pointer values.
     ///
-    /// **Use Case**: General purpose - works with all T: Trace types
+    /// **Use Case**: General purpose - works with types that implement GcCapture
+    ///
+    /// # Type Bounds
+    ///
+    /// - `T: GcCapture` - Required for SATB barrier. Use `borrow_mut_gen_only()` for
+    ///   types without GC pointers to avoid the SATB overhead.
     ///
     /// # Example
     ///
     /// ```ignore
-    /// // Works with any type:
-    /// let cell = GcCell::new(42);
-    /// *cell.borrow_mut() = 100;
+    /// // Works with types containing GC pointers:
+    /// let cell = GcCell::new(Some(Gc::new(Data)));
+    /// *cell.borrow_mut() = Some(Gc::new(new_data));  // SATB active
     ///
-    /// let cell = GcCell::new(String::from("hello"));
-    /// *cell.borrow_mut() = "world".to_string();
+    /// // For types without GC pointers:
+    /// let cell = GcCell::new(42);
+    /// *cell.borrow_mut() = 100;  // Only generational barrier needed
     /// ```
     ///
     /// # Panics
@@ -315,43 +319,19 @@ impl<T> GcCell<T> {
     /// Panics if the value is currently borrowed.
     pub fn borrow_mut(&self) -> RefMut<'_, T>
     where
-        T: Trace;
-
-    /// Mutably borrows the wrapped value with SATB barrier.
-    ///
-    /// **Barrier Type**: Full (Generational + Incremental + SATB)
-    ///
-    /// This method captures old GC pointer values before mutation, enabling correct
-    /// incremental marking. Use this for `GcCell<Gc<T>>`, `GcCell<Vec<Gc<T>>>`,
-    /// and similar types containing GC pointers.
-    ///
-    /// **Use Case**: Types with GC pointers requiring SATB correctness
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let cell = GcCell::new(Gc::new(Data));
-    /// *cell.borrow_mut_with_satb() = new_data;  // SATB active
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the value is currently borrowed.
-    pub fn borrow_mut_with_satb(&self) -> RefMut<'_, T>
-    where
         T: GcCapture;
 
     /// Mutably borrows the wrapped value with generational barrier only.
     ///
     /// **Barrier Type**: Generational only
     ///
-    /// This is an escape hatch for performance-critical code where incremental
-    /// barrier overhead is measurable. The SATB barrier is skipped.
+    /// This is an escape hatch for performance-critical code where SATB
+    /// barrier overhead is measurable. No SATB recording is performed.
     ///
     /// **Warning**: Using this on types containing GC pointers during incremental
     /// marking may cause reachable objects to be incorrectly collected.
     ///
-    /// **Use Case**: Performance optimization - when SATB is not needed
+    /// **Use Case**: Performance optimization - for types without GC pointers
     ///
     /// # Example
     ///
