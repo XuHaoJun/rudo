@@ -402,30 +402,10 @@ pub trait GcCapture {
     }
 }
 
-use std::cell::UnsafeCell;
-
-thread_local! {
-    static GC_PTR_BUFFER: UnsafeCell<[NonNull<GcBox<()>>; 1]> = const { UnsafeCell::new([
-        NonNull::dangling(),
-    ]) };
-}
-
 impl<T: Trace + 'static> GcCapture for crate::Gc<T> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
-        let raw = self.raw_ptr();
-        if raw.is_null() {
-            &[]
-        } else {
-            unsafe {
-                let nn = NonNull::new_unchecked(raw.cast());
-                GC_PTR_BUFFER.with(|buffer| {
-                    let ptr = buffer.get().cast::<[NonNull<GcBox<()>>; 1]>();
-                    (*ptr)[0] = nn;
-                    std::slice::from_raw_parts((*ptr).as_ptr(), 1)
-                })
-            }
-        }
+        &[]
     }
 
     #[inline]

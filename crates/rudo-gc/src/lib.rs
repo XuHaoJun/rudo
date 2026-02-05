@@ -151,7 +151,7 @@ pub use scan::scan_heap_region_conservatively;
 pub use trace::{Trace, Visitor};
 pub use trace_closure::TraceClosure;
 
-// Re-export derive macro when feature is enabled
+// Re-export derive macros when feature is enabled
 #[cfg(feature = "derive")]
 pub use rudo_gc_derive::Trace;
 
