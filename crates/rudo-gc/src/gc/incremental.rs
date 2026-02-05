@@ -64,6 +64,7 @@ pub enum FallbackReason {
     DirtyPagesExceeded = 1,
     SliceTimeout = 2,
     WorklistUnbounded = 3,
+    SatbBufferOverflow = 4,
 }
 
 impl FallbackReason {
@@ -73,6 +74,7 @@ impl FallbackReason {
             1 => Self::DirtyPagesExceeded,
             2 => Self::SliceTimeout,
             3 => Self::WorklistUnbounded,
+            4 => Self::SatbBufferOverflow,
             _ => Self::None,
         }
     }
@@ -151,6 +153,7 @@ pub struct IncrementalMarkState {
     stats: MarkStats,
     fallback_requested: AtomicBool,
     root_count: AtomicUsize,
+    max_worklist_size: AtomicUsize,
     slice_start_time: Mutex<Option<Instant>>,
     slice_counter: AtomicUsize,
     rendezvous_ack_counter: AtomicUsize,
@@ -245,6 +248,7 @@ impl IncrementalMarkState {
             stats: MarkStats::new(),
             fallback_requested: AtomicBool::new(false),
             root_count: AtomicUsize::new(0),
+            max_worklist_size: AtomicUsize::new(0),
             slice_start_time: Mutex::new(None),
             slice_counter: AtomicUsize::new(0),
             rendezvous_ack_counter: AtomicUsize::new(0),
@@ -353,10 +357,23 @@ impl IncrementalMarkState {
 
     pub fn set_root_count(&self, count: usize) {
         self.root_count.store(count, Ordering::SeqCst);
+        self.max_worklist_size.store(count, Ordering::SeqCst);
     }
 
     pub fn root_count(&self) -> usize {
         self.root_count.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    fn update_max_worklist_size(&self, size: usize) {
+        let current_max = self.max_worklist_size.load(Ordering::SeqCst);
+        if size > current_max {
+            self.max_worklist_size.store(size, Ordering::SeqCst);
+        }
+    }
+
+    fn max_worklist_size(&self) -> usize {
+        self.max_worklist_size.load(Ordering::SeqCst)
     }
 
     pub fn slice_counter(&self) -> usize {
@@ -443,6 +460,7 @@ fn stop_all_mutators_for_snapshot() {
         let active = registry
             .active_count
             .load(std::sync::atomic::Ordering::Acquire);
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
         let ack_count = state.rendezvous_ack_count();
         let thread_count = registry.threads.len();
 
@@ -593,6 +611,8 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
 
     let slice_elapsed = state.slice_elapsed_ms();
     let worklist_size = state.worklist_len();
+    state.update_max_worklist_size(worklist_size);
+    let max_size = state.max_worklist_size();
     let root_count = state.root_count();
 
     if dirty_pages > config.max_dirty_pages {
@@ -609,7 +629,7 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
         };
     }
 
-    if root_count > 0 && worklist_size > root_count * 10 {
+    if max_size > 0 && worklist_size > max_size.saturating_mul(10) {
         state.request_fallback(FallbackReason::WorklistUnbounded);
         return MarkSliceResult::Fallback {
             reason: FallbackReason::WorklistUnbounded,

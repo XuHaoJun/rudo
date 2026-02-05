@@ -1527,11 +1527,25 @@ impl LocalHeap {
 
     /// Record an old pointer value for SATB preservation.
     /// Called during write barrier before a pointer is overwritten.
-    pub fn record_satb_old_value(&mut self, gc_box: NonNull<GcBox<()>>) {
+    ///
+    /// Returns `true` if the value was stored successfully, `false` if the buffer
+    /// overflowed and fallback was requested.
+    pub fn record_satb_old_value(&mut self, gc_box: NonNull<GcBox<()>>) -> bool {
         self.satb_old_values.push(gc_box);
         if self.satb_old_values.len() >= self.satb_buffer_capacity {
-            let _ = self.flush_satb_buffer();
+            self.satb_buffer_overflowed()
+        } else {
+            true
         }
+    }
+
+    fn satb_buffer_overflowed(&mut self) -> bool {
+        let flushed = std::mem::take(&mut self.satb_old_values);
+        if !flushed.is_empty() {
+            crate::gc::incremental::IncrementalMarkState::global()
+                .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
+        }
+        false
     }
 
     /// Flush the SATB buffer, returning captured old values.

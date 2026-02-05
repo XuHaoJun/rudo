@@ -138,7 +138,9 @@ impl<T: ?Sized> GcCell<T> {
                 if !gc_ptrs.is_empty() {
                     crate::heap::with_heap(|heap| {
                         for gc_ptr in gc_ptrs {
-                            heap.record_satb_old_value(gc_ptr);
+                            if !heap.record_satb_old_value(gc_ptr) {
+                                break;
+                            }
                         }
                     });
                 }
@@ -567,7 +569,11 @@ impl<T: GcCapture + ?Sized> GcCapture for GcCell<T> {
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
         unsafe {
-            let value = &*self.inner.as_ptr();
+            let ptr = self.inner.as_ptr();
+            if ptr.is_null() {
+                return;
+            }
+            let value = &*ptr;
             value.capture_gc_ptrs_into(ptrs);
         }
     }

@@ -241,6 +241,9 @@ fn log_fallback_reason(reason: FallbackReason) {
         FallbackReason::WorklistUnbounded => {
             eprintln!("[GC] Incremental marking fallback: worklist grew unbounded");
         }
+        FallbackReason::SatbBufferOverflow => {
+            eprintln!("[GC] Incremental marking fallback: SATB buffer overflowed");
+        }
     }
 }
 
