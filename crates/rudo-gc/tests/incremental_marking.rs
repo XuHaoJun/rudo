@@ -273,15 +273,15 @@ fn test_worklist_size_tracking() {
 }
 
 #[test]
-fn test_initial_worklist_size() {
+fn test_root_count() {
     test_util::reset();
 
     let state = IncrementalMarkState::global();
 
-    assert_eq!(state.initial_worklist_size(), 0);
+    assert_eq!(state.root_count(), 0);
 
-    state.set_initial_worklist_size(5000);
-    assert_eq!(state.initial_worklist_size(), 5000);
+    state.set_root_count(5000);
+    assert_eq!(state.root_count(), 5000);
 }
 
 #[test]

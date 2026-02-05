@@ -149,7 +149,7 @@ pub struct IncrementalMarkState {
     config: Mutex<IncrementalConfig>,
     stats: MarkStats,
     fallback_requested: AtomicBool,
-    initial_worklist_size: AtomicUsize,
+    root_count: AtomicUsize,
     slice_start_time: Mutex<Option<Instant>>,
     slice_counter: AtomicUsize,
 }
@@ -241,7 +241,7 @@ impl IncrementalMarkState {
             config: Mutex::new(IncrementalConfig::default()),
             stats: MarkStats::new(),
             fallback_requested: AtomicBool::new(false),
-            initial_worklist_size: AtomicUsize::new(0),
+            root_count: AtomicUsize::new(0),
             slice_start_time: Mutex::new(None),
             slice_counter: AtomicUsize::new(0),
         }
@@ -347,12 +347,12 @@ impl IncrementalMarkState {
         self.fallback_requested.store(false, Ordering::SeqCst);
     }
 
-    pub fn set_initial_worklist_size(&self, size: usize) {
-        self.initial_worklist_size.store(size, Ordering::SeqCst);
+    pub fn set_root_count(&self, count: usize) {
+        self.root_count.store(count, Ordering::SeqCst);
     }
 
-    pub fn initial_worklist_size(&self) -> usize {
-        self.initial_worklist_size.load(Ordering::SeqCst)
+    pub fn root_count(&self) -> usize {
+        self.root_count.load(Ordering::SeqCst)
     }
 
     pub fn slice_counter(&self) -> usize {
@@ -381,6 +381,7 @@ impl IncrementalMarkState {
         self.reset_fallback();
         self.stats().reset();
         *self.slice_start_time.lock() = None;
+        self.root_count.store(0, Ordering::SeqCst);
     }
 }
 
@@ -433,7 +434,6 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
     state.set_phase(MarkPhase::Snapshot);
     state.stats().reset();
     state.reset_fallback();
-    state.set_initial_worklist_size(state.worklist_len());
     state.reset_worklist();
 
     let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
@@ -474,14 +474,15 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
         state.push_work(ptr);
     }
 
-    let root_count = state.worklist_len();
+    let count = state.worklist_len();
+    state.set_root_count(count);
     state.set_phase(MarkPhase::Marking);
     debug_assert!(
         write_barrier_needed(),
         "Write barrier must be active before resuming mutators"
     );
     state.start_slice();
-    root_count
+    count
 }
 
 #[allow(clippy::significant_drop_tightening)]
@@ -554,7 +555,7 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
 
     let slice_elapsed = state.slice_elapsed_ms();
     let worklist_size = state.worklist_len();
-    let initial_size = state.initial_worklist_size();
+    let root_count = state.root_count();
 
     if dirty_pages > config.max_dirty_pages {
         state.request_fallback(FallbackReason::DirtyPagesExceeded);
@@ -570,7 +571,7 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
         };
     }
 
-    if initial_size > 0 && worklist_size > initial_size * 10 {
+    if root_count > 0 && worklist_size > root_count * 10 {
         state.request_fallback(FallbackReason::WorklistUnbounded);
         return MarkSliceResult::Fallback {
             reason: FallbackReason::WorklistUnbounded,

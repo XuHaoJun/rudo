@@ -141,13 +141,31 @@ fn test_mark_slice_fallback_on_worklist_growth() {
 
     let state = IncrementalMarkState::global();
     state.set_phase(MarkPhase::Marking);
-    state.set_initial_worklist_size(10);
+    state.set_root_count(10);
 
     for _ in 0..150 {
         state.push_work(std::ptr::NonNull::dangling());
     }
 
     assert!(state.worklist_len() > 10 * 10);
+}
+
+#[test]
+fn test_no_fallback_on_normal_root_discovery() {
+    use rudo_gc::gc::incremental::{IncrementalMarkState, MarkPhase};
+
+    test_util::reset();
+
+    let state = IncrementalMarkState::global();
+    state.set_phase(MarkPhase::Marking);
+    state.set_root_count(1000);
+
+    for _ in 0..1500 {
+        state.push_work(std::ptr::NonNull::dangling());
+    }
+
+    assert!(state.worklist_len() > state.root_count());
+    assert!(state.worklist_len() <= state.root_count() * 10);
 }
 
 #[test]
