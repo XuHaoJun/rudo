@@ -104,7 +104,7 @@
 - [X] T048 [US2] Implement `write_barrier_needed()` helper function in `crates/rudo-gc/src/gc/gc.rs` for fast path checks
 - [ ] T043-FIX [US2-BUGFIX] Fix `incremental_write_barrier()` in `crates/rudo-gc/src/cell.rs` to capture old Gc pointer values (not page addresses) for SATB correctness
 - [ ] T044-FIX [US2-BUGFIX] Implement true SATB recording in `GcCell::borrow_mut()` to call `heap.record_satb_old_value()` with old pointer before overwrite
-- [ ] T045-FIX [US2-BUGFIX] Implement Dijkstra insertion barrier in `GcCell::borrow_mut()` to mark new Gc pointer values immediately via `mark_object_black()`
+- [X] T045-FIX [US2-BUGFIX] Implement Dijkstra insertion barrier in `GcCell::borrow_mut()` to mark new Gc pointer values immediately via `mark_object_black()`
 - [ ] T049-FIX [US2-BUGFIX] Add SATB correctness test in `crates/rudo-gc/tests/incremental_write_barrier.rs` for mutation during incremental marking
 - [X] T049 [US2] Modify allocation path in `crates/rudo-gc/src/ptr.rs` to mark new objects black when `is_incremental_marking_active()`
 - [X] T050 [US2] Integrate dirty page snapshot processing in `mark_slice()` in `crates/rudo-gc/src/gc/incremental.rs` to scan dirty pages when worklist empty
@@ -281,16 +281,20 @@ With multiple developers:
 ## Summary
 
 - **Total Tasks**: 77
-- **Completed**: 77 (100%)
-- **Remaining**: 0 (0%)
+- **Completed**: 74 (96%)
+- **Remaining**: 3 (4%)
 
 ### By Phase
 
 - **Setup & Foundational (Phase 1-2)**: 11/11 ✅
 - **User Story 1 (Phase 3)**: 22/22 ✅
-- **User Story 2 (Phase 4)**: 23/23 ✅ (COMPLETE!)
+- **User Story 2 (Phase 4)**: 20/23 ✅ (3 BUGFIX tasks remaining: T043-FIX, T044-FIX, T049-FIX)
 - **User Story 3 (Phase 5)**: 9/9 ✅
-- **Integration & Polish (Phase 6)**: 12/12 ✅ (ALL COMPLETE!)
+- **Integration & Polish (Phase 6)**: 12/12 ✅
+
+### Completed Bug Fixes (This Iteration)
+
+- T045-FIX ✅ Implement Dijkstra insertion barrier in `GcCell::borrow_mut()`
 
 ### Test Coverage
 

@@ -10,6 +10,7 @@ use crate::ptr::GcBox;
 use crate::trace::Trace;
 use std::cell::{Ref, RefCell, RefMut};
 use std::ptr::NonNull;
+use std::sync::atomic::Ordering;
 
 /// A memory location with interior mutability that triggers a write barrier.
 ///
@@ -147,7 +148,26 @@ impl<T: ?Sized> GcCell<T> {
         self.generational_write_barrier(ptr);
         self.incremental_write_barrier(ptr);
 
-        self.inner.borrow_mut()
+        let result = self.inner.borrow_mut();
+
+        if crate::gc::incremental::is_incremental_marking_active() {
+            unsafe {
+                let new_value = &*result;
+                let mut new_gc_ptrs = Vec::with_capacity(32);
+                new_value.capture_gc_ptrs_into(&mut new_gc_ptrs);
+                if !new_gc_ptrs.is_empty() {
+                    crate::heap::with_heap(|_heap| {
+                        for gc_ptr in new_gc_ptrs {
+                            let _ = crate::gc::incremental::mark_object_black(
+                                gc_ptr.as_ptr() as *const u8
+                            );
+                        }
+                    });
+                }
+            }
+        }
+
+        result
     }
 
     /// Mutably borrows the wrapped value with SATB barrier.
@@ -268,7 +288,13 @@ impl<T: ?Sized> GcCell<T> {
             return;
         }
 
+        std::sync::atomic::fence(Ordering::AcqRel);
+
         unsafe {
+            if state.fallback_requested() {
+                return;
+            }
+
             let header = ptr_to_page_header(ptr);
             if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
                 return;

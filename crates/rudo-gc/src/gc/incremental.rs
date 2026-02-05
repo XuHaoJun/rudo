@@ -540,7 +540,7 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
         };
     }
 
-    let snapshot_count = heap.take_dirty_pages_snapshot();
+    heap.take_dirty_pages_snapshot();
 
     let mut objects_marked = 0;
 
@@ -583,12 +583,11 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
         .fetch_add(dirty_scanned, Ordering::SeqCst);
 
     let total_marked = objects_marked.saturating_add(dirty_scanned);
-    objects_marked = total_marked.min(state.worklist_len());
     state.stats().slices_executed.fetch_add(1, Ordering::SeqCst);
     state
         .stats()
         .objects_marked
-        .fetch_add(objects_marked, Ordering::SeqCst);
+        .fetch_add(total_marked, Ordering::SeqCst);
 
     let dirty_pages = count_dirty_pages(heap);
 
