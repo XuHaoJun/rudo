@@ -153,6 +153,7 @@ pub struct IncrementalMarkState {
     root_count: AtomicUsize,
     slice_start_time: Mutex<Option<Instant>>,
     slice_counter: AtomicUsize,
+    rendezvous_ack_counter: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -246,6 +247,7 @@ impl IncrementalMarkState {
             root_count: AtomicUsize::new(0),
             slice_start_time: Mutex::new(None),
             slice_counter: AtomicUsize::new(0),
+            rendezvous_ack_counter: AtomicUsize::new(0),
         }
     }
 
@@ -385,6 +387,19 @@ impl IncrementalMarkState {
         self.stats().reset();
         *self.slice_start_time.lock() = None;
         self.root_count.store(0, Ordering::SeqCst);
+        self.rendezvous_ack_counter.store(0, Ordering::SeqCst);
+    }
+
+    pub fn increment_rendezvous_ack(&self) -> usize {
+        self.rendezvous_ack_counter.fetch_add(1, Ordering::AcqRel)
+    }
+
+    pub fn rendezvous_ack_count(&self) -> usize {
+        self.rendezvous_ack_counter.load(Ordering::Acquire)
+    }
+
+    pub fn reset_rendezvous_ack(&self) {
+        self.rendezvous_ack_counter.store(0, Ordering::Release);
     }
 }
 
@@ -409,14 +424,17 @@ pub fn write_barrier_needed() -> bool {
 
 #[allow(clippy::significant_drop_tightening)]
 fn stop_all_mutators_for_snapshot() {
+    let state = IncrementalMarkState::global();
     let registry = crate::heap::thread_registry().lock().unwrap();
 
-    crate::heap::GC_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+    crate::heap::GC_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
 
     for tcb in &registry.threads {
         tcb.gc_requested
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+            .store(true, std::sync::atomic::Ordering::Release);
     }
+
+    state.increment_rendezvous_ack();
 
     drop(registry);
 
@@ -425,22 +443,26 @@ fn stop_all_mutators_for_snapshot() {
         let active = registry
             .active_count
             .load(std::sync::atomic::Ordering::Acquire);
+        let ack_count = state.rendezvous_ack_count();
+        let thread_count = registry.threads.len();
 
-        if active == 1 {
+        if active == 1 && ack_count == thread_count {
             break;
         }
     }
 }
 
 fn resume_all_mutators() {
+    let state = IncrementalMarkState::global();
     let registry = crate::heap::thread_registry().lock().unwrap();
     for tcb in &registry.threads {
         tcb.gc_requested
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+            .store(false, std::sync::atomic::Ordering::Release);
         tcb.park_cond.notify_all();
     }
     drop(registry);
-    crate::heap::GC_REQUESTED.store(false, std::sync::atomic::Ordering::Relaxed);
+    crate::heap::GC_REQUESTED.store(false, std::sync::atomic::Ordering::Release);
+    state.reset_rendezvous_ack();
 }
 
 pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
@@ -727,13 +749,15 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
     for i in 0..obj_count {
         if (*header).is_allocated(i) && !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
-            #[allow(clippy::cast_ptr_alignment)]
-            #[allow(clippy::unnecessary_cast)]
-            #[allow(clippy::ptr_as_ptr)]
-            let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-            if let Some(gc_box) = NonNull::new(gc_box_ptr) {
-                let ptr = IncrementalMarkState::global();
-                ptr.push_work(gc_box);
+            if (*header).set_mark(i) {
+                #[allow(clippy::cast_ptr_alignment)]
+                #[allow(clippy::unnecessary_cast)]
+                #[allow(clippy::ptr_as_ptr)]
+                let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                if let Some(gc_box) = NonNull::new(gc_box_ptr) {
+                    let ptr = IncrementalMarkState::global();
+                    ptr.push_work(gc_box);
+                }
             }
         }
     }
