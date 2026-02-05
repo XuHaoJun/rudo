@@ -609,7 +609,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "rudo-gc"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "criterion",
  "crossbeam",
@@ -627,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "rudo-gc-derive"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "rudo-gc-tokio-derive"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "sys_alloc"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "libc",
  "tempfile",
