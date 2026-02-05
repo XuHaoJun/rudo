@@ -515,12 +515,17 @@ pub fn derive_gc_cell(input: proc_macro::TokenStream) -> proc_macro::TokenStream
     }
 
     let name = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let gc_fields = match &input.data {
+        Data::Struct(struct_data) => analyze_struct_fields(&struct_data.fields),
+        _ => Vec::new(),
+    };
+
+    let generics = add_gc_capture_bounds(&rudo_gc, input.generics, &gc_fields);
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     match &input.data {
-        Data::Struct(struct_data) => {
-            let gc_fields = analyze_struct_fields(&struct_data.fields);
-
+        Data::Struct(_struct_data) => {
             if gc_fields.is_empty() {
                 let gc_capture_body = generate_empty_gc_capture_body(&rudo_gc);
                 let expanded = quote! {
@@ -700,4 +705,80 @@ fn generate_empty_gc_capture_body(rudo_gc: &syn::Path) -> TokenStream {
             // No Gc<T> fields - nothing to capture
         }
     }
+}
+
+/// Checks if a type contains a specific type parameter.
+fn type_contains_param(ty: &syn::Type, target_param: &syn::Ident) -> bool {
+    match ty {
+        syn::Type::Path(syn::TypePath { qself: None, path }) => {
+            if path.segments.len() == 1 && path.segments[0].ident == *target_param {
+                return true;
+            }
+            for seg in &path.segments {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    for arg in &args.args {
+                        if let syn::GenericArgument::Type(inner_ty) = arg {
+                            if type_contains_param(inner_ty, target_param) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        }
+        syn::Type::Array(syn::TypeArray { elem, .. })
+        | syn::Type::Slice(syn::TypeSlice { elem, .. }) => type_contains_param(elem, target_param),
+        syn::Type::Tuple(syn::TypeTuple { elems, .. }) => {
+            elems.iter().any(|t| type_contains_param(t, target_param))
+        }
+        syn::Type::Reference(syn::TypeReference { elem, .. }) => {
+            type_contains_param(elem, target_param)
+        }
+        syn::Type::BareFn(syn::TypeBareFn { inputs, output, .. }) => {
+            inputs
+                .iter()
+                .any(|arg| type_contains_param(&arg.ty, target_param))
+                || match output {
+                    syn::ReturnType::Default => false,
+                    syn::ReturnType::Type(_, ty) => type_contains_param(ty, target_param),
+                }
+        }
+        _ => false,
+    }
+}
+
+/// Adds `GcCapture` bounds to type parameters that appear in Gc-containing fields.
+fn add_gc_capture_bounds(
+    rudo_gc: &Path,
+    mut generics: Generics,
+    gc_fields: &[FieldInfo],
+) -> Generics {
+    for param in &mut generics.params {
+        if let GenericParam::Type(ref mut type_param) = *param {
+            let needs_gc_capture = gc_fields
+                .iter()
+                .any(|field| type_contains_param(field.ty, &type_param.ident));
+
+            if needs_gc_capture {
+                let has_gc_capture = type_param.bounds.iter().any(|b| {
+                    if let syn::TypeParamBound::Trait(t) = b {
+                        t.path
+                            .segments
+                            .last()
+                            .is_some_and(|s| s.ident == "GcCapture")
+                    } else {
+                        false
+                    }
+                });
+
+                if !has_gc_capture {
+                    type_param
+                        .bounds
+                        .push(parse_quote!(#rudo_gc::cell::GcCapture));
+                }
+            }
+        }
+    }
+    generics
 }
