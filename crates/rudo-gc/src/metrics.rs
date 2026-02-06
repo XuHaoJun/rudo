@@ -377,6 +377,7 @@ const HISTORY_SIZE: usize = 64;
 ///
 /// let history = gc_history();
 /// println!("Total recorded: {}", history.total_recorded());
+/// println!("Average pause (last 10): {:?}", history.average_pause_time(10));
 /// ```
 #[derive(Debug)]
 pub struct GcHistory {
@@ -444,6 +445,18 @@ impl GcHistory {
     ///
     /// Returns at most N entries, newest first, capped by both the
     /// number of entries recorded and the buffer size.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::gc_history;
+    ///
+    /// let history = gc_history();
+    /// let recent = history.recent(10); // Get last 10 collections
+    /// for metrics in recent {
+    ///     println!("Duration: {:?}", metrics.duration);
+    /// }
+    /// ```
     #[must_use]
     pub fn recent(&self, n: usize) -> Vec<GcMetrics> {
         let total = self.total_recorded();
@@ -472,6 +485,16 @@ impl GcHistory {
     /// Compute the average pause time from the most recent N collections.
     ///
     /// Returns `Duration::ZERO` if no collections have been recorded.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::gc_history;
+    ///
+    /// let history = gc_history();
+    /// let avg = history.average_pause_time(10);
+    /// println!("Average GC pause (last 10): {:?}", avg);
+    /// ```
     #[inline]
     #[must_use]
     pub fn average_pause_time(&self, n: usize) -> Duration {
@@ -492,6 +515,16 @@ impl GcHistory {
     /// Get the maximum pause time from the most recent N collections.
     ///
     /// Returns `Duration::ZERO` if no collections have been recorded.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::gc_history;
+    ///
+    /// let history = gc_history();
+    /// let max = history.max_pause_time(10);
+    /// println!("Max GC pause (last 10): {:?}", max);
+    /// ```
     #[inline]
     #[must_use]
     pub fn max_pause_time(&self, n: usize) -> Duration {

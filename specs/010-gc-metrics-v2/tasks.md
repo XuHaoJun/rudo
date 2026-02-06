@@ -196,17 +196,17 @@
 
 **Purpose**: Documentation, validation, and final integration
 
-- [ ] T070 [P] Add doc comments with examples to all public items in `crates/rudo-gc/src/metrics.rs`
-- [ ] T071 [P] Add doc comments with examples to `GlobalMetrics` accessor methods in `crates/rudo-gc/src/metrics.rs`
-- [ ] T072 [P] Add doc comments with examples to `GcHistory` methods in `crates/rudo-gc/src/metrics.rs`
-- [ ] T073 [P] Add doc comments to heap query functions in `crates/rudo-gc/src/metrics.rs`
-- [ ] T074 Run `cargo fmt --all` and verify formatting
-- [ ] T075 Run `./clippy.sh` and fix all warnings
-- [ ] T076 Run `./test.sh` and verify all tests pass
-- [ ] T077 Run `./miri-test.sh` for `GcHistory` UnsafeCell safety verification
-- [ ] T078 Verify backward compatibility - existing code using `last_gc_metrics()` still works
-- [ ] T079 Verify all re-exports in `lib.rs` are correct and complete
-- [ ] T080 Run quickstart.md validation checklist
+- [x] T070 [P] Add doc comments with examples to all public items in `crates/rudo-gc/src/metrics.rs`
+- [x] T071 [P] Add doc comments with examples to `GlobalMetrics` accessor methods in `crates/rudo-gc/src/metrics.rs`
+- [x] T072 [P] Add doc comments with examples to `GcHistory` methods in `crates/rudo-gc/src/metrics.rs`
+- [x] T073 [P] Add doc comments to heap query functions in `crates/rudo-gc/src/metrics.rs`
+- [x] T074 Run `cargo fmt --all` and verify formatting
+- [x] T075 Run `./clippy.sh` and fix all warnings (0 warnings)
+- [x] T076 Run `./test.sh` and verify all tests pass (22 metrics tests + all project tests)
+- [x] T077 Run `./miri-test.sh` for `GcHistory` UnsafeCell safety verification (86 tests passed)
+- [x] T078 Verify backward compatibility - existing code using `last_gc_metrics()` still works (tests pass)
+- [x] T079 Verify all re-exports in `lib.rs` are correct and complete (`global_metrics`, `gc_history`, `GlobalMetrics`, `GcHistory`, heap queries all exported)
+- [x] T080 Run quickstart.md validation checklist (all checklist items passed)
 
 ---
 
