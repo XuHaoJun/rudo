@@ -44,6 +44,31 @@ struct PendingDrop {
 // Collection statistics
 // ============================================================================
 
+/// Result type returned by collection functions.
+///
+/// Contains the number of objects reclaimed, phase timing information,
+/// and the actual collection type that was performed.
+#[derive(Debug, Clone, Copy)]
+struct CollectResult {
+    /// Number of objects reclaimed during the collection.
+    objects_reclaimed: usize,
+    /// Phase timing data from the collection.
+    timer: crate::metrics::PhaseTimer,
+    /// The actual collection type performed (Major or `IncrementalMajor`).
+    collection_type: crate::metrics::CollectionType,
+}
+
+impl CollectResult {
+    /// Create a new `CollectResult` with zero values.
+    const fn new() -> Self {
+        Self {
+            objects_reclaimed: 0,
+            timer: crate::metrics::PhaseTimer::new(),
+            collection_type: crate::metrics::CollectionType::None,
+        }
+    }
+}
+
 /// Statistics about the current heap state, used to determine when to collect.
 #[derive(Debug, Clone, Copy)]
 pub struct CollectInfo {
@@ -281,6 +306,8 @@ pub fn collect() {
     clippy::if_not_else
 )]
 fn perform_multi_threaded_collect() {
+    use std::time::Instant;
+
     #[cfg(feature = "tracing")]
     let gc_id = next_gc_id();
     #[cfg(feature = "tracing")]
@@ -290,13 +317,19 @@ fn perform_multi_threaded_collect() {
 
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     // Reset drop counter
     N_DROPS.with(|n| n.set(0));
 
     let mut objects_reclaimed = 0;
+
+    // Phase timer for recording phase durations
+    let mut clear_duration = std::time::Duration::ZERO;
+    let mut mark_duration = std::time::Duration::ZERO;
+    let mut sweep_duration = std::time::Duration::ZERO;
+    let mut total_objects_marked: usize = 0;
 
     // CRITICAL FIX: Set global gc_in_progress flag BEFORE taking thread snapshot
     // This ensures new threads can detect that GC is in progress and avoid
@@ -338,11 +371,13 @@ fn perform_multi_threaded_collect() {
         #[cfg(feature = "tracing")]
         log_phase_start(GcPhase::Clear, before_bytes);
 
+        let clear_start = Instant::now();
         for tcb in &tcbs {
             unsafe {
                 clear_all_marks_and_dirty(&*tcb.heap.get());
             }
         }
+        clear_duration = clear_start.elapsed();
 
         #[cfg(feature = "tracing")]
         log_phase_end(GcPhase::Clear, 0);
@@ -354,8 +389,8 @@ fn perform_multi_threaded_collect() {
         log_phase_start(GcPhase::Mark, before_bytes);
 
         // We mark from each heap's perspective to ensure we find all cross-heap references
+        let mark_start = Instant::now();
         super::sync::GC_MARK_IN_PROGRESS.store(true, std::sync::atomic::Ordering::Release);
-        let mut total_objects_marked: usize = 0;
         for tcb in &tcbs {
             unsafe {
                 total_objects_marked = total_objects_marked.saturating_add(mark_major_roots_multi(
@@ -365,6 +400,7 @@ fn perform_multi_threaded_collect() {
             }
         }
         super::sync::GC_MARK_IN_PROGRESS.store(false, std::sync::atomic::Ordering::Release);
+        mark_duration = mark_start.elapsed();
 
         #[cfg(feature = "tracing")]
         log_phase_end_mark(GcPhase::Mark, total_objects_marked);
@@ -381,6 +417,7 @@ fn perform_multi_threaded_collect() {
         #[cfg(feature = "tracing")]
         log_phase_start(GcPhase::Sweep, before_bytes);
 
+        let sweep_start = Instant::now();
         for tcb in &tcbs {
             unsafe {
                 #[cfg(feature = "lazy-sweep")]
@@ -440,6 +477,7 @@ fn perform_multi_threaded_collect() {
         }
 
         crate::heap::sweep_orphan_pages();
+        sweep_duration = sweep_start.elapsed();
 
         #[cfg(feature = "tracing")]
         log_phase_end(
@@ -451,11 +489,14 @@ fn perform_multi_threaded_collect() {
     } else {
         // Minor GC doesn't have cross-heap issues since it only scans young objects
         // and uses remembered sets for inter-generational references
+        let minor_start = Instant::now();
         for tcb in &tcbs {
             unsafe {
                 objects_reclaimed += collect_minor_multi(&mut *tcb.heap.get(), &all_stack_roots);
             }
         }
+        // For minor collections, record total time as sweep duration (no clear phase)
+        sweep_duration = minor_start.elapsed();
     }
 
     let collection_type = if total_size > MAJOR_THRESHOLD {
@@ -467,6 +508,29 @@ fn perform_multi_threaded_collect() {
     let duration = start.elapsed();
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
+    // Get incremental stats (for multi-threaded, these are 0 since incremental marking
+    // is handled differently in single-threaded context)
+    let mark_stats = crate::gc::incremental::IncrementalMarkState::global().stats();
+    let incremental_stats = (
+        mark_stats
+            .objects_marked
+            .load(std::sync::atomic::Ordering::Relaxed),
+        mark_stats
+            .dirty_pages_scanned
+            .load(std::sync::atomic::Ordering::Relaxed),
+        mark_stats
+            .slices_executed
+            .load(std::sync::atomic::Ordering::Relaxed),
+        mark_stats
+            .fallback_occurred
+            .load(std::sync::atomic::Ordering::Relaxed),
+        crate::metrics::FallbackReason::from_u32(
+            mark_stats
+                .fallback_reason
+                .load(std::sync::atomic::Ordering::Relaxed),
+        ),
+    );
+
     crate::metrics::record_metrics(crate::metrics::GcMetrics {
         duration,
         bytes_reclaimed: before_bytes.saturating_sub(after_bytes),
@@ -475,6 +539,14 @@ fn perform_multi_threaded_collect() {
         objects_surviving: N_EXISTING.with(Cell::get),
         collection_type,
         total_collections: 0,
+        clear_duration,
+        mark_duration,
+        sweep_duration,
+        objects_marked: incremental_stats.0,
+        dirty_pages_scanned: incremental_stats.1,
+        slices_executed: incremental_stats.2,
+        fallback_occurred: incremental_stats.3,
+        fallback_reason: incremental_stats.4,
     });
 
     crate::heap::resume_all_threads();
@@ -563,18 +635,13 @@ fn perform_single_threaded_collect_with_wake() {
     // Reset drop counter
     N_DROPS.with(|n| n.set(0));
 
-    let mut objects_reclaimed = 0;
-    let mut collection_type = crate::metrics::CollectionType::None;
-
-    crate::heap::with_heap(|heap| {
+    let result = crate::heap::with_heap(|heap| {
         let total_size = heap.total_allocated();
 
         if total_size > MAJOR_THRESHOLD {
-            collection_type = crate::metrics::CollectionType::Major;
-            objects_reclaimed = collect_major(heap);
+            collect_major(heap)
         } else {
-            collection_type = crate::metrics::CollectionType::Minor;
-            objects_reclaimed = collect_minor(heap);
+            collect_minor(heap)
         }
     });
 
@@ -610,15 +677,50 @@ fn perform_single_threaded_collect_with_wake() {
 
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
+    // Get incremental stats if this was an incremental collection
+    let mark_stats = crate::gc::incremental::IncrementalMarkState::global().stats();
+    let incremental_stats =
+        if result.collection_type == crate::metrics::CollectionType::IncrementalMajor {
+            (
+                mark_stats
+                    .objects_marked
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                mark_stats
+                    .dirty_pages_scanned
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                mark_stats
+                    .slices_executed
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                mark_stats
+                    .fallback_occurred
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                crate::metrics::FallbackReason::from_u32(
+                    mark_stats
+                        .fallback_reason
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                ),
+            )
+        } else {
+            (0, 0, 0, false, crate::metrics::FallbackReason::None)
+        };
+
     // Record metrics
     let metrics = crate::metrics::GcMetrics {
         duration,
         bytes_reclaimed: before_bytes.saturating_sub(after_bytes),
         bytes_surviving: after_bytes,
-        objects_reclaimed,
+        objects_reclaimed: result.objects_reclaimed,
         objects_surviving: 0, // Could be calculated if needed
-        collection_type,
+        collection_type: result.collection_type,
         total_collections: 0, // Will be set by record_metrics
+        clear_duration: result.timer.clear,
+        mark_duration: result.timer.mark,
+        sweep_duration: result.timer.sweep,
+        objects_marked: incremental_stats.0,
+        dirty_pages_scanned: incremental_stats.1,
+        slices_executed: incremental_stats.2,
+        fallback_occurred: incremental_stats.3,
+        fallback_reason: incremental_stats.4,
     };
     crate::metrics::record_metrics(metrics);
 
@@ -637,24 +739,55 @@ fn perform_single_threaded_collect_full() {
     let start = std::time::Instant::now();
     let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
-    let mut objects_reclaimed = 0;
-
-    crate::heap::with_heap(|heap| {
-        objects_reclaimed = collect_major(heap);
-    });
+    let result = crate::heap::with_heap(collect_major);
 
     let duration = start.elapsed();
 
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
+    // Get incremental stats if this was an incremental collection
+    let mark_stats = crate::gc::incremental::IncrementalMarkState::global().stats();
+    let incremental_stats =
+        if result.collection_type == crate::metrics::CollectionType::IncrementalMajor {
+            (
+                mark_stats
+                    .objects_marked
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                mark_stats
+                    .dirty_pages_scanned
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                mark_stats
+                    .slices_executed
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                mark_stats
+                    .fallback_occurred
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                crate::metrics::FallbackReason::from_u32(
+                    mark_stats
+                        .fallback_reason
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                ),
+            )
+        } else {
+            (0, 0, 0, false, crate::metrics::FallbackReason::None)
+        };
+
     crate::metrics::record_metrics(crate::metrics::GcMetrics {
         duration,
         bytes_reclaimed: before_bytes.saturating_sub(after_bytes),
         bytes_surviving: after_bytes,
-        objects_reclaimed,
+        objects_reclaimed: result.objects_reclaimed,
         objects_surviving: N_EXISTING.with(Cell::get),
-        collection_type: crate::metrics::CollectionType::Major,
+        collection_type: result.collection_type,
         total_collections: 0,
+        clear_duration: result.timer.clear,
+        mark_duration: result.timer.mark,
+        sweep_duration: result.timer.sweep,
+        objects_marked: incremental_stats.0,
+        dirty_pages_scanned: incremental_stats.1,
+        slices_executed: incremental_stats.2,
+        fallback_occurred: incremental_stats.3,
+        fallback_reason: incremental_stats.4,
     });
 
     IN_COLLECT.with(|in_collect| in_collect.set(false));
@@ -666,7 +799,10 @@ fn perform_single_threaded_collect_full() {
 /// - Phase 1: Clear all marks on ALL heaps
 /// - Phase 2: Mark all reachable objects (tracing across all heaps)
 /// - Phase 3: Sweep ALL heaps
+#[allow(clippy::too_many_lines)]
 fn perform_multi_threaded_collect_full() {
+    use std::time::Instant;
+
     #[cfg(feature = "tracing")]
     let gc_id = next_gc_id();
     #[cfg(feature = "tracing")]
@@ -674,7 +810,7 @@ fn perform_multi_threaded_collect_full() {
 
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     // Reset drop counter
@@ -682,12 +818,19 @@ fn perform_multi_threaded_collect_full() {
 
     let mut objects_reclaimed = 0;
 
+    // Phase timers
+    let mut clear_duration = std::time::Duration::ZERO;
+    let mut mark_duration = std::time::Duration::ZERO;
+    let mut sweep_duration = std::time::Duration::ZERO;
+    let mut total_objects_marked: usize = 0;
+
     #[cfg(feature = "tracing")]
     let _clear_span = trace_phase(GcPhase::Clear);
     #[cfg(feature = "tracing")]
     log_phase_start(GcPhase::Clear, before_bytes);
 
     // CRITICAL FIX: Set global gc_in_progress flag BEFORE taking thread snapshot
+    let clear_start = Instant::now();
     crate::heap::thread_registry()
         .lock()
         .unwrap()
@@ -703,6 +846,7 @@ fn perform_multi_threaded_collect_full() {
             roots.into_iter().map(move |ptr| (ptr, tcb.clone()))
         })
         .collect();
+    clear_duration = clear_start.elapsed();
 
     // CRITICAL FIX: Use three-phase approach to correctly handle cross-heap references.
     // The old approach processed each heap independently, which caused marks on other
@@ -717,7 +861,7 @@ fn perform_multi_threaded_collect_full() {
     #[cfg(feature = "tracing")]
     log_phase_start(GcPhase::Mark, before_bytes);
 
-    let mut total_objects_marked: usize = 0;
+    let mark_start = Instant::now();
     for tcb in &tcbs {
         unsafe {
             total_objects_marked = total_objects_marked.saturating_add(mark_major_roots_multi(
@@ -726,6 +870,7 @@ fn perform_multi_threaded_collect_full() {
             ));
         }
     }
+    mark_duration = mark_start.elapsed();
 
     #[cfg(feature = "tracing")]
     log_phase_end_mark(GcPhase::Mark, total_objects_marked);
@@ -740,6 +885,7 @@ fn perform_multi_threaded_collect_full() {
     #[cfg(feature = "tracing")]
     log_phase_start(GcPhase::Sweep, before_bytes);
 
+    let sweep_start = Instant::now();
     for tcb in &tcbs {
         unsafe {
             let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
@@ -751,6 +897,7 @@ fn perform_multi_threaded_collect_full() {
 
     // Sweep orphan pages from terminated threads
     crate::heap::sweep_orphan_pages();
+    sweep_duration = sweep_start.elapsed();
 
     #[cfg(feature = "tracing")]
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
@@ -760,6 +907,28 @@ fn perform_multi_threaded_collect_full() {
     let duration = start.elapsed();
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
+    // Get incremental stats
+    let mark_stats = crate::gc::incremental::IncrementalMarkState::global().stats();
+    let incremental_stats = (
+        mark_stats
+            .objects_marked
+            .load(std::sync::atomic::Ordering::Relaxed),
+        mark_stats
+            .dirty_pages_scanned
+            .load(std::sync::atomic::Ordering::Relaxed),
+        mark_stats
+            .slices_executed
+            .load(std::sync::atomic::Ordering::Relaxed),
+        mark_stats
+            .fallback_occurred
+            .load(std::sync::atomic::Ordering::Relaxed),
+        crate::metrics::FallbackReason::from_u32(
+            mark_stats
+                .fallback_reason
+                .load(std::sync::atomic::Ordering::Relaxed),
+        ),
+    );
+
     crate::metrics::record_metrics(crate::metrics::GcMetrics {
         duration,
         bytes_reclaimed: before_bytes.saturating_sub(after_bytes),
@@ -768,6 +937,14 @@ fn perform_multi_threaded_collect_full() {
         objects_surviving: N_EXISTING.with(Cell::get),
         collection_type: crate::metrics::CollectionType::Major,
         total_collections: 0,
+        clear_duration,
+        mark_duration,
+        sweep_duration,
+        objects_marked: incremental_stats.0,
+        dirty_pages_scanned: incremental_stats.1,
+        slices_executed: incremental_stats.2,
+        fallback_occurred: incremental_stats.3,
+        fallback_reason: incremental_stats.4,
     });
 
     crate::heap::resume_all_threads();
@@ -1280,7 +1457,9 @@ fn mark_major_roots_parallel(
 /// Per spec requirement FR-009: "System MUST prevent minor GC from running during
 /// incremental major marking." This implementation blocks until incremental major
 /// marking completes rather than skipping minor GC entirely.
-fn collect_minor(heap: &mut LocalHeap) -> usize {
+fn collect_minor(heap: &mut LocalHeap) -> CollectResult {
+    let mut timer = CollectResult::new().timer;
+
     #[cfg(feature = "tracing")]
     let gc_id = next_gc_id();
 
@@ -1293,12 +1472,17 @@ fn collect_minor(heap: &mut LocalHeap) -> usize {
 
     let before_bytes = heap.total_allocated();
 
+    // Minor collections skip clear phase (no need to clear marks for young gen)
+    // Mark and sweep are combined for timing purposes
+
     // 1. Mark Phase
     #[cfg(feature = "tracing")]
     let _mark_span = trace_phase(GcPhase::Mark);
     #[cfg(feature = "tracing")]
     log_phase_start(GcPhase::Mark, before_bytes);
 
+    timer.start();
+    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
     let objects_marked = mark_minor_roots(heap);
 
     #[cfg(feature = "tracing")]
@@ -1318,7 +1502,16 @@ fn collect_minor(heap: &mut LocalHeap) -> usize {
 
     // 3. Promotion Phase
     promote_young_pages(heap);
-    reclaimed + reclaimed_large
+
+    // For minor collections, we record mark+sweep together as sweep duration
+    // since there's no clear phase
+    timer.end_sweep();
+
+    CollectResult {
+        objects_reclaimed: reclaimed + reclaimed_large,
+        timer,
+        collection_type: crate::metrics::CollectionType::Minor,
+    }
 }
 
 /// Promote Young Pages to Old Generation.
@@ -1371,7 +1564,7 @@ fn promote_young_pages(heap: &mut LocalHeap) {
 /// 3. `CollectionType::IncrementalMajor` in `metrics.rs` records what *happened* for telemetry
 ///
 /// This avoids introducing a `GcRequest` struct when the existing flag-based approach works.
-fn collect_major(heap: &mut LocalHeap) -> usize {
+fn collect_major(heap: &mut LocalHeap) -> CollectResult {
     let config = crate::gc::incremental::IncrementalMarkState::global().config();
 
     if config.enabled {
@@ -1381,7 +1574,9 @@ fn collect_major(heap: &mut LocalHeap) -> usize {
     }
 }
 
-fn collect_major_stw(heap: &mut LocalHeap) -> usize {
+fn collect_major_stw(heap: &mut LocalHeap) -> CollectResult {
+    let mut timer = CollectResult::new().timer;
+
     #[cfg(feature = "tracing")]
     let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
@@ -1389,7 +1584,9 @@ fn collect_major_stw(heap: &mut LocalHeap) -> usize {
     let _clear_span = trace_phase(GcPhase::Clear);
     #[cfg(feature = "tracing")]
     log_phase_start(GcPhase::Clear, before_bytes);
+    timer.start();
     clear_all_marks_and_dirty(heap);
+    timer.end_clear();
     #[cfg(feature = "tracing")]
     log_phase_end(GcPhase::Clear, 0);
 
@@ -1397,7 +1594,10 @@ fn collect_major_stw(heap: &mut LocalHeap) -> usize {
     let _mark_span = trace_phase(GcPhase::Mark);
     #[cfg(feature = "tracing")]
     log_phase_start(GcPhase::Mark, before_bytes);
+    timer.start();
+    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
     let objects_marked = mark_major_roots(heap);
+    timer.end_mark();
     #[cfg(feature = "tracing")]
     log_phase_end_mark(GcPhase::Mark, objects_marked);
 
@@ -1405,30 +1605,40 @@ fn collect_major_stw(heap: &mut LocalHeap) -> usize {
     let _sweep_span = trace_phase(GcPhase::Sweep);
     #[cfg(feature = "tracing")]
     log_phase_start(GcPhase::Sweep, before_bytes);
+    timer.start();
 
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
 
     promote_all_pages(heap);
+    timer.end_sweep();
 
     #[cfg(feature = "tracing")]
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
     #[cfg(feature = "tracing")]
     log_phase_end(GcPhase::Sweep, before_bytes.saturating_sub(after_bytes));
 
-    reclaimed + reclaimed_large
+    CollectResult {
+        objects_reclaimed: reclaimed + reclaimed_large,
+        timer,
+        collection_type: crate::metrics::CollectionType::Major,
+    }
 }
 
 #[allow(clippy::significant_drop_tightening)]
-fn collect_major_incremental(heap: &mut LocalHeap) -> usize {
+fn collect_major_incremental(heap: &mut LocalHeap) -> CollectResult {
+    let mut timer = CollectResult::new().timer;
     let state = IncrementalMarkState::global();
     let config = state.config();
 
     let heaps: [&LocalHeap; 1] = [&*heap];
+    timer.start();
     execute_snapshot(&heaps);
+    timer.end_clear();
 
     let per_worker_budget = config.increment_size;
 
+    timer.start();
     loop {
         let result = mark_slice(heap, per_worker_budget);
 
@@ -1444,6 +1654,7 @@ fn collect_major_incremental(heap: &mut LocalHeap) -> usize {
             }
         }
     }
+    timer.end_mark();
 
     let remaining = state.worklist_len();
     let dirty_pages = count_dirty_pages(heap);
@@ -1454,14 +1665,20 @@ fn collect_major_incremental(heap: &mut LocalHeap) -> usize {
 
     state.set_phase(MarkPhase::Sweeping);
 
+    timer.start();
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
 
     promote_all_pages(heap);
+    timer.end_sweep();
 
     state.set_phase(MarkPhase::Idle);
 
-    reclaimed + reclaimed_large
+    CollectResult {
+        objects_reclaimed: reclaimed + reclaimed_large,
+        timer,
+        collection_type: crate::metrics::CollectionType::IncrementalMajor,
+    }
 }
 
 /// Clear all mark bits, dirty bits, and reset `dead_count` in the heap.

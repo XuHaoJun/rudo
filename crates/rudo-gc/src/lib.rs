@@ -148,7 +148,10 @@ pub use handles::{
     AsyncHandle, AsyncHandleGuard, AsyncHandleScope, EscapeableHandleScope, Handle, HandleScope,
     MaybeHandle, SealedHandleScope,
 };
-pub use metrics::{last_gc_metrics, CollectionType, GcMetrics};
+pub use metrics::{
+    current_heap_size, current_old_size, current_young_size, gc_history, global_metrics,
+    last_gc_metrics, CollectionType, FallbackReason, GcHistory, GcMetrics, GlobalMetrics,
+};
 pub use ptr::{Gc, GcBox, Weak};
 pub use scan::scan_heap_region_conservatively;
 pub use trace::{Trace, Visitor};

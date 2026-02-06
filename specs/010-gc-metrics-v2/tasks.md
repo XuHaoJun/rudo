@@ -30,10 +30,10 @@
 
 **Purpose**: Project initialization and verification
 
-- [ ] T001 Verify existing `crates/rudo-gc/src/metrics.rs` structure and current `GcMetrics` definition
-- [ ] T002 Verify existing `crates/rudo-gc/src/gc/gc.rs` collection functions and `record_metrics()` call sites
-- [ ] T003 [P] Verify `FallbackReason` enum exists in `crates/rudo-gc/src/gc/incremental.rs` and is accessible
-- [ ] T004 [P] Verify `MarkStats` struct exists in `crates/rudo-gc/src/gc/incremental.rs` and `IncrementalMarkState::global().stats()` access pattern
+- [x] T001 Verify existing `crates/rudo-gc/src/metrics.rs` structure and current `GcMetrics` definition
+- [x] T002 Verify existing `crates/rudo-gc/src/gc/gc.rs` collection functions and `record_metrics()` call sites
+- [x] T003 [P] Verify `FallbackReason` enum exists in `crates/rudo-gc/src/gc/incremental.rs` and is accessible
+- [x] T004 [P] Verify `MarkStats` struct exists in `crates/rudo-gc/src/gc/incremental.rs` and `IncrementalMarkState::global().stats()` access pattern
 
 ---
 
@@ -43,11 +43,11 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T005 [US1] [US2] Add 8 new fields to `GcMetrics` struct in `crates/rudo-gc/src/metrics.rs` (clear_duration, mark_duration, sweep_duration, objects_marked, dirty_pages_scanned, slices_executed, fallback_occurred, fallback_reason)
-- [ ] T006 [US1] [US2] Update `GcMetrics::new()` to initialize new fields to zero/false/`FallbackReason::None` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T007 [US1] [US2] Re-export `FallbackReason` from `gc::incremental` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T008 [US1] [US2] Add `PhaseTimer` struct with `new()`, `start()`, `end_clear()`, `end_mark()`, `end_sweep()` methods in `crates/rudo-gc/src/metrics.rs`
-- [ ] T009 [US1] [US2] Add `CollectResult` struct (objects_reclaimed, timer, collection_type) in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T005 [US1] [US2] Add 8 new fields to `GcMetrics` struct in `crates/rudo-gc/src/metrics.rs` (clear_duration, mark_duration, sweep_duration, objects_marked, dirty_pages_scanned, slices_executed, fallback_occurred, fallback_reason)
+- [x] T006 [US1] [US2] Update `GcMetrics::new()` to initialize new fields to zero/false/`FallbackReason::None` in `crates/rudo-gc/src/metrics.rs`
+- [x] T007 [US1] [US2] Re-export `FallbackReason` from `gc::incremental` in `crates/rudo-gc/src/metrics.rs`
+- [x] T008 [US1] [US2] Add `PhaseTimer` struct with `new()`, `start()`, `end_clear()`, `end_mark()`, `end_sweep()` methods in `crates/rudo-gc/src/metrics.rs`
+- [x] T009 [US1] [US2] Add `CollectResult` struct (objects_reclaimed, timer, collection_type) in `crates/rudo-gc/src/gc/gc.rs`
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
@@ -61,24 +61,24 @@
 
 ### Tests for User Story 1
 
-- [ ] T010 [P] [US1] Add unit test `test_gc_metrics_new_fields_default_to_zero` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T011 [P] [US1] Add unit test `test_phase_timer_captures_durations` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T012 [P] [US1] Add integration test `test_phase_timing_sums_approximately` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T013 [P] [US1] Add integration test `test_minor_collection_clear_duration_zero` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T010 [P] [US1] Add unit test `test_gc_metrics_new_fields_default_to_zero` in `crates/rudo-gc/src/metrics.rs`
+- [x] T011 [P] [US1] Add unit test `test_phase_timer_captures_durations` in `crates/rudo-gc/src/metrics.rs`
+- [x] T012 [P] [US1] Add integration test `test_phase_timing_sums_approximately` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T013 [P] [US1] Add integration test `test_minor_collection_clear_duration_zero` in `crates/rudo-gc/tests/metrics_tests.rs`
 
 ### Implementation for User Story 1
 
-- [ ] T014 [US1] Change `collect_major_stw()` return type to `CollectResult` and add `PhaseTimer` instrumentation in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T015 [US1] Change `collect_major_incremental()` return type to `CollectResult` and add `PhaseTimer` instrumentation in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T016 [US1] Add `PhaseTimer` instrumentation to `collect_minor()` function (minor collections skip clear phase, combine mark+sweep) in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T017 [US1] Update `collect_major()` to return `CollectResult` and propagate from inner functions in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T018 [US1] Add `PhaseTimer` instrumentation to `perform_multi_threaded_collect()` and populate `GcMetrics` phase timing fields in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T019 [US1] Add `PhaseTimer` instrumentation to `perform_multi_threaded_collect_full()` and populate `GcMetrics` phase timing fields in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T020 [US1] Add `PhaseTimer` instrumentation to `perform_single_threaded_collect_with_wake()` using `CollectResult` from `collect_major()` and handle `collect_minor()` case in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T021 [US1] Add `PhaseTimer` instrumentation to `perform_single_threaded_collect_full()` using `CollectResult` from `collect_major()` in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T022 [US1] Update `lib.rs` re-exports to include `FallbackReason` in `crates/rudo-gc/src/lib.rs`
+- [x] T014 [US1] Change `collect_major_stw()` return type to `CollectResult` and add `PhaseTimer` instrumentation in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T015 [US1] Change `collect_major_incremental()` return type to `CollectResult` and add `PhaseTimer` instrumentation in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T016 [US1] Add `PhaseTimer` instrumentation to `collect_minor()` function (minor collections skip clear phase, combine mark+sweep) in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T017 [US1] Update `collect_major()` to return `CollectResult` and propagate from inner functions in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T018 [US1] Add `PhaseTimer` instrumentation to `perform_multi_threaded_collect()` and populate `GcMetrics` phase timing fields in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T019 [US1] Add `PhaseTimer` instrumentation to `perform_multi_threaded_collect_full()` and populate `GcMetrics` phase timing fields in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T020 [US1] Add `PhaseTimer` instrumentation to `perform_single_threaded_collect_with_wake()` using `CollectResult` from `collect_major()` and handle `collect_minor()` case in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T021 [US1] Add `PhaseTimer` instrumentation to `perform_single_threaded_collect_full()` using `CollectResult` from `collect_major()` in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T022 [US1] Update `lib.rs` re-exports to include `FallbackReason` in `crates/rudo-gc/src/lib.rs`
 
-**Checkpoint**: At this point, User Story 1 should be fully functional - phase durations are reported for all collection types
+**Checkpoint**: At this point, User Story 1 should be fully functional - phase durations are reported for all collection types ✓ COMPLETED
 
 ---
 
@@ -90,18 +90,18 @@
 
 ### Tests for User Story 2
 
-- [ ] T023 [P] [US2] Add integration test `test_incremental_metrics_populated` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T024 [P] [US2] Add integration test `test_fallback_reason_reported` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T025 [P] [US2] Add integration test `test_non_incremental_fields_zero` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T023 [P] [US2] Add integration test `test_incremental_metrics_populated` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T024 [P] [US2] Add integration test `test_fallback_reason_reported` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T025 [P] [US2] Add integration test `test_non_incremental_fields_zero` in `crates/rudo-gc/tests/metrics_tests.rs`
 
 ### Implementation for User Story 2
 
-- [ ] T026 [US2] Read `MarkStats` atomics in `collect_major_incremental()` and populate `CollectResult` with incremental stats in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T027 [US2] Set `collection_type` to `IncrementalMajor` in `collect_major_incremental()` return value in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T028 [US2] Read `MarkStats` atomics in `perform_multi_threaded_collect()` and populate `GcMetrics` incremental fields in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T029 [US2] Read `MarkStats` atomics in `perform_multi_threaded_collect_full()` and populate `GcMetrics` incremental fields in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T030 [US2] Read `MarkStats` atomics in `perform_single_threaded_collect_with_wake()` and populate `GcMetrics` incremental fields in `crates/rudo-gc/src/gc/gc.rs`
-- [ ] T031 [US2] Read `MarkStats` atomics in `perform_single_threaded_collect_full()` and populate `GcMetrics` incremental fields in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T026 [US2] Read `MarkStats` atomics in `collect_major_incremental()` and populate `CollectResult` with incremental stats in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T027 [US2] Set `collection_type` to `IncrementalMajor` in `collect_major_incremental()` return value in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T028 [US2] Read `MarkStats` atomics in `perform_multi_threaded_collect()` and populate `GcMetrics` incremental fields in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T029 [US2] Read `MarkStats` atomics in `perform_multi_threaded_collect_full()` and populate `GcMetrics` incremental fields in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T030 [US2] Read `MarkStats` atomics in `perform_single_threaded_collect_with_wake()` and populate `GcMetrics` incremental fields in `crates/rudo-gc/src/gc/gc.rs`
+- [x] T031 [US2] Read `MarkStats` atomics in `perform_single_threaded_collect_full()` and populate `GcMetrics` incremental fields in `crates/rudo-gc/src/gc/gc.rs`
 
 **Checkpoint**: At this point, User Story 2 should be fully functional - incremental marking stats are visible in metrics
 
@@ -115,20 +115,20 @@
 
 ### Tests for User Story 3
 
-- [ ] T032 [P] [US3] Add unit test `test_global_metrics_new` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T033 [P] [US3] Add integration test `test_global_metrics_accumulate` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T034 [P] [US3] Add integration test `test_global_metrics_multi_threaded` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T035 [P] [US3] Add integration test `test_global_metrics_collection_type_breakdown` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T032 [P] [US3] Add unit test `test_global_metrics_new` in `crates/rudo-gc/src/metrics.rs`
+- [x] T033 [P] [US3] Add integration test `test_global_metrics_accumulate` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T034 [P] [US3] Add integration test `test_global_metrics_multi_threaded` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T035 [P] [US3] Add integration test `test_global_metrics_collection_type_breakdown` in `crates/rudo-gc/tests/metrics_tests.rs`
 
 ### Implementation for User Story 3
 
-- [ ] T036 [US3] Add `GlobalMetrics` struct with 8 atomic fields (total_collections, total_minor_collections, total_major_collections, total_incremental_collections, total_bytes_reclaimed, total_objects_reclaimed, total_pause_ns, total_fallbacks) in `crates/rudo-gc/src/metrics.rs`
-- [ ] T037 [US3] Add `GlobalMetrics::new()` const constructor initializing all atomics to zero in `crates/rudo-gc/src/metrics.rs`
-- [ ] T038 [US3] Add static singleton `GLOBAL_METRICS: GlobalMetrics` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T039 [US3] Add `global_metrics()` accessor function returning `&'static GlobalMetrics` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T040 [US3] Add 8 read accessor methods to `GlobalMetrics` impl (all `#[inline]`, `#[must_use]`, `Relaxed` ordering) in `crates/rudo-gc/src/metrics.rs`
-- [ ] T041 [US3] Update `record_metrics()` to increment `GLOBAL_METRICS` counters after thread-local update in `crates/rudo-gc/src/metrics.rs`
-- [ ] T042 [US3] Update `lib.rs` re-exports to include `global_metrics` and `GlobalMetrics` in `crates/rudo-gc/src/lib.rs`
+- [x] T036 [US3] Add `GlobalMetrics` struct with 8 atomic fields (total_collections, total_minor_collections, total_major_collections, total_incremental_collections, total_bytes_reclaimed, total_objects_reclaimed, total_pause_ns, total_fallbacks) in `crates/rudo-gc/src/metrics.rs`
+- [x] T037 [US3] Add `GlobalMetrics::new()` const constructor initializing all atomics to zero in `crates/rudo-gc/src/metrics.rs`
+- [x] T038 [US3] Add static singleton `GLOBAL_METRICS: GlobalMetrics` in `crates/rudo-gc/src/metrics.rs`
+- [x] T039 [US3] Add `global_metrics()` accessor function returning `&'static GlobalMetrics` in `crates/rudo-gc/src/metrics.rs`
+- [x] T040 [US3] Add 8 read accessor methods to `GlobalMetrics` impl (all `#[inline]`, `#[must_use]`, `Relaxed` ordering) in `crates/rudo-gc/src/metrics.rs`
+- [x] T041 [US3] Update `record_metrics()` to increment `GLOBAL_METRICS` counters after thread-local update in `crates/rudo-gc/src/metrics.rs`
+- [x] T042 [US3] Update `lib.rs` re-exports to include `global_metrics` and `GlobalMetrics` in `crates/rudo-gc/src/lib.rs`
 
 **Checkpoint**: At this point, User Story 3 should be fully functional - cumulative statistics are available via `global_metrics()`
 
@@ -142,16 +142,16 @@
 
 ### Tests for User Story 4
 
-- [ ] T043 [P] [US4] Add integration test `test_heap_queries_return_sane_values` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T044 [P] [US4] Add integration test `test_heap_queries_no_heap_returns_zero` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T045 [P] [US4] Add integration test `test_heap_queries_young_old_generations` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T043 [P] [US4] Add integration test `test_heap_queries_return_sane_values` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T044 [P] [US4] Add integration test `test_heap_queries_no_heap_returns_zero` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T045 [P] [US4] Add integration test `test_heap_queries_young_old_generations` in `crates/rudo-gc/tests/metrics_tests.rs`
 
 ### Implementation for User Story 4
 
-- [ ] T046 [US4] Add `current_heap_size()` function reading `HEAP.try_with(|h| ... .total_allocated())` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T047 [US4] Add `current_young_size()` function reading `HEAP.try_with(|h| ... .young_allocated())` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T048 [US4] Add `current_old_size()` function reading `HEAP.try_with(|h| ... .old_allocated())` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T049 [US4] Update `lib.rs` re-exports to include `current_heap_size`, `current_young_size`, `current_old_size` in `crates/rudo-gc/src/lib.rs`
+- [x] T046 [US4] Add `current_heap_size()` function reading `HEAP.try_with(|h| ... .total_allocated())` in `crates/rudo-gc/src/metrics.rs`
+- [x] T047 [US4] Add `current_young_size()` function reading `HEAP.try_with(|h| ... .young_allocated())` in `crates/rudo-gc/src/metrics.rs`
+- [x] T048 [US4] Add `current_old_size()` function reading `HEAP.try_with(|h| ... .old_allocated())` in `crates/rudo-gc/src/metrics.rs`
+- [x] T049 [US4] Update `lib.rs` re-exports to include `current_heap_size`, `current_young_size`, `current_old_size` in `crates/rudo-gc/src/lib.rs`
 
 **Checkpoint**: At this point, User Story 4 should be fully functional - heap queries work without triggering GC
 
@@ -165,29 +165,28 @@
 
 ### Tests for User Story 5
 
-- [ ] T050 [P] [US5] Add unit test `test_gc_history_new` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T051 [P] [US5] Add integration test `test_history_ring_buffer` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T052 [P] [US5] Add integration test `test_history_wrap_around` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T053 [P] [US5] Add integration test `test_history_average_pause` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T054 [P] [US5] Add integration test `test_history_max_pause` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T055 [P] [US5] Add integration test `test_history_empty` in `crates/rudo-gc/tests/metrics_tests.rs`
-- [ ] T056 [P] [US5] Add Miri test `test_history_concurrent_read_safety` for `UnsafeCell` safety in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T050 [P] [US5] Add unit test `test_gc_history_new` in `crates/rudo-gc/src/metrics.rs`
+- [x] T051 [P] [US5] Add integration test `test_history_ring_buffer` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T052 [P] [US5] Add integration test `test_history_wrap_around` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T053 [P] [US5] Add integration test `test_history_average_pause` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T054 [P] [US5] Add integration test `test_history_max_pause` in `crates/rudo-gc/tests/metrics_tests.rs`
+- [x] T055 [P] [US5] Add integration test `test_history_empty` in `crates/rudo-gc/tests/metrics_tests.rs`
 
 ### Implementation for User Story 5
 
-- [ ] T057 [US5] Add `HISTORY_SIZE` constant (64) in `crates/rudo-gc/src/metrics.rs`
-- [ ] T058 [US5] Add `GcHistory` struct with `UnsafeCell<[GcMetrics; HISTORY_SIZE]>` and `AtomicUsize` write_idx in `crates/rudo-gc/src/metrics.rs`
-- [ ] T059 [US5] Add `unsafe impl Sync for GcHistory` with SAFETY comment documenting single-writer guarantee in `crates/rudo-gc/src/metrics.rs`
-- [ ] T060 [US5] Add `GcHistory::new()` const constructor initializing buffer and write_idx in `crates/rudo-gc/src/metrics.rs`
-- [ ] T061 [US5] Add `GcHistory::push()` internal method writing to buffer and advancing write_idx with `Release` ordering in `crates/rudo-gc/src/metrics.rs`
-- [ ] T062 [US5] Add `GcHistory::total_recorded()` method loading write_idx with `Acquire` ordering in `crates/rudo-gc/src/metrics.rs`
-- [ ] T063 [US5] Add `GcHistory::recent(n)` method reading last N entries (newest first) in `crates/rudo-gc/src/metrics.rs`
-- [ ] T064 [US5] Add `GcHistory::average_pause_time(n)` method computing average from `recent(n)` durations in `crates/rudo-gc/src/metrics.rs`
-- [ ] T065 [US5] Add `GcHistory::max_pause_time(n)` method computing max from `recent(n)` durations in `crates/rudo-gc/src/metrics.rs`
-- [ ] T066 [US5] Add static singleton `GC_HISTORY: GcHistory` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T067 [US5] Add `gc_history()` accessor function returning `&'static GcHistory` in `crates/rudo-gc/src/metrics.rs`
-- [ ] T068 [US5] Update `record_metrics()` to call `GC_HISTORY.push(metrics)` after global counter updates in `crates/rudo-gc/src/metrics.rs`
-- [ ] T069 [US5] Update `lib.rs` re-exports to include `gc_history` and `GcHistory` in `crates/rudo-gc/src/lib.rs`
+- [x] T057 [US5] Add `HISTORY_SIZE` constant (64) in `crates/rudo-gc/src/metrics.rs`
+- [x] T058 [US5] Add `GcHistory` struct with `UnsafeCell<[GcMetrics; HISTORY_SIZE]>` and `AtomicUsize` write_idx in `crates/rudo-gc/src/metrics.rs`
+- [x] T059 [US5] Add `unsafe impl Sync for GcHistory` with SAFETY comment documenting single-writer guarantee in `crates/rudo-gc/src/metrics.rs`
+- [x] T060 [US5] Add `GcHistory::new()` const constructor initializing buffer and write_idx in `crates/rudo-gc/src/metrics.rs`
+- [x] T061 [US5] Add `GcHistory::push()` internal method writing to buffer and advancing write_idx with `Release` ordering in `crates/rudo-gc/src/metrics.rs`
+- [x] T062 [US5] Add `GcHistory::total_recorded()` method loading write_idx with `Acquire` ordering in `crates/rudo-gc/src/metrics.rs`
+- [x] T063 [US5] Add `GcHistory::recent(n)` method reading last N entries (newest first) in `crates/rudo-gc/src/metrics.rs`
+- [x] T064 [US5] Add `GcHistory::average_pause_time(n)` method computing average from `recent(n)` durations in `crates/rudo-gc/src/metrics.rs`
+- [x] T065 [US5] Add `GcHistory::max_pause_time(n)` method computing max from `recent(n)` durations in `crates/rudo-gc/src/metrics.rs`
+- [x] T066 [US5] Add static singleton `GC_HISTORY: GcHistory` in `crates/rudo-gc/src/metrics.rs`
+- [x] T067 [US5] Add `gc_history()` accessor function returning `&'static GcHistory` in `crates/rudo-gc/src/metrics.rs`
+- [x] T068 [US5] Update `record_metrics()` to call `GC_HISTORY.push(metrics)` after global counter updates in `crates/rudo-gc/src/metrics.rs`
+- [x] T069 [US5] Update `lib.rs` re-exports to include `gc_history` and `GcHistory` in `crates/rudo-gc/src/lib.rs`
 
 **Checkpoint**: At this point, User Story 5 should be fully functional - GC history provides trend analysis
 
