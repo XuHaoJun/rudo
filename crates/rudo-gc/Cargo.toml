@@ -16,6 +16,7 @@ derive = ["dep:rudo-gc-derive"]
 lazy-sweep = []
 test-util = []
 tokio = ["dep:tokio", "dep:tokio-util", "dep:rudo-gc-tokio-derive"]
+tracing = ["dep:tracing"]
 
 [dependencies]
 rudo-gc-derive = { workspace = true, optional = true }
@@ -27,6 +28,7 @@ tokio-util = { version = "0.7", optional = true, features = ["rt"] }
 parking_lot = "0.12"
 crossbeam = "0.8"
 crossbeam-queue = "0.3"
+tracing = { version = "0.1", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
@@ -36,6 +38,8 @@ windows-sys = { workspace = true }
 criterion = "0.8.1"
 # For atomic ordering verification
 loom = "0.7"
+# For tracing tests
+tracing-subscriber = "0.3"
 
 [lints]
 workspace = true

@@ -71,6 +71,9 @@ mod stack;
 mod trace;
 mod trace_closure;
 
+#[cfg(feature = "tracing")]
+mod tracing;
+
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
@@ -150,6 +153,9 @@ pub use ptr::{Gc, GcBox, Weak};
 pub use scan::scan_heap_region_conservatively;
 pub use trace::{Trace, Visitor};
 pub use trace_closure::TraceClosure;
+
+#[cfg(feature = "tracing")]
+pub use tracing::GcId;
 
 // Re-export derive macros when feature is enabled
 #[cfg(feature = "derive")]
