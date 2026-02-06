@@ -1278,12 +1278,13 @@ fn mark_major_roots_parallel(
 fn collect_minor(heap: &mut LocalHeap) -> usize {
     #[cfg(feature = "tracing")]
     let gc_id = next_gc_id();
-    #[cfg(feature = "tracing")]
-    let _gc_span = trace_gc_collection("minor", gc_id);
 
     if crate::gc::incremental::is_incremental_marking_active() {
         crate::heap::wait_for_gc_complete();
     }
+
+    #[cfg(feature = "tracing")]
+    let _gc_span = trace_gc_collection("minor", gc_id);
 
     let before_bytes = heap.total_allocated();
 
@@ -1391,9 +1392,9 @@ fn collect_major_stw(heap: &mut LocalHeap) -> usize {
     let _mark_span = trace_phase(GcPhase::Mark);
     #[cfg(feature = "tracing")]
     log_phase_start(GcPhase::Mark, before_bytes);
-    mark_major_roots(heap);
+    let objects_marked = mark_major_roots(heap);
     #[cfg(feature = "tracing")]
-    log_phase_end_mark(GcPhase::Mark, 0);
+    log_phase_end_mark(GcPhase::Mark, objects_marked);
 
     #[cfg(feature = "tracing")]
     let _sweep_span = trace_phase(GcPhase::Sweep);
