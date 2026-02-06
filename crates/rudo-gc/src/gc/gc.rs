@@ -1860,6 +1860,7 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
             return;
         }
         (*header.as_ptr()).set_mark(idx);
+        visitor.objects_marked += 1;
     } else {
         return;
     }
@@ -2393,6 +2394,7 @@ impl GcVisitor {
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
                     (*header.as_ptr()).set_mark(idx);
+                    self.objects_marked += 1;
                 } else {
                     continue;
                 }
