@@ -1458,7 +1458,7 @@ fn mark_major_roots_parallel(
 /// incremental major marking." This implementation blocks until incremental major
 /// marking completes rather than skipping minor GC entirely.
 fn collect_minor(heap: &mut LocalHeap) -> CollectResult {
-    let mut timer = CollectResult::new().timer;
+    let mut timer = crate::metrics::PhaseTimer::new();
 
     #[cfg(feature = "tracing")]
     let gc_id = next_gc_id();
@@ -1575,7 +1575,7 @@ fn collect_major(heap: &mut LocalHeap) -> CollectResult {
 }
 
 fn collect_major_stw(heap: &mut LocalHeap) -> CollectResult {
-    let mut timer = CollectResult::new().timer;
+    let mut timer = crate::metrics::PhaseTimer::new();
 
     #[cfg(feature = "tracing")]
     let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
@@ -1627,7 +1627,7 @@ fn collect_major_stw(heap: &mut LocalHeap) -> CollectResult {
 
 #[allow(clippy::significant_drop_tightening)]
 fn collect_major_incremental(heap: &mut LocalHeap) -> CollectResult {
-    let mut timer = CollectResult::new().timer;
+    let mut timer = crate::metrics::PhaseTimer::new();
     let state = IncrementalMarkState::global();
     let config = state.config();
 

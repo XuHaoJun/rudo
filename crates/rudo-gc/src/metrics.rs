@@ -137,7 +137,17 @@ impl PhaseTimer {
     }
 
     /// Start timing a phase.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if a phase is already active (calling `start()`
+    /// twice without calling an `end_*()` method).
+    #[track_caller]
     pub fn start(&mut self) {
+        debug_assert!(
+            self.current_start.is_none(),
+            "PhaseTimer::start() called while a phase is already active"
+        );
         self.current_start = Some(Instant::now());
     }
 
@@ -422,9 +432,10 @@ impl GcHistory {
     ///
     /// Uses a ring buffer: when full, older entries are overwritten.
     fn push(&self, metrics: GcMetrics) {
-        let idx = self.write_idx.fetch_add(1, Ordering::Relaxed);
+        let idx = self.write_idx.fetch_add(1, Ordering::Release);
         // SAFETY: Single-writer guarantee from GC handshake ensures no concurrent writes.
-        // The write_idx atomic provides synchronization for readers.
+        // Release ordering ensures the buffer write is visible to readers who observe
+        // the updated write_idx via total_recorded()'s Acquire load.
         unsafe {
             let buffer = &mut *self.buffer.get();
             buffer[idx % HISTORY_SIZE] = metrics;
