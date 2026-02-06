@@ -677,7 +677,17 @@ fn perform_single_threaded_collect_with_wake() {
 
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
-    // Get incremental stats if this was an incremental collection
+    // =========================================================================
+    // INCREMENTAL STATS CAPTURE
+    //
+    // Stats are captured AFTER collection completes because IncrementalMarkState
+    // accumulates values DURING the collection process. The final values represent
+    // the complete marking work done by this collection.
+    //
+    // NOTE: IncrementalMarkState.reset() is only called from the public
+    // rudo_gc::reset() API (for testing purposes), NOT during normal collection.
+    // Normal collection preserves stats so they can be recorded here.
+    // =========================================================================
     let mark_stats = crate::gc::incremental::IncrementalMarkState::global().stats();
     let incremental_stats =
         if result.collection_type == crate::metrics::CollectionType::IncrementalMajor {
@@ -745,7 +755,17 @@ fn perform_single_threaded_collect_full() {
 
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
-    // Get incremental stats if this was an incremental collection
+    // =========================================================================
+    // INCREMENTAL STATS CAPTURE
+    //
+    // Stats are captured AFTER collection completes because IncrementalMarkState
+    // accumulates values DURING the collection process. The final values represent
+    // the complete marking work done by this collection.
+    //
+    // NOTE: IncrementalMarkState.reset() is only called from the public
+    // rudo_gc::reset() API (for testing purposes), NOT during normal collection.
+    // Normal collection preserves stats so they can be recorded here.
+    // =========================================================================
     let mark_stats = crate::gc::incremental::IncrementalMarkState::global().stats();
     let incremental_stats =
         if result.collection_type == crate::metrics::CollectionType::IncrementalMajor {
@@ -1472,23 +1492,31 @@ fn collect_minor(heap: &mut LocalHeap) -> CollectResult {
 
     let before_bytes = heap.total_allocated();
 
-    // Minor collections skip clear phase (no need to clear marks for young gen)
-    // Mark and sweep are combined for timing purposes
+    // =========================================================================
+    // MINOR COLLECTION TIMING
+    //
+    // IMPORTANT: timer.start() MUST be immediately before actual phase work.
+    // Tracing setup above (trace_span, log_phase_start) is NOT timed.
+    // This matches the data model spec: timer.start() captures only phase work.
+    //
+    // Minor collections skip clear phase (no need to clear marks for young gen).
+    // timer.mark captures mark phase, timer.sweep captures sweep phase.
+    // =========================================================================
 
-    // 1. Mark Phase
+    // 1. MARK PHASE - timer.start() immediately before mark_minor_roots()
     #[cfg(feature = "tracing")]
     let _mark_span = trace_phase(GcPhase::Mark);
     #[cfg(feature = "tracing")]
     log_phase_start(GcPhase::Mark, before_bytes);
 
-    timer.start();
+    timer.start(); // ← TIMER STARTS HERE - only marks phase work
     #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
     let objects_marked = mark_minor_roots(heap);
 
     #[cfg(feature = "tracing")]
     log_phase_end_mark(GcPhase::Mark, objects_marked);
 
-    // 2. Sweep Phase
+    // 2. SWEEP PHASE - continues same timer, ends at end_sweep()
     #[cfg(feature = "tracing")]
     let _sweep_span = trace_phase(GcPhase::Sweep);
     #[cfg(feature = "tracing")]
@@ -1500,11 +1528,11 @@ fn collect_minor(heap: &mut LocalHeap) -> CollectResult {
     #[cfg(feature = "tracing")]
     log_phase_end(GcPhase::Sweep, reclaimed + reclaimed_large);
 
-    // 3. Promotion Phase
+    // 3. PROMOTION PHASE - NOT timed (post-collection cleanup)
     promote_young_pages(heap);
 
-    // For minor collections, we record mark+sweep together as sweep duration
-    // since there's no clear phase
+    // For minor collections: timer.mark captures mark phase, timer.sweep captures sweep phase
+    // Since minor GC skips clear phase, mark+sweep are combined under timer.sweep
     timer.end_sweep();
 
     CollectResult {
