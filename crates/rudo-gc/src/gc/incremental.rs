@@ -157,6 +157,8 @@ pub struct IncrementalMarkState {
     slice_start_time: Mutex<Option<Instant>>,
     slice_counter: AtomicUsize,
     rendezvous_ack_counter: AtomicUsize,
+    #[cfg(feature = "tracing")]
+    gc_id: Mutex<Option<crate::tracing::GcId>>,
 }
 
 #[derive(Debug)]
@@ -252,6 +254,8 @@ impl IncrementalMarkState {
             slice_start_time: Mutex::new(None),
             slice_counter: AtomicUsize::new(0),
             rendezvous_ack_counter: AtomicUsize::new(0),
+            #[cfg(feature = "tracing")]
+            gc_id: Mutex::new(None),
         }
     }
 
@@ -405,6 +409,16 @@ impl IncrementalMarkState {
         self.enabled.store(config.enabled, Ordering::Relaxed);
     }
 
+    #[cfg(feature = "tracing")]
+    pub fn set_gc_id(&self, gc_id: crate::tracing::GcId) {
+        *self.gc_id.lock() = Some(gc_id);
+    }
+
+    #[cfg(feature = "tracing")]
+    pub fn gc_id(&self) -> Option<crate::tracing::GcId> {
+        *self.gc_id.lock()
+    }
+
     pub fn stats(&self) -> &MarkStats {
         &self.stats
     }
@@ -551,6 +565,8 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
 
     let count = state.worklist_len();
     state.set_root_count(count);
+    #[cfg(feature = "tracing")]
+    state.set_gc_id(crate::tracing::internal::next_gc_id());
     state.set_phase(MarkPhase::Marking);
     debug_assert!(
         write_barrier_needed(),
@@ -566,10 +582,15 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
 pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
     #[cfg(feature = "tracing")]
     let _span = crate::gc::tracing::span_incremental_mark("mark_slice");
-    #[cfg(feature = "tracing")]
-    crate::gc::tracing::log_incremental_start(budget, crate::tracing::internal::next_gc_id());
 
     let state = IncrementalMarkState::global();
+
+    #[cfg(feature = "tracing")]
+    {
+        if let Some(gc_id) = state.gc_id() {
+            crate::gc::tracing::log_incremental_start(budget, gc_id);
+        }
+    }
     let config = state.config();
 
     if state.fallback_requested() {

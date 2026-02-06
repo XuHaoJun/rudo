@@ -644,6 +644,8 @@ fn perform_single_threaded_collect_full() {
     let _clear_span = trace_phase(GcPhase::Clear);
     #[cfg(feature = "tracing")]
     log_phase_start(GcPhase::Clear, before_bytes);
+    #[cfg(feature = "tracing")]
+    log_phase_end(GcPhase::Clear, 0);
 
     // Phase 2: Mark
     #[cfg(feature = "tracing")]
