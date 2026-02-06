@@ -696,7 +696,7 @@ fn perform_multi_threaded_collect_full() {
     #[cfg(feature = "tracing")]
     let gc_id = next_gc_id();
     #[cfg(feature = "tracing")]
-    let _gc_span = trace_gc_collection("major_multi_threaded_full", gc_id);
+    let _gc_span = trace_gc_collection("major_multi_threaded", gc_id);
 
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
@@ -1261,15 +1261,16 @@ fn mark_major_roots_parallel(
     registry.notify_work_available();
 
     for handle in handles {
-        let _ = handle.join().unwrap();
+        let marked = handle.join().unwrap();
+        total_marked = total_marked.saturating_add(marked);
     }
 
     registry.set_complete();
 
     crate::gc::marker::clear_overflow_queue();
 
-    // TODO: Track total objects marked across all workers
-    // For now, parallel marking doesn't track object counts
+    #[cfg(feature = "tracing")]
+    crate::gc::tracing::log_parallel_mark_stats(num_workers, total_marked);
 
     total_marked
 }

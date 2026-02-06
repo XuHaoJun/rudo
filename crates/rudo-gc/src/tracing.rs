@@ -81,12 +81,6 @@ pub mod internal {
     pub fn log_phase_end_mark(phase: GcPhase, objects_marked: usize) {
         tracing::debug!(phase = ?phase, objects_marked, "phase_end");
     }
-
-    /// Log the end of a sweep phase with bytes reclaimed.
-    #[allow(dead_code)]
-    pub fn log_phase_end_sweep(phase: GcPhase, bytes_reclaimed: usize) {
-        tracing::debug!(phase = ?phase, bytes_reclaimed, "phase_end");
-    }
 }
 
 #[cfg(not(feature = "tracing"))]
