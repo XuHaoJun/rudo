@@ -480,13 +480,8 @@ impl GcHistory {
 
         unsafe {
             let buffer = &*self.buffer.get();
-            let buf_start = if total > HISTORY_SIZE {
-                (total - n) % HISTORY_SIZE
-            } else {
-                0
-            };
             for i in 0..n {
-                let idx = (buf_start + i) % HISTORY_SIZE;
+                let idx = (total - 1 - i) % HISTORY_SIZE;
                 result.push(buffer[idx]);
             }
         }
@@ -588,23 +583,28 @@ pub fn last_gc_metrics() -> GcMetrics {
 /// Record metrics for a collection.
 pub fn record_metrics(metrics: GcMetrics) {
     TOTAL_COLLECTIONS.with(|c| c.set(c.get() + 1));
-    LAST_METRICS.with(|m| {
-        let mut metrics = metrics;
-        metrics.total_collections = TOTAL_COLLECTIONS.with(Cell::get);
-        m.set(metrics);
+    let updated_metrics = LAST_METRICS.with(|cell| {
+        let mut m = metrics;
+        m.total_collections = TOTAL_COLLECTIONS.with(Cell::get);
+        cell.set(m);
+        m
     });
 
     let g = global_metrics();
     g.collections.fetch_add(1, Ordering::Relaxed);
     g.bytes_reclaimed
-        .fetch_add(metrics.bytes_reclaimed, Ordering::Relaxed);
+        .fetch_add(updated_metrics.bytes_reclaimed, Ordering::Relaxed);
     g.objects_reclaimed
-        .fetch_add(metrics.objects_reclaimed, Ordering::Relaxed);
+        .fetch_add(updated_metrics.objects_reclaimed, Ordering::Relaxed);
     g.pause_ns.fetch_add(
-        metrics.duration.as_nanos().try_into().unwrap_or(u64::MAX),
+        updated_metrics
+            .duration
+            .as_nanos()
+            .try_into()
+            .unwrap_or(u64::MAX),
         Ordering::Relaxed,
     );
-    match metrics.collection_type {
+    match updated_metrics.collection_type {
         CollectionType::Minor => {
             g.minor_collections.fetch_add(1, Ordering::Relaxed);
         }
@@ -613,14 +613,14 @@ pub fn record_metrics(metrics: GcMetrics) {
         }
         CollectionType::IncrementalMajor => {
             g.incremental_collections.fetch_add(1, Ordering::Relaxed);
-            if metrics.fallback_occurred {
+            if updated_metrics.fallback_occurred {
                 g.fallbacks.fetch_add(1, Ordering::Relaxed);
             }
         }
         CollectionType::None => {}
     }
 
-    GC_HISTORY.push(metrics);
+    GC_HISTORY.push(updated_metrics);
 }
 
 #[cfg(test)]
@@ -714,16 +714,29 @@ mod tests {
         }
 
         let total = history.total_recorded();
-        assert_eq!(total, before + 70);
+        assert_eq!(
+            total,
+            before + 70,
+            "Expected {} total collections, got {}",
+            before + 70,
+            total
+        );
 
         let recent = history.recent(10);
         assert_eq!(recent.len(), 10);
 
-        let total = history.total_recorded();
-        assert_eq!(total, before + 70);
-
         for metrics in &recent {
-            assert!(metrics.duration > Duration::ZERO);
+            assert!(
+                metrics.duration > Duration::ZERO,
+                "Entry should have positive duration"
+            );
+        }
+
+        for window in recent.windows(2) {
+            assert!(
+                window[0].total_collections > window[1].total_collections,
+                "Entries should be in descending order (newest first)"
+            );
         }
 
         let all = history.recent(64);
