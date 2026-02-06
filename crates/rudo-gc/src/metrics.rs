@@ -264,11 +264,11 @@ impl GlobalMetrics {
         self.objects_reclaimed.load(Ordering::Relaxed)
     }
 
-    /// Returns the total pause time in nanoseconds.
+    /// Returns the total time spent in GC pauses.
     #[inline]
     #[must_use]
-    pub fn total_pause_ns(&self) -> u64 {
-        self.pause_ns.load(Ordering::Relaxed)
+    pub fn total_pause_time(&self) -> Duration {
+        Duration::from_nanos(self.pause_ns.load(Ordering::Relaxed))
     }
 
     /// Returns the total number of STW fallbacks from incremental marking.
@@ -476,17 +476,18 @@ impl GcHistory {
         }
 
         let n = n.min(HISTORY_SIZE).min(total);
-        let start = total.saturating_sub(n);
         let mut result = Vec::with_capacity(n);
 
-        // SAFETY: Readers may race with writers, but:
-        // 1. If we read write_idx after loading, all slots we access have been published
-        // 2. A torn read of GcMetrics (Copy + primitives) produces valid data
-        // 3. If write_idx wraps around, we correctly handle modulo indexing
         unsafe {
             let buffer = &*self.buffer.get();
-            for i in start..total {
-                result.push(buffer[i % HISTORY_SIZE]);
+            let buf_start = if total > HISTORY_SIZE {
+                (total - n) % HISTORY_SIZE
+            } else {
+                0
+            };
+            for i in 0..n {
+                let idx = (buf_start + i) % HISTORY_SIZE;
+                result.push(buffer[idx]);
             }
         }
 
@@ -684,7 +685,7 @@ mod tests {
         assert_eq!(metrics.total_incremental_collections(), 0);
         assert_eq!(metrics.total_bytes_reclaimed(), 0);
         assert_eq!(metrics.total_objects_reclaimed(), 0);
-        assert_eq!(metrics.total_pause_ns(), 0);
+        assert_eq!(metrics.total_pause_time(), Duration::ZERO);
         assert_eq!(metrics.total_fallbacks(), 0);
     }
 
@@ -696,5 +697,36 @@ mod tests {
         assert!(history.recent(10).is_empty());
         assert_eq!(history.average_pause_time(10), Duration::ZERO);
         assert_eq!(history.max_pause_time(10), Duration::ZERO);
+    }
+
+    #[test]
+    fn test_gc_history_recent_wraparound_order() {
+        use crate::{collect_full, gc_history, Gc};
+        use std::thread;
+
+        let history = gc_history();
+        let before = history.total_recorded();
+
+        for _ in 0..70 {
+            let _gc = Gc::new(42u8);
+            thread::sleep(Duration::from_millis(1));
+            collect_full();
+        }
+
+        let total = history.total_recorded();
+        assert_eq!(total, before + 70);
+
+        let recent = history.recent(10);
+        assert_eq!(recent.len(), 10);
+
+        let total = history.total_recorded();
+        assert_eq!(total, before + 70);
+
+        for metrics in &recent {
+            assert!(metrics.duration > Duration::ZERO);
+        }
+
+        let all = history.recent(64);
+        assert_eq!(all.len(), 64);
     }
 }
