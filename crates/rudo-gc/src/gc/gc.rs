@@ -799,7 +799,7 @@ fn collect_major_multi(
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
 ) -> usize {
     clear_all_marks_and_dirty(heap);
-    let _objects_marked = mark_major_roots_multi(heap, stack_roots);
+    mark_major_roots_multi(heap, stack_roots);
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
     promote_all_pages(heap);

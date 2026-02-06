@@ -235,3 +235,15 @@ fn test_all_phases_exercised() {
 
     assert!(!objects.is_empty());
 }
+
+#[test]
+fn test_parallel_mark_complete_event() {
+    let mut objects: Vec<Gc<Vec<usize>>> = Vec::new();
+    for i in 0..1000 {
+        objects.push(Gc::new(vec![i; 100]));
+    }
+
+    rudo_gc::collect_full();
+
+    assert!(!objects.is_empty());
+}

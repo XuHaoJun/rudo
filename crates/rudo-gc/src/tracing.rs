@@ -85,6 +85,9 @@ pub mod internal {
     pub struct GcId(pub u64);
 
     /// Stub function when tracing is disabled.
+    ///
+    /// Returns `GcId(0)` as a dummy value since tracing is disabled.
+    /// Events logged with this ID cannot be correlated with any GC run.
     pub fn next_gc_id() -> GcId {
         GcId(0)
     }
