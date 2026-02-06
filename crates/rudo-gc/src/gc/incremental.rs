@@ -157,6 +157,8 @@ pub struct IncrementalMarkState {
     slice_start_time: Mutex<Option<Instant>>,
     slice_counter: AtomicUsize,
     rendezvous_ack_counter: AtomicUsize,
+    #[cfg(feature = "tracing")]
+    gc_id: Mutex<Option<crate::tracing::GcId>>,
 }
 
 #[derive(Debug)]
@@ -252,6 +254,8 @@ impl IncrementalMarkState {
             slice_start_time: Mutex::new(None),
             slice_counter: AtomicUsize::new(0),
             rendezvous_ack_counter: AtomicUsize::new(0),
+            #[cfg(feature = "tracing")]
+            gc_id: Mutex::new(None),
         }
     }
 
@@ -282,6 +286,18 @@ impl IncrementalMarkState {
     }
 
     pub fn set_phase(&self, phase: MarkPhase) {
+        #[cfg(feature = "tracing")]
+        {
+            let phase_str = match phase {
+                MarkPhase::Idle => "idle",
+                MarkPhase::Snapshot => "snapshot",
+                MarkPhase::Marking => "marking",
+                MarkPhase::FinalMark => "final_mark",
+                MarkPhase::Sweeping => "sweeping",
+            };
+            let objects_marked = self.stats.objects_marked.load(Ordering::Relaxed);
+            crate::gc::tracing::log_phase_transition(phase_str, objects_marked);
+        }
         self.phase.store(phase as usize, Ordering::SeqCst);
     }
 
@@ -391,6 +407,16 @@ impl IncrementalMarkState {
     pub fn set_config(&self, config: IncrementalConfig) {
         *self.config.lock() = config;
         self.enabled.store(config.enabled, Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "tracing")]
+    pub fn set_gc_id(&self, gc_id: crate::tracing::GcId) {
+        *self.gc_id.lock() = Some(gc_id);
+    }
+
+    #[cfg(feature = "tracing")]
+    pub fn gc_id(&self) -> Option<crate::tracing::GcId> {
+        *self.gc_id.lock()
     }
 
     pub fn stats(&self) -> &MarkStats {
@@ -539,6 +565,8 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
 
     let count = state.worklist_len();
     state.set_root_count(count);
+    #[cfg(feature = "tracing")]
+    state.set_gc_id(crate::tracing::internal::next_gc_id());
     state.set_phase(MarkPhase::Marking);
     debug_assert!(
         write_barrier_needed(),
@@ -550,8 +578,19 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
 }
 
 #[allow(clippy::significant_drop_tightening)]
+#[allow(clippy::too_many_lines)]
 pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
+    #[cfg(feature = "tracing")]
+    let _span = crate::gc::tracing::span_incremental_mark("mark_slice");
+
     let state = IncrementalMarkState::global();
+
+    #[cfg(feature = "tracing")]
+    {
+        if let Some(gc_id) = state.gc_id() {
+            crate::gc::tracing::log_incremental_start(budget, gc_id);
+        }
+    }
     let config = state.config();
 
     if state.fallback_requested() {
@@ -616,6 +655,9 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
 
     let dirty_pages = count_dirty_pages(heap);
 
+    #[cfg(feature = "tracing")]
+    crate::gc::tracing::log_incremental_slice(total_marked, dirty_pages);
+
     let slice_elapsed = state.slice_elapsed_ms();
     let worklist_size = state.worklist_len();
     state.update_max_worklist_size(worklist_size);
@@ -624,6 +666,8 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
 
     if dirty_pages > config.max_dirty_pages {
         state.request_fallback(FallbackReason::DirtyPagesExceeded);
+        #[cfg(feature = "tracing")]
+        crate::gc::tracing::log_fallback("dirty_pages_exceeded");
         return MarkSliceResult::Fallback {
             reason: FallbackReason::DirtyPagesExceeded,
         };
@@ -631,6 +675,8 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
 
     if slice_elapsed > config.slice_timeout_ms {
         state.request_fallback(FallbackReason::SliceTimeout);
+        #[cfg(feature = "tracing")]
+        crate::gc::tracing::log_fallback("slice_timeout");
         return MarkSliceResult::Fallback {
             reason: FallbackReason::SliceTimeout,
         };
@@ -638,6 +684,8 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
 
     if max_size > 0 && worklist_size > max_size.saturating_mul(10) {
         state.request_fallback(FallbackReason::WorklistUnbounded);
+        #[cfg(feature = "tracing")]
+        crate::gc::tracing::log_fallback("worklist_unbounded");
         return MarkSliceResult::Fallback {
             reason: FallbackReason::WorklistUnbounded,
         };
@@ -723,6 +771,9 @@ pub fn clear_dirty_pages_snapshot(heap: &mut LocalHeap) {
 }
 
 pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
+    #[cfg(feature = "tracing")]
+    let _span = crate::gc::tracing::span_incremental_mark("final_mark");
+
     let state = IncrementalMarkState::global();
     state.set_phase(MarkPhase::FinalMark);
 

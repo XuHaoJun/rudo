@@ -23,6 +23,12 @@ use crate::heap::{LocalHeap, PageHeader};
 use crate::ptr::GcBox;
 use crate::trace::{GcVisitor, Trace, Visitor, VisitorKind};
 
+#[cfg(feature = "tracing")]
+use crate::tracing::internal::{
+    log_phase_end, log_phase_end_mark, log_phase_start, next_gc_id, trace_gc_collection,
+    trace_phase, GcId, GcPhase,
+};
+
 /// Information about an object pending deallocation.
 /// Used in two-phase sweep: phase 1 drops, phase 2 reclaims.
 ///
@@ -275,6 +281,11 @@ pub fn collect() {
     clippy::if_not_else
 )]
 fn perform_multi_threaded_collect() {
+    #[cfg(feature = "tracing")]
+    let gc_id = next_gc_id();
+    #[cfg(feature = "tracing")]
+    let _gc_span = trace_gc_collection("major_multi_threaded", gc_id);
+
     crate::gc::marker::clear_overflow_queue();
 
     IN_COLLECT.with(|in_collect| in_collect.set(true));
@@ -322,21 +333,41 @@ fn perform_multi_threaded_collect() {
         // incorrectly swept, causing use-after-free bugs.
 
         // Phase 1: Clear all marks on ALL heaps
+        #[cfg(feature = "tracing")]
+        let _clear_span = trace_phase(GcPhase::Clear);
+        #[cfg(feature = "tracing")]
+        log_phase_start(GcPhase::Clear, before_bytes);
+
         for tcb in &tcbs {
             unsafe {
                 clear_all_marks_and_dirty(&*tcb.heap.get());
             }
         }
 
+        #[cfg(feature = "tracing")]
+        log_phase_end(GcPhase::Clear, 0);
+
         // Phase 2: Mark all reachable objects (tracing across all heaps)
+        #[cfg(feature = "tracing")]
+        let _mark_span = trace_phase(GcPhase::Mark);
+        #[cfg(feature = "tracing")]
+        log_phase_start(GcPhase::Mark, before_bytes);
+
         // We mark from each heap's perspective to ensure we find all cross-heap references
         super::sync::GC_MARK_IN_PROGRESS.store(true, std::sync::atomic::Ordering::Release);
+        let mut total_objects_marked: usize = 0;
         for tcb in &tcbs {
             unsafe {
-                mark_major_roots_multi(&mut *tcb.heap.get(), &all_stack_roots);
+                total_objects_marked = total_objects_marked.saturating_add(mark_major_roots_multi(
+                    &mut *tcb.heap.get(),
+                    &all_stack_roots,
+                ));
             }
         }
         super::sync::GC_MARK_IN_PROGRESS.store(false, std::sync::atomic::Ordering::Release);
+
+        #[cfg(feature = "tracing")]
+        log_phase_end_mark(GcPhase::Mark, total_objects_marked);
 
         // SAFETY: This fence ensures all mark bitmap writes from the marking phase
         // are visible before any sweeping thread clears marks. Without this fence,
@@ -345,6 +376,11 @@ fn perform_multi_threaded_collect() {
         std::sync::atomic::fence(std::sync::atomic::Ordering::AcqRel);
 
         // Phase 3: Sweep ALL heaps
+        #[cfg(feature = "tracing")]
+        let _sweep_span = trace_phase(GcPhase::Sweep);
+        #[cfg(feature = "tracing")]
+        log_phase_start(GcPhase::Sweep, before_bytes);
+
         for tcb in &tcbs {
             unsafe {
                 #[cfg(feature = "lazy-sweep")]
@@ -404,6 +440,14 @@ fn perform_multi_threaded_collect() {
         }
 
         crate::heap::sweep_orphan_pages();
+
+        #[cfg(feature = "tracing")]
+        log_phase_end(
+            GcPhase::Sweep,
+            before_bytes.saturating_sub(
+                crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated()),
+            ),
+        );
     } else {
         // Minor GC doesn't have cross-heap issues since it only scans young objects
         // and uses remembered sets for inter-generational references
@@ -583,12 +627,18 @@ fn perform_single_threaded_collect_with_wake() {
 
 /// Perform single-threaded full collection (fallback for tests).
 fn perform_single_threaded_collect_full() {
+    #[cfg(feature = "tracing")]
+    let gc_id = next_gc_id();
+    #[cfg(feature = "tracing")]
+    let _gc_span = trace_gc_collection("major_single_threaded", gc_id);
+
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
     let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
 
     let mut objects_reclaimed = 0;
+
     crate::heap::with_heap(|heap| {
         objects_reclaimed = collect_major(heap);
     });
@@ -617,6 +667,11 @@ fn perform_single_threaded_collect_full() {
 /// - Phase 2: Mark all reachable objects (tracing across all heaps)
 /// - Phase 3: Sweep ALL heaps
 fn perform_multi_threaded_collect_full() {
+    #[cfg(feature = "tracing")]
+    let gc_id = next_gc_id();
+    #[cfg(feature = "tracing")]
+    let _gc_span = trace_gc_collection("major_multi_threaded", gc_id);
+
     IN_COLLECT.with(|in_collect| in_collect.set(true));
 
     let start = std::time::Instant::now();
@@ -626,6 +681,11 @@ fn perform_multi_threaded_collect_full() {
     N_DROPS.with(|n| n.set(0));
 
     let mut objects_reclaimed = 0;
+
+    #[cfg(feature = "tracing")]
+    let _clear_span = trace_phase(GcPhase::Clear);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Clear, before_bytes);
 
     // CRITICAL FIX: Set global gc_in_progress flag BEFORE taking thread snapshot
     crate::heap::thread_registry()
@@ -649,25 +709,37 @@ fn perform_multi_threaded_collect_full() {
     // heaps (set during tracing of cross-heap references) to be cleared when processing
     // those heaps, leading to use-after-free bugs.
 
-    // Phase 1: Clear all marks on ALL heaps
+    #[cfg(feature = "tracing")]
+    log_phase_end(GcPhase::Clear, 0);
+
+    #[cfg(feature = "tracing")]
+    let _mark_span = trace_phase(GcPhase::Mark);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Mark, before_bytes);
+
+    let mut total_objects_marked: usize = 0;
     for tcb in &tcbs {
         unsafe {
-            clear_all_marks_and_dirty(&*tcb.heap.get());
+            total_objects_marked = total_objects_marked.saturating_add(mark_major_roots_multi(
+                &mut *tcb.heap.get(),
+                &all_stack_roots,
+            ));
         }
     }
 
-    // Phase 2: Mark all reachable objects (tracing across all heaps)
-    for tcb in &tcbs {
-        unsafe {
-            mark_major_roots_multi(&mut *tcb.heap.get(), &all_stack_roots);
-        }
-    }
+    #[cfg(feature = "tracing")]
+    log_phase_end_mark(GcPhase::Mark, total_objects_marked);
 
     // SAFETY: Fence ensures all mark bitmap writes are visible before sweeping.
     // This is the same race condition as perform_multi_threaded_collect.
     std::sync::atomic::fence(std::sync::atomic::Ordering::AcqRel);
 
     // Phase 3: Sweep ALL heaps
+    #[cfg(feature = "tracing")]
+    let _sweep_span = trace_phase(GcPhase::Sweep);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Sweep, before_bytes);
+
     for tcb in &tcbs {
         unsafe {
             let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
@@ -679,6 +751,11 @@ fn perform_multi_threaded_collect_full() {
 
     // Sweep orphan pages from terminated threads
     crate::heap::sweep_orphan_pages();
+
+    #[cfg(feature = "tracing")]
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+    #[cfg(feature = "tracing")]
+    log_phase_end(GcPhase::Sweep, before_bytes.saturating_sub(after_bytes));
 
     let duration = start.elapsed();
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
@@ -1023,10 +1100,11 @@ fn mark_minor_roots_parallel(
 }
 
 /// Mark roots from all threads' stacks for Major GC.
+/// Returns the number of objects marked.
 fn mark_major_roots_multi(
     heap: &mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
-) {
+) -> usize {
     let mut visitor = GcVisitor::new(VisitorKind::Major);
 
     for &(ptr, _) in stack_roots {
@@ -1081,6 +1159,8 @@ fn mark_major_roots_multi(
             ((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), &mut visitor);
         }
     }
+
+    visitor.objects_marked()
 }
 
 /// Mark roots using parallel marking with work stealing.
@@ -1094,11 +1174,13 @@ fn mark_major_roots_parallel(
     heap: &mut LocalHeap,
     stack_roots: &[(*const u8, std::sync::Arc<crate::heap::ThreadControlBlock>)],
     config: ParallelMarkConfig,
-) {
+) -> usize {
     if config.max_workers < 2 || !config.parallel_major_gc {
-        mark_major_roots_multi(heap, stack_roots);
-        return;
+        return mark_major_roots_multi(heap, stack_roots);
     }
+    #[cfg(feature = "tracing")]
+    let _span = trace_phase(GcPhase::Mark);
+    let mut total_marked: usize = 0;
 
     let num_workers = config
         .max_workers
@@ -1158,11 +1240,17 @@ fn mark_major_roots_parallel(
     let registry = GcWorkerRegistry::new(num_queues);
 
     let mut handles = Vec::new();
+    #[cfg(feature = "tracing")]
+    let current_span = tracing::Span::current();
     for i in 0..num_queues {
         let queues = all_queues.clone();
         let queue = all_queues[i].clone();
         let registry = registry.clone();
+        #[cfg(feature = "tracing")]
+        let span_clone = current_span.clone();
         let handle = std::thread::spawn(move || {
+            #[cfg(feature = "tracing")]
+            let _guard = span_clone.enter();
             worker_mark_loop_with_registry(queue, &registry, &queues, VisitorKind::Major)
         });
         handles.push(handle);
@@ -1171,12 +1259,18 @@ fn mark_major_roots_parallel(
     registry.notify_work_available();
 
     for handle in handles {
-        let _ = handle.join().unwrap();
+        let marked = handle.join().unwrap();
+        total_marked = total_marked.saturating_add(marked);
     }
 
     registry.set_complete();
 
     crate::gc::marker::clear_overflow_queue();
+
+    #[cfg(feature = "tracing")]
+    crate::gc::tracing::log_parallel_mark_stats(num_workers, total_marked);
+
+    total_marked
 }
 
 /// Minor Collection: Collect Young Generation only.
@@ -1187,16 +1281,40 @@ fn mark_major_roots_parallel(
 /// incremental major marking." This implementation blocks until incremental major
 /// marking completes rather than skipping minor GC entirely.
 fn collect_minor(heap: &mut LocalHeap) -> usize {
+    #[cfg(feature = "tracing")]
+    let gc_id = next_gc_id();
+
     if crate::gc::incremental::is_incremental_marking_active() {
         crate::heap::wait_for_gc_complete();
     }
 
+    #[cfg(feature = "tracing")]
+    let _gc_span = trace_gc_collection("minor", gc_id);
+
+    let before_bytes = heap.total_allocated();
+
     // 1. Mark Phase
-    mark_minor_roots(heap);
+    #[cfg(feature = "tracing")]
+    let _mark_span = trace_phase(GcPhase::Mark);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Mark, before_bytes);
+
+    let objects_marked = mark_minor_roots(heap);
+
+    #[cfg(feature = "tracing")]
+    log_phase_end_mark(GcPhase::Mark, objects_marked);
 
     // 2. Sweep Phase
+    #[cfg(feature = "tracing")]
+    let _sweep_span = trace_phase(GcPhase::Sweep);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Sweep, before_bytes);
+
     let reclaimed = sweep_segment_pages(heap, true);
     let reclaimed_large = sweep_large_objects(heap, true);
+
+    #[cfg(feature = "tracing")]
+    log_phase_end(GcPhase::Sweep, reclaimed + reclaimed_large);
 
     // 3. Promotion Phase
     promote_young_pages(heap);
@@ -1264,13 +1382,39 @@ fn collect_major(heap: &mut LocalHeap) -> usize {
 }
 
 fn collect_major_stw(heap: &mut LocalHeap) -> usize {
+    #[cfg(feature = "tracing")]
+    let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+
+    #[cfg(feature = "tracing")]
+    let _clear_span = trace_phase(GcPhase::Clear);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Clear, before_bytes);
     clear_all_marks_and_dirty(heap);
-    mark_major_roots(heap);
+    #[cfg(feature = "tracing")]
+    log_phase_end(GcPhase::Clear, 0);
+
+    #[cfg(feature = "tracing")]
+    let _mark_span = trace_phase(GcPhase::Mark);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Mark, before_bytes);
+    let objects_marked = mark_major_roots(heap);
+    #[cfg(feature = "tracing")]
+    log_phase_end_mark(GcPhase::Mark, objects_marked);
+
+    #[cfg(feature = "tracing")]
+    let _sweep_span = trace_phase(GcPhase::Sweep);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Sweep, before_bytes);
 
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
 
     promote_all_pages(heap);
+
+    #[cfg(feature = "tracing")]
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+    #[cfg(feature = "tracing")]
+    log_phase_end(GcPhase::Sweep, before_bytes.saturating_sub(after_bytes));
 
     reclaimed + reclaimed_large
 }
@@ -1356,7 +1500,8 @@ fn clear_dirty_page_states(headers: &[*const PageHeader]) {
 
 /// Mark roots for Minor GC (Stack + `RemSet`).
 /// Optimized to scan only dirty pages instead of all pages.
-fn mark_minor_roots(heap: &mut LocalHeap) {
+/// Returns the number of objects marked.
+fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
     let mut visitor = GcVisitor::new(VisitorKind::Minor);
 
     unsafe {
@@ -1418,10 +1563,12 @@ fn mark_minor_roots(heap: &mut LocalHeap) {
     heap.clear_dirty_pages_snapshot();
 
     visitor.process_worklist();
+    visitor.objects_marked()
 }
 
 /// Mark roots for Major GC (Stack).
-fn mark_major_roots(heap: &LocalHeap) {
+/// Returns the number of objects marked.
+fn mark_major_roots(heap: &LocalHeap) -> usize {
     let mut visitor = GcVisitor::new(VisitorKind::Major);
     unsafe {
         crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
@@ -1440,6 +1587,7 @@ fn mark_major_roots(heap: &LocalHeap) {
         });
     }
     visitor.process_worklist();
+    visitor.objects_marked()
 }
 
 /// Mark object for Minor GC - adds to worklist for iterative tracing.
@@ -1474,6 +1622,7 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
         }
 
         (*header.as_ptr()).set_mark(index);
+        visitor.objects_marked += 1;
 
         visitor.worklist.push(ptr);
     }
@@ -1485,8 +1634,16 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
 /// - Phase 1: Execute all Drop functions (objects still accessible)
 /// - Phase 2: Reclaim memory and rebuild free lists
 fn sweep_segment_pages(heap: &LocalHeap, only_young: bool) -> usize {
+    #[cfg(feature = "tracing")]
+    tracing::debug!(heap_bytes = heap.total_allocated(), "sweep_start");
+
     let pending = sweep_phase1_finalize(heap, only_young);
-    sweep_phase2_reclaim(heap, pending, only_young)
+    let reclaimed = sweep_phase2_reclaim(heap, pending, only_young);
+
+    #[cfg(feature = "tracing")]
+    tracing::debug!(objects_freed = reclaimed, "sweep_end");
+
+    reclaimed
 }
 
 /// Phase 1: Execute Drop functions for all dead objects.
@@ -1681,6 +1838,7 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
                 return;
             }
             (*header.as_ptr()).set_mark(idx);
+            visitor.objects_marked += 1;
         } else {
             return;
         }
@@ -1708,6 +1866,7 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
             return;
         }
         (*header.as_ptr()).set_mark(idx);
+        visitor.objects_marked += 1;
     } else {
         return;
     }
@@ -2218,7 +2377,14 @@ impl GcVisitor {
         Self {
             kind,
             worklist: Vec::with_capacity(1024),
+            objects_marked: 0,
         }
+    }
+
+    /// Get the count of objects marked by this visitor.
+    #[inline]
+    pub const fn objects_marked(&self) -> usize {
+        self.objects_marked
     }
 
     #[inline]
@@ -2234,6 +2400,7 @@ impl GcVisitor {
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
                     (*header.as_ptr()).set_mark(idx);
+                    self.objects_marked += 1;
                 } else {
                     continue;
                 }
@@ -2275,6 +2442,7 @@ impl Visitor for GcVisitor {
                         return;
                     }
                     (*header.as_ptr()).set_mark(idx);
+                    self.objects_marked += 1;
                 } else {
                     return;
                 }

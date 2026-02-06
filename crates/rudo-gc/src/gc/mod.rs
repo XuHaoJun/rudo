@@ -17,6 +17,9 @@ pub mod marker;
 pub mod sync;
 pub mod worklist;
 
+#[cfg(feature = "tracing")]
+pub mod tracing;
+
 // Re-exports from gc
 pub use gc::{
     clear_test_roots, collect, collect_full, default_collect_condition, is_collecting, mark_object,

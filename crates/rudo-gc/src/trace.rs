@@ -103,6 +103,8 @@ pub struct GcVisitor {
     /// use a chunked/overflow-resistant queue that spills to heap
     /// or uses multiple segments when approaching capacity limits.
     pub(crate) worklist: Vec<std::ptr::NonNull<crate::ptr::GcBox<()>>>,
+    /// Count of objects marked during this collection.
+    pub(crate) objects_marked: usize,
 }
 
 /// A visitor for concurrent/parallel garbage collection marking.

@@ -111,6 +111,8 @@ This project uses custom agentic workflows defined in `.agent/workflows/` (previ
 - **Concurrency**: `std::sync::atomic`, `std::sync::Mutex`, `std::sync::Barrier`, `std::thread` (Standard Library only)
 - **Garbage Collection**: In-memory mark-sweep GC (no external heap storage dependencies)
 - **Async Support**: `tokio` (optional feature `tokio` for async integration)
+- Rust 1.75+ (stable) + `tracing` crate 0.1 (optional), `tracing-subscriber` (dev dependency for testing) (009-gc-tracing)
+- N/A (in-memory spans, no persistence) (009-gc-tracing)
 
 ## Recent Features & Changes
 
@@ -181,3 +183,6 @@ All locks must be acquired in a fixed global order:
 **Mark Bitmap & Page Layout**:
 - Pages have headers with mark bitmaps.
 - This separates metadata from object data, improving cache locality during marking.
+
+## Recent Changes
+- 009-gc-tracing: Added Rust 1.75+ (stable) + `tracing` crate 0.1 (optional), `tracing-subscriber` (dev dependency for testing)

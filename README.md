@@ -30,6 +30,7 @@ The library is built on a **BiBOP (Big Bag of Pages)** memory layout, which allo
 - **HandleScope**: V8-style explicit rooting for maximum performance and compiler-checked safety.
 - **Tokio Async Integration**: Full support for async/await with `spawn_with_gc!`, `AsyncHandleScope`, and `#[gc::main]` macro.
 - **GcCell Derive Macro**: `#[derive(GcCell)]` automatically implements `GcCapture` for types with `Gc<T>` fields, simplifying SATB barrier usage.
+- **Tracing Support**: Optional structured logging of GC operations using the `tracing` crate for observability and debugging.
 
 ## Installation
 
@@ -52,6 +53,40 @@ For Tokio async/await integration:
 ```toml
 [dependencies]
 rudo-gc = { version = "0.7", features = ["derive", "tokio"] }
+```
+
+### Tracing Support (Opt-in)
+
+Enable the `tracing` feature to get structured logging of GC operations using the `tracing` crate:
+
+```toml
+[dependencies]
+rudo-gc = { version = "0.7", features = ["tracing"] }
+```
+
+Then configure a tracing subscriber in your application:
+
+```rust
+use tracing_subscriber::{fmt, EnvFilter};
+
+fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("rudo_gc=debug"))
+        .init();
+
+    // Your GC-using code here
+    let gc = Gc::new(42);
+    collect(); // GC events will appear in logs
+}
+```
+
+When enabled, you'll see structured spans for each garbage collection:
+
+```
+DEBUG rudo_gc::gc: gc_collect collection_type="major_multi_threaded" gc_id=42
+DEBUG rudo_gc::gc: gc_phase phase="clear"
+DEBUG rudo_gc::gc: phase_start phase="clear" bytes_before=10485760
+DEBUG rudo_gc::gc: phase_end phase="clear" bytes_reclaimed=0
 ```
 
 ### Incremental Marking (Opt-in)
