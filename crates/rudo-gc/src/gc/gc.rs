@@ -712,6 +712,11 @@ fn perform_multi_threaded_collect_full() {
     #[cfg(feature = "tracing")]
     log_phase_end(GcPhase::Clear, 0);
 
+    #[cfg(feature = "tracing")]
+    let _mark_span = trace_phase(GcPhase::Mark);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Mark, before_bytes);
+
     let mut total_objects_marked: usize = 0;
     for tcb in &tcbs {
         unsafe {
