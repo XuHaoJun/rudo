@@ -40,3 +40,13 @@ pub fn log_phase_transition(phase: &str, objects_marked: usize) {
         "phase_transition"
     );
 }
+
+/// Log parallel mark completion with statistics.
+#[cfg(feature = "tracing")]
+pub fn log_parallel_mark_stats(worker_count: usize, objects_marked: usize) {
+    tracing::debug!(
+        worker_count = worker_count,
+        objects_marked = objects_marked,
+        "parallel_mark_complete"
+    );
+}
