@@ -639,37 +639,9 @@ fn perform_single_threaded_collect_full() {
 
     let mut objects_reclaimed = 0;
 
-    // Phase 1: Clear
-    #[cfg(feature = "tracing")]
-    let _clear_span = trace_phase(GcPhase::Clear);
-    #[cfg(feature = "tracing")]
-    log_phase_start(GcPhase::Clear, before_bytes);
-    #[cfg(feature = "tracing")]
-    log_phase_end(GcPhase::Clear, 0);
-
-    // Phase 2: Mark
-    #[cfg(feature = "tracing")]
-    let _mark_span = trace_phase(GcPhase::Mark);
-    #[cfg(feature = "tracing")]
-    log_phase_start(GcPhase::Mark, before_bytes);
-
-    // Phase 3: Sweep
-    #[cfg(feature = "tracing")]
-    let _sweep_span = trace_phase(GcPhase::Sweep);
-    #[cfg(feature = "tracing")]
-    log_phase_start(GcPhase::Sweep, before_bytes);
-
     crate::heap::with_heap(|heap| {
         objects_reclaimed = collect_major(heap);
     });
-
-    #[cfg(feature = "tracing")]
-    log_phase_end(
-        GcPhase::Sweep,
-        before_bytes.saturating_sub(
-            crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated()),
-        ),
-    );
 
     let duration = start.elapsed();
 
@@ -710,6 +682,11 @@ fn perform_multi_threaded_collect_full() {
 
     let mut objects_reclaimed = 0;
 
+    #[cfg(feature = "tracing")]
+    let _clear_span = trace_phase(GcPhase::Clear);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Clear, before_bytes);
+
     // CRITICAL FIX: Set global gc_in_progress flag BEFORE taking thread snapshot
     crate::heap::thread_registry()
         .lock()
@@ -732,14 +709,9 @@ fn perform_multi_threaded_collect_full() {
     // heaps (set during tracing of cross-heap references) to be cleared when processing
     // those heaps, leading to use-after-free bugs.
 
-    // Phase 1: Clear all marks on ALL heaps
-    for tcb in &tcbs {
-        unsafe {
-            clear_all_marks_and_dirty(&*tcb.heap.get());
-        }
-    }
+    #[cfg(feature = "tracing")]
+    log_phase_end(GcPhase::Clear, 0);
 
-    // Phase 2: Mark all reachable objects (tracing across all heaps)
     let mut total_objects_marked: usize = 0;
     for tcb in &tcbs {
         unsafe {
@@ -750,11 +722,19 @@ fn perform_multi_threaded_collect_full() {
         }
     }
 
+    #[cfg(feature = "tracing")]
+    log_phase_end_mark(GcPhase::Mark, total_objects_marked);
+
     // SAFETY: Fence ensures all mark bitmap writes are visible before sweeping.
     // This is the same race condition as perform_multi_threaded_collect.
     std::sync::atomic::fence(std::sync::atomic::Ordering::AcqRel);
 
     // Phase 3: Sweep ALL heaps
+    #[cfg(feature = "tracing")]
+    let _sweep_span = trace_phase(GcPhase::Sweep);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Sweep, before_bytes);
+
     for tcb in &tcbs {
         unsafe {
             let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
@@ -766,6 +746,11 @@ fn perform_multi_threaded_collect_full() {
 
     // Sweep orphan pages from terminated threads
     crate::heap::sweep_orphan_pages();
+
+    #[cfg(feature = "tracing")]
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+    #[cfg(feature = "tracing")]
+    log_phase_end(GcPhase::Sweep, before_bytes.saturating_sub(after_bytes));
 
     let duration = start.elapsed();
     let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
@@ -1250,11 +1235,17 @@ fn mark_major_roots_parallel(
     let registry = GcWorkerRegistry::new(num_queues);
 
     let mut handles = Vec::new();
+    #[cfg(feature = "tracing")]
+    let current_span = tracing::Span::current();
     for i in 0..num_queues {
         let queues = all_queues.clone();
         let queue = all_queues[i].clone();
         let registry = registry.clone();
+        #[cfg(feature = "tracing")]
+        let span_clone = current_span.clone();
         let handle = std::thread::spawn(move || {
+            #[cfg(feature = "tracing")]
+            let _guard = span_clone.enter();
             worker_mark_loop_with_registry(queue, &registry, &queues, VisitorKind::Major)
         });
         handles.push(handle);
@@ -1385,13 +1376,39 @@ fn collect_major(heap: &mut LocalHeap) -> usize {
 }
 
 fn collect_major_stw(heap: &mut LocalHeap) -> usize {
+    #[cfg(feature = "tracing")]
+    let before_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+
+    #[cfg(feature = "tracing")]
+    let _clear_span = trace_phase(GcPhase::Clear);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Clear, before_bytes);
     clear_all_marks_and_dirty(heap);
+    #[cfg(feature = "tracing")]
+    log_phase_end(GcPhase::Clear, 0);
+
+    #[cfg(feature = "tracing")]
+    let _mark_span = trace_phase(GcPhase::Mark);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Mark, before_bytes);
     mark_major_roots(heap);
+    #[cfg(feature = "tracing")]
+    log_phase_end_mark(GcPhase::Mark, 0);
+
+    #[cfg(feature = "tracing")]
+    let _sweep_span = trace_phase(GcPhase::Sweep);
+    #[cfg(feature = "tracing")]
+    log_phase_start(GcPhase::Sweep, before_bytes);
 
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
 
     promote_all_pages(heap);
+
+    #[cfg(feature = "tracing")]
+    let after_bytes = crate::heap::HEAP.with(|h| unsafe { &*h.tcb.heap.get() }.total_allocated());
+    #[cfg(feature = "tracing")]
+    log_phase_end(GcPhase::Sweep, before_bytes.saturating_sub(after_bytes));
 
     reclaimed + reclaimed_large
 }

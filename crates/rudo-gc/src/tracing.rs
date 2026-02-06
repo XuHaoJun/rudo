@@ -10,7 +10,6 @@ pub mod internal {
 
     /// High-level GC phases (clear/mark/sweep).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    #[allow(dead_code)]
     pub enum GcPhase {
         /// Reset mark bits and dirty page tracking.
         Clear,
@@ -59,25 +58,21 @@ pub mod internal {
     }
 
     /// Create a span for a GC phase (clear/mark/sweep).
-    #[allow(dead_code)]
     pub fn trace_phase(phase: GcPhase) -> span::EnteredSpan {
         span!(Level::DEBUG, "gc_phase", phase = ?phase).entered()
     }
 
     /// Log the start of a GC phase.
-    #[allow(dead_code)]
     pub fn log_phase_start(phase: GcPhase, bytes_before: usize) {
         tracing::debug!(phase = ?phase, bytes_before, "phase_start");
     }
 
     /// Log the end of a GC phase.
-    #[allow(dead_code)]
     pub fn log_phase_end(phase: GcPhase, bytes_reclaimed: usize) {
         tracing::debug!(phase = ?phase, bytes_reclaimed, "phase_end");
     }
 
     /// Log the end of a mark phase with objects marked count.
-    #[allow(dead_code)]
     pub fn log_phase_end_mark(phase: GcPhase, objects_marked: usize) {
         tracing::debug!(phase = ?phase, objects_marked, "phase_end");
     }
