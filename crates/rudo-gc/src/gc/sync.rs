@@ -33,7 +33,7 @@
 //!
 //! In debug builds, lock ordering is validated automatically:
 //!
-//! - `acquire_lock(tag, current_min)`: Called before acquiring a lock
+//! - `acquire_lock(tag, current_level)`: Called before acquiring a lock
 //! - `LockGuard::new(tag)`: RAII-style guard that validates on creation
 //!
 //! # Examples
@@ -354,12 +354,13 @@ pub fn set_min_lock_order(order: LockOrder) {
 
 /// Get the current maximum lock level held by this thread.
 ///
-/// Returns the highest lock level (1, 2, or 3) currently held.
+/// Returns the highest lock level (0, 1, 2, or 3) currently held.
+/// Returns 0 when no locks are held.
 /// Used for validating lock acquisition order.
 ///
 /// In debug builds, this function accesses thread-local storage.
 /// During thread shutdown, the thread-local may be destroyed,
-/// so we handle errors defensively and return 1 as a safe default.
+/// so we handle errors defensively and return 0 as a safe default.
 #[inline]
 #[cfg(debug_assertions)]
 #[must_use]
@@ -367,15 +368,23 @@ pub fn get_current_lock_level() -> u8 {
     LOCK_ORDER_STATE
         .try_with(|state| {
             if state.is_shutdown.get() {
-                return 1;
+                return 0;
             }
             let stack = state.stack.borrow();
             if stack.is_empty() {
-                return 1;
+                return 0;
             }
-            stack.iter().copied().max().unwrap_or(1)
+            stack.iter().copied().max().unwrap_or(0)
         })
-        .unwrap_or(1)
+        .unwrap_or(0)
+}
+
+/// No-op in release builds (returns 0, allowing any lock acquisition).
+#[inline]
+#[cfg(not(debug_assertions))]
+#[must_use]
+pub fn get_current_lock_level() -> u8 {
+    0
 }
 
 #[cfg(test)]
