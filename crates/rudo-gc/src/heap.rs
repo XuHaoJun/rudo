@@ -314,12 +314,13 @@ static THREAD_REGISTRY: OnceLock<Mutex<ThreadRegistry>> = OnceLock::new();
 /// not hold any locks with order > 2 when calling this function.
 #[inline]
 pub fn thread_registry() -> &'static Mutex<ThreadRegistry> {
-    // Validate lock ordering: thread_registry is order 2
-    // Cannot be called while holding GC Request lock (order 3)
+    // Validate lock ordering: thread_registry is level 2
+    // Cannot be called while holding GC Request lock (level 3)
     #[cfg(debug_assertions)]
     {
-        use crate::gc::sync::{acquire_lock, LockOrder};
-        acquire_lock(LockOrder::GlobalMarkState, LockOrder::LocalHeap);
+        use crate::gc::sync::{acquire_lock, get_current_lock_level, LockOrder};
+        let current_level = get_current_lock_level();
+        acquire_lock(LockOrder::GlobalMarkState, current_level);
     }
     THREAD_REGISTRY.get_or_init(|| Mutex::new(ThreadRegistry::new()))
 }

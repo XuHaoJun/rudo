@@ -56,8 +56,8 @@
 //! use rudo_gc::gc::sync::{acquire_lock, get_current_lock_level, LockOrder};
 //!
 //! fn multi_lock_operation() {
-//!     let current_min = get_current_lock_level();
-//!     acquire_lock(LockOrder::GlobalMarkState, current_min);
+//!     let current_level = get_current_lock_level();
+//!     acquire_lock(LockOrder::GlobalMarkState, current_level);
 //!     let _mark_state = IncrementalMarkState::global();
 //!     // ... GC operations
 //! }
@@ -69,9 +69,9 @@
 //! use rudo_gc::gc::sync::{acquire_lock, get_current_lock_level, LockOrder};
 //!
 //! fn thread_registry_operation() {
-//!     let current_min = get_current_lock_level();
+//!     let current_level = get_current_lock_level();
 //!     // thread_registry() is level 2, validate after level 1
-//!     acquire_lock(LockOrder::GlobalMarkState, current_min);
+//!     acquire_lock(LockOrder::GlobalMarkState, current_level);
 //!     let registry = thread_registry();
 //!     // ... operations
 //! }
@@ -215,19 +215,19 @@ pub mod lock_order {
 /// # Arguments
 ///
 /// * `lock_tag` - The lock order tag for this lock type
-/// * `current_min` - The minimum lock level currently held by this thread
+/// * `current_level` - The current lock level held by this thread (1, 2, or 3)
 ///
 /// # Panics
 ///
-/// Panics in debug builds if `lock_tag` is less than `current_min`.
+/// Panics in debug builds if `lock_tag` level is less than `current_level`.
 #[inline]
 #[allow(clippy::missing_const_for_fn)]
-pub fn acquire_lock(lock_tag: LockOrder, current_min: LockOrder) {
+pub fn acquire_lock(lock_tag: LockOrder, current_level: u8) {
     #[cfg(debug_assertions)]
     {
-        validate_lock_order(lock_tag, current_min);
+        validate_lock_order(lock_tag, current_level);
     }
-    let _ = (lock_tag, current_min); // Suppress unused warnings in release builds
+    let _ = (lock_tag, current_level); // Suppress unused warnings in release builds
 }
 
 /// Acquire a lock guard with automatic release order tracking.
@@ -257,8 +257,8 @@ impl LockGuard {
     pub fn new(tag: LockOrder) -> Self {
         #[cfg(debug_assertions)]
         {
-            let current_min = get_current_lock_level();
-            validate_lock_order(tag, current_min);
+            let current_level = get_current_lock_level();
+            validate_lock_order(tag, current_level);
             set_min_lock_order(tag);
         }
         Self { _tag: tag }
@@ -281,6 +281,8 @@ impl Drop for LockGuard {
 /// After calling this function, lock order tracking is disabled.
 /// This should be called during thread cleanup before the thread-local
 /// storage is destroyed.
+///
+/// In release builds, this is a no-op.
 #[inline]
 #[allow(clippy::missing_const_for_fn)]
 pub fn enter_thread_shutdown() {
@@ -313,30 +315,28 @@ pub fn enter_thread_shutdown() {
 #[inline]
 #[allow(clippy::format_in_format_args)]
 #[cfg(debug_assertions)]
-pub fn validate_lock_order(tag: LockOrder, current_min: LockOrder) {
-    let same_level = tag.level() == current_min.level();
-    let is_downgrade = tag.level() < current_min.level();
+pub fn validate_lock_order(tag: LockOrder, current_level: u8) {
+    let same_level = tag.level() == current_level;
+    let is_downgrade = tag.level() < current_level;
 
     debug_assert!(
         same_level || !is_downgrade,
-        "Lock ordering violation: {} (level {}) cannot be acquired while holding {} (level {}). Downgrades are not allowed.",
+        "Lock ordering violation: {} (level {}) cannot be acquired while holding lock level {}. Downgrades are not allowed.",
         format!("{:?}", tag),
         tag.level(),
-        format!("{:?}", current_min),
-        current_min.level()
+        current_level
     );
 }
 
 #[inline]
 #[cfg(not(debug_assertions))]
-pub fn validate_lock_order(_tag: LockOrder, _expected_min: LockOrder) {
+pub fn validate_lock_order(_tag: LockOrder, _current_level: u8) {
     // No-op in release builds
 }
 
-/// Thread-local storage for the current minimum lock order.
+/// Store a lock level in the thread-local stack.
 ///
-/// Uses a stack to track the minimum lock level held by this thread.
-/// Used for validation of lock acquisition order.
+/// Pushes the lock level for later validation of lock acquisition order.
 #[inline]
 #[allow(clippy::missing_const_for_fn)]
 pub fn set_min_lock_order(order: LockOrder) {
@@ -352,39 +352,30 @@ pub fn set_min_lock_order(order: LockOrder) {
     let _ = order;
 }
 
-/// Get the current minimum lock level held by this thread.
-///
 /// Get the current maximum lock level held by this thread.
 ///
-/// Returns the highest lock level currently held, used for validating
-/// lock acquisition order. Locks must be acquired in non-decreasing level order.
+/// Returns the highest lock level (1, 2, or 3) currently held.
+/// Used for validating lock acquisition order.
 ///
 /// In debug builds, this function accesses thread-local storage.
 /// During thread shutdown, the thread-local may be destroyed,
-/// so we handle errors defensively and return level 1 as a safe default.
+/// so we handle errors defensively and return 1 as a safe default.
 #[inline]
 #[cfg(debug_assertions)]
 #[must_use]
-pub fn get_current_lock_level() -> LockOrder {
+pub fn get_current_lock_level() -> u8 {
     LOCK_ORDER_STATE
         .try_with(|state| {
             if state.is_shutdown.get() {
-                return LockOrder::LocalHeap;
+                return 1;
             }
             let stack = state.stack.borrow();
             if stack.is_empty() {
-                return LockOrder::LocalHeap;
+                return 1;
             }
-            let max_level = stack.iter().copied().max().unwrap_or(1);
-            #[allow(clippy::match_same_arms)]
-            match max_level {
-                1 => LockOrder::LocalHeap,
-                2 => LockOrder::GlobalMarkState,
-                3 => LockOrder::GcRequest,
-                _ => LockOrder::LocalHeap,
-            }
+            stack.iter().copied().max().unwrap_or(1)
         })
-        .unwrap_or(LockOrder::LocalHeap)
+        .unwrap_or(1)
 }
 
 #[cfg(test)]
@@ -471,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lock_guard_bug_outer_drops_incorrectly() {
+    fn test_lock_guard_nested_scopes_with_early_drops() {
         let _guard1 = LockGuard::new(LockOrder::LocalHeap);
         {
             let _guard2 = LockGuard::new(LockOrder::SegmentManager);
