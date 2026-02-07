@@ -2558,9 +2558,9 @@ pub unsafe fn find_gc_box_from_ptr(
     ptr: *const u8,
 ) -> Option<NonNull<crate::ptr::GcBox<()>>> {
     let addr = ptr as usize;
-    // 1. Quick range check
+    // 1. Quick range check — if not in this heap, try orphan/global fallback
     if !heap.is_in_range(addr) {
-        return None;
+        return unsafe { find_gc_box_from_orphan(ptr) };
     }
 
     // 1.1. Safety check for the zero page (first 4KB)
@@ -2613,7 +2613,7 @@ pub unsafe fn find_gc_box_from_ptr(
                     .small_pages
                     .contains(&(addr & crate::heap::page_mask()))
                 {
-                    return None;
+                    return find_gc_box_from_orphan(ptr);
                 }
                 if (header_ptr as usize) % 4096 != 0 || (header_ptr as usize) < 4096 {
                     return None;
@@ -2675,6 +2675,90 @@ pub unsafe fn find_gc_box_from_ptr(
             obj_ptr.cast::<crate::ptr::GcBox<()>>(),
         ))
     }
+}
+
+/// Try to resolve a pointer from orphan pages or the global large object map.
+///
+/// This is the fallback path for `find_gc_box_from_ptr` when no live
+/// `LocalHeap` contains the target address. It handles:
+/// - Large objects: via `segment_manager().large_object_map`
+/// - Small objects: via `segment_manager().orphan_pages`
+///
+/// # Safety
+///
+/// The pointer must be safe to read if it is a valid pointer. Orphan page
+/// memory is valid because `sweep_orphan_pages` only reclaims after the mark
+/// phase confirms no survivors; this function is used during marking.
+#[must_use]
+pub unsafe fn find_gc_box_from_orphan(ptr: *const u8) -> Option<NonNull<crate::ptr::GcBox<()>>> {
+    let addr = ptr as usize;
+    if addr < 4096 {
+        return None;
+    }
+
+    let page_addr = addr & page_mask();
+
+    let manager = segment_manager()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+
+    // 1. Try global large_object_map (covers multi-page large objects from any thread)
+    if let Some(&(head_addr, size, h_size)) = manager.large_object_map.get(&page_addr) {
+        drop(manager); // release lock before pointer arithmetic
+
+        if addr < head_addr + h_size {
+            return None; // points into header area
+        }
+        let offset = addr - (head_addr + h_size);
+        if offset >= size {
+            return None; // past the object
+        }
+        let obj_ptr = (head_addr as *mut u8).wrapping_add(h_size);
+        #[allow(clippy::cast_ptr_alignment)]
+        return Some(unsafe { NonNull::new_unchecked(obj_ptr.cast::<crate::ptr::GcBox<()>>()) });
+    }
+
+    // 2. Try orphan small pages
+    for orphan in &manager.orphan_pages {
+        if orphan.is_large {
+            continue; // already handled via large_object_map
+        }
+        if orphan.addr != page_addr {
+            continue;
+        }
+        // Found matching orphan small page; copy values before dropping manager
+        let orphan_addr = orphan.addr;
+        let header = orphan_addr as *mut PageHeader;
+        let maybe_slot = unsafe {
+            if (*header).magic == MAGIC_GC_PAGE {
+                let b_size = (*header).block_size as usize;
+                let h = PageHeader::header_size(b_size);
+                if addr < orphan_addr + h {
+                    None // points into header
+                } else {
+                    let offset = addr - (orphan_addr + h);
+                    let idx = offset / b_size;
+                    if idx >= (*header).obj_count as usize || !(*header).is_allocated(idx) {
+                        None
+                    } else {
+                        Some((b_size, h, idx))
+                    }
+                }
+            } else {
+                None
+            }
+        };
+        if let Some((block_size, h_size, index)) = maybe_slot {
+            drop(manager);
+            let obj_ptr = (orphan_addr as *mut u8).wrapping_add(h_size + index * block_size);
+            #[allow(clippy::cast_ptr_alignment)]
+            return Some(unsafe {
+                NonNull::new_unchecked(obj_ptr.cast::<crate::ptr::GcBox<()>>())
+            });
+        }
+    }
+
+    None
 }
 
 // ============================================================================
