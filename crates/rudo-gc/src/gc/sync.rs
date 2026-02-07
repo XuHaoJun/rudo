@@ -53,10 +53,10 @@
 //! ## Lock Order Validation
 //!
 //! ```ignore
-//! use rudo_gc::gc::sync::{acquire_lock, get_min_lock_order, LockOrder};
+//! use rudo_gc::gc::sync::{acquire_lock, get_current_lock_level, LockOrder};
 //!
 //! fn multi_lock_operation() {
-//!     let current_min = get_min_lock_order();
+//!     let current_min = get_current_lock_level();
 //!     acquire_lock(LockOrder::GlobalMarkState, current_min);
 //!     let _mark_state = IncrementalMarkState::global();
 //!     // ... GC operations
@@ -66,10 +66,10 @@
 //! ## Thread Registry Access
 //!
 //! ```ignore
-//! use rudo_gc::gc::sync::{acquire_lock, get_min_lock_order, LockOrder};
+//! use rudo_gc::gc::sync::{acquire_lock, get_current_lock_level, LockOrder};
 //!
 //! fn thread_registry_operation() {
-//!     let current_min = get_min_lock_order();
+//!     let current_min = get_current_lock_level();
 //!     // thread_registry() is level 2, validate after level 1
 //!     acquire_lock(LockOrder::GlobalMarkState, current_min);
 //!     let registry = thread_registry();
@@ -257,7 +257,7 @@ impl LockGuard {
     pub fn new(tag: LockOrder) -> Self {
         #[cfg(debug_assertions)]
         {
-            let current_min = get_min_lock_order();
+            let current_min = get_current_lock_level();
             validate_lock_order(tag, current_min);
             set_min_lock_order(tag);
         }
@@ -354,13 +354,18 @@ pub fn set_min_lock_order(order: LockOrder) {
 
 /// Get the current minimum lock level held by this thread.
 ///
+/// Get the current maximum lock level held by this thread.
+///
+/// Returns the highest lock level currently held, used for validating
+/// lock acquisition order. Locks must be acquired in non-decreasing level order.
+///
 /// In debug builds, this function accesses thread-local storage.
 /// During thread shutdown, the thread-local may be destroyed,
 /// so we handle errors defensively and return level 1 as a safe default.
 #[inline]
 #[cfg(debug_assertions)]
 #[must_use]
-pub fn get_min_lock_order() -> LockOrder {
+pub fn get_current_lock_level() -> LockOrder {
     LOCK_ORDER_STATE
         .try_with(|state| {
             if state.is_shutdown.get() {
@@ -370,9 +375,9 @@ pub fn get_min_lock_order() -> LockOrder {
             if stack.is_empty() {
                 return LockOrder::LocalHeap;
             }
-            let min_level = stack.iter().copied().min().unwrap_or(1);
+            let max_level = stack.iter().copied().max().unwrap_or(1);
             #[allow(clippy::match_same_arms)]
-            match min_level {
+            match max_level {
                 1 => LockOrder::LocalHeap,
                 2 => LockOrder::GlobalMarkState,
                 3 => LockOrder::GcRequest,
@@ -384,7 +389,7 @@ pub fn get_min_lock_order() -> LockOrder {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_min_lock_order, LockGuard, LockOrder};
+    use super::{LockGuard, LockOrder};
 
     #[test]
     fn test_lock_order_values() {
@@ -517,12 +522,6 @@ mod tests {
         let _guard1 = LockGuard::new(LockOrder::LocalHeap);
         let _guard2 = LockGuard::new(LockOrder::SegmentManager);
         let _guard3 = LockGuard::new(LockOrder::GcRequest);
-    }
-
-    #[test]
-    #[should_panic(expected = "TEST PANIC")]
-    fn test_panic_works() {
-        panic!("TEST PANIC");
     }
 
     #[test]

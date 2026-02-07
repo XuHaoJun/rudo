@@ -230,3 +230,21 @@ fn test_stress_concurrent_operations() {
     let expected = num_threads * 100;
     assert_eq!(completed.load(Ordering::SeqCst), expected);
 }
+
+/// Test that acquiring level-1 lock after level-2 is correctly rejected.
+///
+/// This test verifies the fix for the min() vs max() bug in get_current_lock_level().
+/// Using min() would incorrectly return level 1 when stack is [1, 2],
+/// allowing forbidden downgrades.
+#[test]
+#[should_panic(expected = "Lock ordering violation")]
+fn test_cannot_acquire_level_1_after_level_2_even_with_level_1_on_stack() {
+    // First acquire level-1 lock
+    let _guard1 = LockGuard::new(LockOrder::LocalHeap);
+    // Then acquire level-2 lock - stack is now [1, 2]
+    let _guard2 = LockGuard::new(LockOrder::GlobalMarkState);
+    // Attempting to acquire level-1 lock should panic
+    // Using min() would incorrectly allow this (min=1)
+    // Using max() correctly rejects this (max=2, 1 < 2 is downgrade)
+    let _guard3 = LockGuard::new(LockOrder::SegmentManager);
+}
