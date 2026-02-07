@@ -10,20 +10,45 @@ use std::time::Duration;
 
 use rudo_gc::gc::sync::{LockGuard, LockOrder};
 
-/// Test that lock order constants have correct values.
+/// Test that lock order constants have correct order values.
 #[test]
 fn test_lock_order_constants() {
     assert_eq!(LockOrder::LocalHeap.order_value(), 1);
-    assert_eq!(LockOrder::GlobalMarkState.order_value(), 2);
-    assert_eq!(LockOrder::GcRequest.order_value(), 3);
+    assert_eq!(LockOrder::SegmentManager.order_value(), 2);
+    assert_eq!(LockOrder::GlobalMarkState.order_value(), 3);
+    assert_eq!(LockOrder::GcRequest.order_value(), 4);
 }
 
-/// Test that lock order comparisons work correctly.
+/// Test that lock order levels are correct.
+#[test]
+fn test_lock_order_levels() {
+    assert_eq!(LockOrder::LocalHeap.level(), 1);
+    assert_eq!(LockOrder::SegmentManager.level(), 1);
+    assert_eq!(LockOrder::GlobalMarkState.level(), 2);
+    assert_eq!(LockOrder::GcRequest.level(), 3);
+}
+
+/// Test that lock order level comparisons work correctly.
 #[test]
 fn test_lock_order_comparison() {
-    assert!(LockOrder::LocalHeap.order_value() < LockOrder::GlobalMarkState.order_value());
-    assert!(LockOrder::GlobalMarkState.order_value() < LockOrder::GcRequest.order_value());
-    assert!(LockOrder::LocalHeap.order_value() < LockOrder::GcRequest.order_value());
+    assert!(LockOrder::LocalHeap.level() < LockOrder::GlobalMarkState.level());
+    assert!(LockOrder::GlobalMarkState.level() < LockOrder::GcRequest.level());
+    assert!(LockOrder::LocalHeap.level() < LockOrder::GcRequest.level());
+    assert!(LockOrder::LocalHeap.level() == LockOrder::SegmentManager.level());
+}
+
+/// Test that same-level locks can be acquired in any order.
+#[test]
+fn test_same_level_locks_any_order() {
+    let _guard1 = LockGuard::new(LockOrder::LocalHeap);
+    let _guard2 = LockGuard::new(LockOrder::SegmentManager);
+}
+
+/// Test that same-level locks can be acquired in reverse order.
+#[test]
+fn test_same_level_locks_reverse_order() {
+    let _guard1 = LockGuard::new(LockOrder::SegmentManager);
+    let _guard2 = LockGuard::new(LockOrder::LocalHeap);
 }
 
 /// Test LockGuard RAII guard for lock ordering.
@@ -147,9 +172,9 @@ fn test_lock_ordering_validation_panics_on_violation() {
     {
         use rudo_gc::gc::sync::validate_lock_order;
 
-        // Trying to acquire GcRequest (order 3) while holding LocalHeap (order 1) as minimum
+        // Trying to acquire GcRequest (level 3) while holding LocalHeap (level 1) as minimum
         // should panic
-        validate_lock_order(LockOrder::GcRequest, LockOrder::LocalHeap);
+        validate_lock_order(LockOrder::GcRequest, 1);
     }
 
     // In release builds, this test is skipped
@@ -204,4 +229,22 @@ fn test_stress_concurrent_operations() {
     // All operations should complete
     let expected = num_threads * 100;
     assert_eq!(completed.load(Ordering::SeqCst), expected);
+}
+
+/// Test that acquiring level-1 lock after level-2 is correctly rejected.
+///
+/// This test verifies the fix for the min() vs max() bug in get_current_lock_level().
+/// Using min() would incorrectly return level 1 when stack is [1, 2],
+/// allowing forbidden downgrades.
+#[test]
+#[should_panic(expected = "Lock ordering violation")]
+fn test_cannot_acquire_level_1_after_level_2_even_with_level_1_on_stack() {
+    // First acquire level-1 lock
+    let _guard1 = LockGuard::new(LockOrder::LocalHeap);
+    // Then acquire level-2 lock - stack is now [1, 2]
+    let _guard2 = LockGuard::new(LockOrder::GlobalMarkState);
+    // Attempting to acquire level-1 lock should panic
+    // Using min() would incorrectly allow this (min=1)
+    // Using max() correctly rejects this (max=2, 1 < 2 is downgrade)
+    let _guard3 = LockGuard::new(LockOrder::SegmentManager);
 }
