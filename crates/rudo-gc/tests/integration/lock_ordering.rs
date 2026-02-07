@@ -172,9 +172,9 @@ fn test_lock_ordering_validation_panics_on_violation() {
     {
         use rudo_gc::gc::sync::validate_lock_order;
 
-        // Trying to acquire GcRequest (order 3) while holding LocalHeap (order 1) as minimum
+        // Trying to acquire GcRequest (level 3) while holding LocalHeap (level 1) as minimum
         // should panic
-        validate_lock_order(LockOrder::GcRequest, LockOrder::LocalHeap);
+        validate_lock_order(LockOrder::GcRequest, 1);
     }
 
     // In release builds, this test is skipped
