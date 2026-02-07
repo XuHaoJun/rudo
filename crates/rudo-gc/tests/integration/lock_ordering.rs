@@ -10,20 +10,45 @@ use std::time::Duration;
 
 use rudo_gc::gc::sync::{LockGuard, LockOrder};
 
-/// Test that lock order constants have correct values.
+/// Test that lock order constants have correct order values.
 #[test]
 fn test_lock_order_constants() {
     assert_eq!(LockOrder::LocalHeap.order_value(), 1);
-    assert_eq!(LockOrder::GlobalMarkState.order_value(), 2);
-    assert_eq!(LockOrder::GcRequest.order_value(), 3);
+    assert_eq!(LockOrder::SegmentManager.order_value(), 2);
+    assert_eq!(LockOrder::GlobalMarkState.order_value(), 3);
+    assert_eq!(LockOrder::GcRequest.order_value(), 4);
 }
 
-/// Test that lock order comparisons work correctly.
+/// Test that lock order levels are correct.
+#[test]
+fn test_lock_order_levels() {
+    assert_eq!(LockOrder::LocalHeap.level(), 1);
+    assert_eq!(LockOrder::SegmentManager.level(), 1);
+    assert_eq!(LockOrder::GlobalMarkState.level(), 2);
+    assert_eq!(LockOrder::GcRequest.level(), 3);
+}
+
+/// Test that lock order level comparisons work correctly.
 #[test]
 fn test_lock_order_comparison() {
-    assert!(LockOrder::LocalHeap.order_value() < LockOrder::GlobalMarkState.order_value());
-    assert!(LockOrder::GlobalMarkState.order_value() < LockOrder::GcRequest.order_value());
-    assert!(LockOrder::LocalHeap.order_value() < LockOrder::GcRequest.order_value());
+    assert!(LockOrder::LocalHeap.level() < LockOrder::GlobalMarkState.level());
+    assert!(LockOrder::GlobalMarkState.level() < LockOrder::GcRequest.level());
+    assert!(LockOrder::LocalHeap.level() < LockOrder::GcRequest.level());
+    assert!(LockOrder::LocalHeap.level() == LockOrder::SegmentManager.level());
+}
+
+/// Test that same-level locks can be acquired in any order.
+#[test]
+fn test_same_level_locks_any_order() {
+    let _guard1 = LockGuard::new(LockOrder::LocalHeap);
+    let _guard2 = LockGuard::new(LockOrder::SegmentManager);
+}
+
+/// Test that same-level locks can be acquired in reverse order.
+#[test]
+fn test_same_level_locks_reverse_order() {
+    let _guard1 = LockGuard::new(LockOrder::SegmentManager);
+    let _guard2 = LockGuard::new(LockOrder::LocalHeap);
 }
 
 /// Test LockGuard RAII guard for lock ordering.

@@ -7,19 +7,19 @@
 //!
 //! All locks must be acquired in the following order:
 //!
-//! | Order | Lock Type       | Access Function        | Description                      |
-//! |-------|----------------|----------------------|----------------------------------|
-//! | 1     | `LocalHeap`      | `HEAP.with(|h| ...)` | Per-thread allocation             |
-//! | 1     | SegmentManager | `segment_manager()`   | Global memory management         |
-//! | 2     | GlobalMarkState| `IncrementalMarkState::*` | Mark phase coordination      |
-//! | 3     | GcRequest      | `thread_registry()`   | GC trigger and coordination       |
+//! | Level | Lock Type       | Order Value | Description                      |
+//! |-------|----------------|-------------|----------------------------------|
+//! | 1     | `LocalHeap`      | 1           | Per-thread allocation             |
+//! | 1     | `SegmentManager` | 2           | Global memory management         |
+//! | 2     | `GlobalMarkState`| 3           | Mark phase coordination          |
+//! | 3     | `GcRequest`      | 4           | GC trigger and coordination       |
 //!
 //! ## Lock Ordering Rules
 //!
 //! ### Acquisition Rules
 //!
-//! 1. **Increasing Order**: Locks must be acquired in increasing order (1 → 2 → 3)
-//! 2. **Same Order**: Locks with order 1 (`LocalHeap`, `SegmentManager`) can be
+//! 1. **Increasing Order**: Locks must be acquired in increasing level (1 → 2 → 3)
+//! 2. **Same Level**: Locks with level 1 (`LocalHeap`, `SegmentManager`) can be
 //!    acquired in any order relative to each other
 //! 3. **Reverse Release**: Release locks in reverse order of acquisition
 //!
@@ -45,19 +45,19 @@
 //!
 //! fn safe_operation() {
 //!     let _guard = LockGuard::new(LockOrder::LocalHeap);
-//!     // Safe to acquire SegmentManager (same order) here
-//!     // Safe to acquire GlobalMarkState (higher order) here
+//!     // Safe to acquire SegmentManager (same level) here
+//!     // Safe to acquire GlobalMarkState (higher level) here
 //! }
 //! ```
 //!
 //! ## Lock Order Validation
 //!
 //! ```ignore
-//! use rudo_gc::gc::sync::{acquire_lock, LockOrder};
+//! use rudo_gc::gc::sync::{acquire_lock, get_min_lock_order, LockOrder};
 //!
 //! fn multi_lock_operation() {
-//!     // Validate before acquiring GlobalMarkState
-//!     acquire_lock(LockOrder::GlobalMarkState, LockOrder::LocalHeap);
+//!     let current_min = get_min_lock_order();
+//!     acquire_lock(LockOrder::GlobalMarkState, current_min);
 //!     let _mark_state = IncrementalMarkState::global();
 //!     // ... GC operations
 //! }
@@ -66,11 +66,12 @@
 //! ## Thread Registry Access
 //!
 //! ```ignore
-//! use rudo_gc::gc::sync::{acquire_lock, LockOrder};
+//! use rudo_gc::gc::sync::{acquire_lock, get_min_lock_order, LockOrder};
 //!
 //! fn thread_registry_operation() {
-//!     // thread_registry() is order 2, validate after LocalHeap
-//!     acquire_lock(LockOrder::GlobalMarkState, LockOrder::LocalHeap);
+//!     let current_min = get_min_lock_order();
+//!     // thread_registry() is level 2, validate after level 1
+//!     acquire_lock(LockOrder::GlobalMarkState, current_min);
 //!     let registry = thread_registry();
 //!     // ... operations
 //! }
@@ -82,8 +83,8 @@
 //!
 //! ```ignore,should_panic
 //! fn wrong_order() {
-//!     let _guard = LockGuard::new(LockOrder::GcRequest);  // Order 3
-//!     let _manager = segment_manager(); // Order 1 - WRONG!
+//!     let _guard = LockGuard::new(LockOrder::GcRequest);  // Level 3
+//!     let _manager = segment_manager(); // Level 1 - WRONG!
 //! }
 //! ```
 //!
@@ -91,15 +92,25 @@
 //!
 //! ```ignore
 //! fn correct_order() {
-//!     let _manager = segment_manager();  // Order 1
-//!     let _guard = LockGuard::new(LockOrder::GcRequest); // Order 3
+//!     let _manager = segment_manager();  // Level 1
+//!     let _guard = LockGuard::new(LockOrder::GcRequest); // Level 3
 //! }
 //! ```
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::AtomicBool;
 
 const MAX_LOCK_DEPTH: usize = 16;
+
+struct LockOrderState {
+    stack: RefCell<Vec<u8>>,
+    is_shutdown: Cell<bool>,
+}
+
+thread_local!(static LOCK_ORDER_STATE: LockOrderState = LockOrderState {
+    stack: RefCell::new(Vec::with_capacity(MAX_LOCK_DEPTH)),
+    is_shutdown: Cell::new(false),
+});
 
 /// Flag indicating whether the GC mark phase is currently in progress.
 ///
@@ -107,14 +118,10 @@ const MAX_LOCK_DEPTH: usize = 16;
 /// where marked objects are swept before the mark phase completes.
 pub static GC_MARK_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
-thread_local! {
-    static MIN_LOCK_ORDER_STACK: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(MAX_LOCK_DEPTH));
-}
-
 /// Lock order tags for validation.
 ///
 /// Each lock type has a unique order value. Locks must be acquired in
-/// increasing order to prevent circular wait conditions.
+/// increasing level to prevent circular wait conditions.
 ///
 /// # Lock Level Semantics
 ///
@@ -148,33 +155,53 @@ pub enum LockOrder {
 
 impl LockOrder {
     /// Get the order value for this lock type.
+    ///
+    /// Returns a unique value for each lock variant (1-4).
+    /// Used for serialization and debugging.
     #[must_use]
     pub const fn order_value(self) -> u8 {
         self as u8
+    }
+
+    /// Get the conceptual lock level for this lock type.
+    ///
+    /// Lock levels define the acquisition hierarchy:
+    /// - Level 1: `LocalHeap`, `SegmentManager` (allocation locks, can be acquired in any order)
+    /// - Level 2: `GlobalMarkState` (coordination lock, must be after level 1)
+    /// - Level 3: `GcRequest` (request lock, must be after level 2)
+    #[must_use]
+    #[allow(clippy::pedantic)]
+    pub const fn level(self) -> u8 {
+        match self {
+            Self::LocalHeap => 1,
+            Self::SegmentManager => 1,
+            Self::GlobalMarkState => 2,
+            Self::GcRequest => 3,
+        }
     }
 }
 
 /// Lock order constants for use in lock acquisition.
 ///
 /// These constants define the strict acquisition order to prevent deadlocks.
-/// All locks must be acquired in increasing order.
+/// All locks must be acquired in increasing level.
 pub mod lock_order {
     use super::LockOrder;
 
-    /// `LocalHeap` per-thread allocation lock (order 1).
+    /// `LocalHeap` per-thread allocation lock (level 1).
     #[allow(dead_code)]
     pub const LOCAL_HEAP: LockOrder = LockOrder::LocalHeap;
 
-    /// `SegmentManager` global memory management lock (order 1).
+    /// `SegmentManager` global memory management lock (level 1).
     /// Used for page allocation and large object management.
     #[allow(dead_code)]
     pub const SEGMENT_MANAGER: LockOrder = LockOrder::SegmentManager;
 
-    /// `GlobalMarkState` mark phase coordination lock (order 2).
+    /// `GlobalMarkState` mark phase coordination lock (level 2).
     #[allow(dead_code)]
     pub const GLOBAL_MARK_STATE: LockOrder = LockOrder::GlobalMarkState;
 
-    /// `GcRequest` trigger and coordination lock (order 3).
+    /// `GcRequest` trigger and coordination lock (level 3).
     #[allow(dead_code)]
     pub const GC_REQUEST: LockOrder = LockOrder::GcRequest;
 }
@@ -188,7 +215,7 @@ pub mod lock_order {
 /// # Arguments
 ///
 /// * `lock_tag` - The lock order tag for this lock type
-/// * `current_min` - The minimum lock order currently held by this thread
+/// * `current_min` - The minimum lock level currently held by this thread
 ///
 /// # Panics
 ///
@@ -216,7 +243,7 @@ pub fn acquire_lock(lock_tag: LockOrder, current_min: LockOrder) {
 ///
 /// fn example_function() {
 ///     let _guard = LockGuard::new(LockOrder::LocalHeap);
-///     // Minimum lock order is now LocalHeap
+///     // Minimum lock level is now 1 (LocalHeap)
 /// }
 /// ```
 #[must_use]
@@ -241,9 +268,26 @@ impl LockGuard {
 #[cfg(debug_assertions)]
 impl Drop for LockGuard {
     fn drop(&mut self) {
-        // Handle thread shutdown case where TLS may already be destroyed
-        let _ = MIN_LOCK_ORDER_STACK.try_with(|stack| {
-            stack.borrow_mut().pop();
+        let _ = LOCK_ORDER_STATE.try_with(|state| {
+            if !state.is_shutdown.get() {
+                state.stack.borrow_mut().pop();
+            }
+        });
+    }
+}
+
+/// Mark the current thread as shutting down.
+///
+/// After calling this function, lock order tracking is disabled.
+/// This should be called during thread cleanup before the thread-local
+/// storage is destroyed.
+#[inline]
+#[allow(clippy::missing_const_for_fn)]
+pub fn enter_thread_shutdown() {
+    #[cfg(debug_assertions)]
+    {
+        let _ = LOCK_ORDER_STATE.try_with(|state| {
+            state.is_shutdown.set(true);
         });
     }
 }
@@ -254,9 +298,14 @@ impl Drop for LockGuard {
 ///
 /// # Rules
 ///
-/// 1. Standard order: `tag.order_value() >= current_min.order_value()`
-/// 2. Same-level exception: `LocalHeap` (1) and `SegmentManager` (2) are both
-///    level 1 locks, so they can be acquired in any order relative to each other.
+/// Locks must be acquired in increasing level order:
+/// - Level 1: `LocalHeap`, `SegmentManager` (can be acquired in any order relative to each other)
+/// - Level 2: `GlobalMarkState` (must be after all level 1 locks)
+/// - Level 3: `GcRequest` (must be after all level 2 locks)
+///
+/// Same-level acquisitions are always allowed (e.g., `LocalHeap` → `SegmentManager`).
+/// Higher-level acquisitions are allowed.
+/// Lower-level acquisitions (e.g., `GlobalMarkState` → `LocalHeap`) are forbidden.
 ///
 /// # Panics
 ///
@@ -265,25 +314,16 @@ impl Drop for LockGuard {
 #[allow(clippy::format_in_format_args)]
 #[cfg(debug_assertions)]
 pub fn validate_lock_order(tag: LockOrder, current_min: LockOrder) {
-    // Special case: LocalHeap and SegmentManager are both level 1 locks
-    // They can be acquired in any order relative to each other
-    let is_level_1_tag = tag == LockOrder::LocalHeap || tag == LockOrder::SegmentManager;
-    let is_level_1_current =
-        current_min == LockOrder::LocalHeap || current_min == LockOrder::SegmentManager;
-
-    if is_level_1_tag && is_level_1_current {
-        // Both are level 1, allow in any order
-        return;
-    }
+    let same_level = tag.level() == current_min.level();
+    let is_downgrade = tag.level() < current_min.level();
 
     debug_assert!(
-        tag.order_value() >= current_min.order_value(),
-        "Lock ordering violation: {} (order {}) cannot be acquired while holding {} (order {}). Expected minimum order: {}",
+        same_level || !is_downgrade,
+        "Lock ordering violation: {} (level {}) cannot be acquired while holding {} (level {}). Downgrades are not allowed.",
         format!("{:?}", tag),
-        tag.order_value(),
+        tag.level(),
         format!("{:?}", current_min),
-        current_min.order_value(),
-        format!("{:?}", current_min)
+        current_min.level()
     );
 }
 
@@ -295,41 +335,47 @@ pub fn validate_lock_order(_tag: LockOrder, _expected_min: LockOrder) {
 
 /// Thread-local storage for the current minimum lock order.
 ///
-/// Uses a stack to track the minimum order value of locks currently held by this thread.
+/// Uses a stack to track the minimum lock level held by this thread.
 /// Used for validation of lock acquisition order.
 #[inline]
 #[allow(clippy::missing_const_for_fn)]
 pub fn set_min_lock_order(order: LockOrder) {
     #[cfg(debug_assertions)]
     {
-        // Handle thread shutdown case where TLS may already be destroyed
-        let _ = MIN_LOCK_ORDER_STACK.try_with(|stack| {
-            stack.borrow_mut().push(order.order_value());
+        let _ = LOCK_ORDER_STATE.try_with(|state| {
+            if state.is_shutdown.get() {
+                return;
+            }
+            state.stack.borrow_mut().push(order.level());
         });
     }
     let _ = order;
 }
 
-/// Get the current minimum lock order held by this thread.
+/// Get the current minimum lock level held by this thread.
 ///
 /// In debug builds, this function accesses thread-local storage.
 /// During thread shutdown, the thread-local may be destroyed,
-/// so we handle errors defensively and return `LocalHeap` as a safe default.
+/// so we handle errors defensively and return level 1 as a safe default.
 #[inline]
 #[cfg(debug_assertions)]
 #[must_use]
 pub fn get_min_lock_order() -> LockOrder {
-    MIN_LOCK_ORDER_STACK
-        .try_with(|stack| {
-            let stack = stack.borrow();
-            let min = stack.last().copied().unwrap_or(1);
+    LOCK_ORDER_STATE
+        .try_with(|state| {
+            if state.is_shutdown.get() {
+                return LockOrder::LocalHeap;
+            }
+            let stack = state.stack.borrow();
+            if stack.is_empty() {
+                return LockOrder::LocalHeap;
+            }
+            let min_level = stack.iter().copied().min().unwrap_or(1);
             #[allow(clippy::match_same_arms)]
-            match min {
+            match min_level {
                 1 => LockOrder::LocalHeap,
-                2 => LockOrder::SegmentManager,
-                3 => LockOrder::GlobalMarkState,
-                4 => LockOrder::GcRequest,
-                // Any other value (0 or 5+) falls back to LocalHeap
+                2 => LockOrder::GlobalMarkState,
+                3 => LockOrder::GcRequest,
                 _ => LockOrder::LocalHeap,
             }
         })
@@ -338,7 +384,7 @@ pub fn get_min_lock_order() -> LockOrder {
 
 #[cfg(test)]
 mod tests {
-    use super::{LockGuard, LockOrder};
+    use super::{get_min_lock_order, LockGuard, LockOrder};
 
     #[test]
     fn test_lock_order_values() {
@@ -349,10 +395,17 @@ mod tests {
     }
 
     #[test]
+    fn test_lock_order_levels() {
+        assert_eq!(LockOrder::LocalHeap.level(), 1);
+        assert_eq!(LockOrder::SegmentManager.level(), 1);
+        assert_eq!(LockOrder::GlobalMarkState.level(), 2);
+        assert_eq!(LockOrder::GcRequest.level(), 3);
+    }
+
+    #[test]
     fn test_lock_order_comparison() {
-        assert!(LockOrder::LocalHeap.order_value() < LockOrder::SegmentManager.order_value());
-        assert!(LockOrder::SegmentManager.order_value() < LockOrder::GlobalMarkState.order_value());
-        assert!(LockOrder::GlobalMarkState.order_value() < LockOrder::GcRequest.order_value());
+        assert!(LockOrder::LocalHeap.level() < LockOrder::GlobalMarkState.level());
+        assert!(LockOrder::GlobalMarkState.level() < LockOrder::GcRequest.level());
     }
 
     #[test]
@@ -464,6 +517,12 @@ mod tests {
         let _guard1 = LockGuard::new(LockOrder::LocalHeap);
         let _guard2 = LockGuard::new(LockOrder::SegmentManager);
         let _guard3 = LockGuard::new(LockOrder::GcRequest);
+    }
+
+    #[test]
+    #[should_panic(expected = "TEST PANIC")]
+    fn test_panic_works() {
+        panic!("TEST PANIC");
     }
 
     #[test]
