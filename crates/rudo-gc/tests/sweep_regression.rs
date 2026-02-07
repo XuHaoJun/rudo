@@ -27,6 +27,11 @@ impl Drop for AllocatingDropper {
     }
 }
 
+/// Test that `drop_fn` can safely trigger allocation.
+///
+/// This verifies the snapshot pattern works - `drop_fn` allocates new objects,
+/// but the original page iteration continues safely using the snapshot.
+/// See `docs/reentrant-alloc-rules.md` for context.
 #[test]
 fn test_drop_allocates() {
     DROP_COUNT.with(|c| c.set(0));
