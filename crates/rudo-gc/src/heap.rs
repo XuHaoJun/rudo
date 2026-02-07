@@ -1781,8 +1781,8 @@ impl LocalHeap {
     /// # Reentrant Safety
     ///
     /// **NOT reentrant-safe during GC.** This function modifies:
-    /// - `self.pages` vector (push at line 1847)
-    /// - `self.small_pages` set (insert at line 1848)
+    /// - `self.pages` vector (push)
+    /// - `self.small_pages` set (insert)
     ///
     /// Never call this from GC phases that iterate over pages.
     /// Use the snapshot pattern in `sweep_phase1_finalize` instead.
@@ -1856,8 +1856,8 @@ impl LocalHeap {
         }
 
         // 3. Update LocalHeap pages list
-        // SAFETY: Called outside GC critical section - modifying self.pages is safe here.
-        // NOT reentrant-safe during GC iteration. See docs/reentrant-alloc-rules.md.
+        // SAFETY: Snapshot pattern in callers makes this safe during GC.
+        // See docs/reentrant-alloc-rules.md.
         self.pages.push(header);
         self.small_pages.insert(ptr.as_ptr() as usize);
 

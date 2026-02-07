@@ -106,7 +106,7 @@ After executing `drop_fn`, mark the object as dead to prevent double-drop:
 
 ## Key Functions Reference
 
-### `alloc_slow` (heap.rs:1779)
+### `alloc_slow`
 
 **Safety Status:** NOT reentrant-safe during GC
 
@@ -116,7 +116,7 @@ After executing `drop_fn`, mark the object as dead to prevent double-drop:
 
 **Never call from:** Functions that iterate `heap.pages`
 
-### `sweep_phase1_finalize` (gc.rs:1898)
+### `sweep_phase1_finalize`
 
 **Safety Status:** Executes user code (drop_fn)
 
@@ -128,7 +128,7 @@ let pages_snapshot: Vec<_> = heap.all_pages().collect();
 for page_ptr in pages_snapshot { ... }
 ```
 
-### `sweep_phase2_reclaim` (gc.rs:1966)
+### `sweep_phase2_reclaim`
 
 **Safety Status:** Safe (no user code execution)
 
@@ -147,7 +147,7 @@ When modifying GC or allocation code, verify:
 
 ## Test Reference
 
-### `test_drop_allocates` (sweep_regression.rs:31)
+### `test_drop_allocates`
 
 Verifies that the snapshot pattern works correctly - `drop_fn` can safely allocate new objects while the original page iteration continues using the snapshot.
 
