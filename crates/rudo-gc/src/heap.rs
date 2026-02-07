@@ -1776,6 +1776,18 @@ impl LocalHeap {
     pub const fn try_adopt_orphan_page(&mut self, _block_size: usize) -> Option<usize> {
         None
     }
+    /// Allocation slow path - requests new page from global manager.
+    ///
+    /// # Reentrant Safety
+    ///
+    /// **NOT reentrant-safe during GC.** This function modifies:
+    /// - `self.pages` vector (push)
+    /// - `self.small_pages` set (insert)
+    ///
+    /// Never call this from GC phases that iterate over pages.
+    /// Use the snapshot pattern in `sweep_phase1_finalize` instead.
+    ///
+    /// See `docs/reentrant-alloc-rules.md` for safety guidelines.
     fn alloc_slow(&mut self, _size: usize, class_index: usize) -> NonNull<u8> {
         check_safepoint();
         let block_size = match class_index {
@@ -1844,6 +1856,8 @@ impl LocalHeap {
         }
 
         // 3. Update LocalHeap pages list
+        // SAFETY: Snapshot pattern in callers makes this safe during GC.
+        // See docs/reentrant-alloc-rules.md.
         self.pages.push(header);
         self.small_pages.insert(ptr.as_ptr() as usize);
 

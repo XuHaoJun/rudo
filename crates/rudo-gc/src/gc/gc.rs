@@ -1895,6 +1895,19 @@ fn sweep_segment_pages(heap: &LocalHeap, only_young: bool) -> usize {
 ///
 /// This phase only calls `drop_fn` but does NOT reclaim memory yet.
 /// This ensures that during Drop, all other GC objects are still accessible.
+///
+/// # Reentrant Safety
+///
+/// **Executes user code (`drop_fn`).** The user's drop function may allocate
+/// new GC objects, which triggers `alloc_slow` and modifies `heap.pages`.
+///
+/// **Must snapshot pages before iteration** to prevent iterator invalidation:
+/// ```rust
+/// let pages_snapshot: Vec<_> = heap.all_pages().collect();
+/// for page_ptr in pages_snapshot { ... }
+/// ```
+///
+/// See `docs/reentrant-alloc-rules.md` for safety guidelines.
 fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop> {
     let mut pending = Vec::new();
 
@@ -1970,6 +1983,13 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
 ///
 /// Optimized: Uses bitmap checks instead of `PendingDrop` tracking
 /// to eliminate `HashMap` overhead and reduce GC pause time.
+///
+/// # Reentrant Safety
+///
+/// **Safe for reentrant allocation** - no user code executes in this phase.
+/// Memory state is being modified (free list construction), so allocation
+/// during this phase is theoretically possible but should not occur.
+/// Allocation paths should not be reachable here during Phase 2.
 #[allow(
     clippy::branches_sharing_code,
     clippy::if_not_else,
