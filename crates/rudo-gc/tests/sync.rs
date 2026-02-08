@@ -1062,6 +1062,7 @@ fn test_gcrwlock_write_barrier_triggers() {
                     let mut guard = data.write();
                     guard.value = i;
                     BARRIER_TRIGGERED.store(true, Ordering::SeqCst);
+                    drop(guard);
                 }
             })
         })
@@ -1100,6 +1101,7 @@ fn test_gcmutex_write_barrier_triggers() {
                     let mut guard = counter.lock();
                     guard.count += 1;
                     BARRIER_TRIGGERED.store(true, Ordering::SeqCst);
+                    drop(guard);
                 }
             })
         })
@@ -1143,6 +1145,7 @@ fn test_gcrwlock_recovers_after_panic() {
 
     let guard = data.read();
     assert_eq!(guard.value, 42, "New value should be set");
+    drop(guard);
 }
 
 #[test]
@@ -1173,4 +1176,5 @@ fn test_gcmutex_recovers_after_panic() {
 
     let guard = counter.lock();
     assert_eq!(guard.count, 42, "New value should be set");
+    drop(guard);
 }
