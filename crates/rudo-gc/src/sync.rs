@@ -276,6 +276,15 @@ where
     }
 }
 
+impl<T> Clone for GcRwLock<T>
+where
+    T: Clone + Sized,
+{
+    fn clone(&self) -> Self {
+        Self::new(self.read().clone())
+    }
+}
+
 /// Read guard for [`GcRwLock`].
 ///
 /// Holds a read lock on the `GcRwLock` and provides access to the inner data.
@@ -492,6 +501,15 @@ where
 {
     fn default() -> Self {
         Self::new(T::default())
+    }
+}
+
+impl<T> Clone for GcMutex<T>
+where
+    T: Clone + Sized,
+{
+    fn clone(&self) -> Self {
+        Self::new(self.lock().clone())
     }
 }
 

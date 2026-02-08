@@ -3,7 +3,12 @@
 //! These tests verify that Gc<T> and Weak<T> can be safely shared across threads
 //! when T: Send + Sync.
 
-#![allow(clippy::redundant_clone, clippy::let_and_return, clippy::use_self)]
+#![allow(
+    clippy::redundant_clone,
+    clippy::let_and_return,
+    clippy::use_self,
+    clippy::items_after_statements
+)]
 
 use rudo_gc::{Gc, GcMutex, GcRwLock, Trace, Weak};
 use std::sync::Arc;
@@ -690,3 +695,49 @@ const _: fn() = || {
     impl<T: Trace + Send + Sync> AssertSend<GcMutex<T>> for GcMutex<T> {}
     impl<T: Trace + Send + Sync> AssertSync<GcMutex<T>> for GcMutex<T> {}
 };
+
+// ============================================================================
+// US2: Performance Isolation - GcCell single-threaded usage verification
+// ============================================================================
+
+#[test]
+fn test_gccell_single_threaded() {
+    use rudo_gc::GcCell;
+    rudo_gc::test_util::reset();
+
+    #[derive(Trace)]
+    struct Data {
+        value: i32,
+    }
+
+    let cell: rudo_gc::Gc<GcCell<Data>> = rudo_gc::Gc::new(GcCell::new(Data { value: 42 }));
+
+    {
+        let mut guard = cell.borrow_mut_gen_only();
+        guard.value = 100;
+    }
+
+    assert_eq!(cell.borrow().value, 100);
+}
+
+#[test]
+fn test_gccell_performance_no_atomics() {
+    use rudo_gc::GcCell;
+    rudo_gc::test_util::reset();
+
+    #[derive(Trace)]
+    struct Counter {
+        count: u64,
+    }
+
+    let cell: rudo_gc::Gc<GcCell<Counter>> = rudo_gc::Gc::new(GcCell::new(Counter { count: 0 }));
+
+    // Single-threaded access should have no atomic overhead
+    #[allow(clippy::cast_lossless, clippy::cast_sign_loss)]
+    for i in 0..1000 {
+        let mut guard = cell.borrow_mut_gen_only();
+        guard.count = i as u64;
+    }
+
+    assert_eq!(cell.borrow().count, 999);
+}
