@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "A garbage-collected smart pointer with automatic cycle detection using BiBOP memory layout and Mark-Sweep collection"
-readme = "README.md"
+readme = "../../README.md"
 keywords = ["garbage-collection", "gc", "memory", "smart-pointer", "cycle-detection"]
 categories = ["memory-management", "rust-patterns"]
 
