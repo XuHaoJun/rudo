@@ -933,7 +933,6 @@ fn test_tsan_gc_mutex_no_data_race() {
                     // Exclusive access to add items
                     let mut guard = state.lock();
                     guard.items.push(i);
-                    RACE_DETECTED.store(true, Ordering::SeqCst);
                 }
             })
         })
@@ -946,7 +945,6 @@ fn test_tsan_gc_mutex_no_data_race() {
                 for _ in 0..25 {
                     // Exclusive access to read items
                     let _len = state.lock().items.len();
-                    RACE_DETECTED.store(true, Ordering::SeqCst);
                 }
             })
         })
@@ -956,8 +954,8 @@ fn test_tsan_gc_mutex_no_data_race() {
         handle.join().unwrap();
     }
 
-    // Verify no data race occurred
-    assert!(!RACE_DETECTED.load(Ordering::SeqCst) || RACE_DETECTED.load(Ordering::SeqCst));
+    // TSan will report any data races; this test verifies no UB under contention
+    assert!(!RACE_DETECTED.load(Ordering::SeqCst));
     let guard = state.lock();
     assert_eq!(guard.items.len(), 100);
 }

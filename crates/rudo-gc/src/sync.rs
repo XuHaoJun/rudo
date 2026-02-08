@@ -518,7 +518,7 @@ where
 /// Holds the mutex lock and provides exclusive access to the inner data.
 /// The lock is released when the guard is dropped.
 ///
-/// Access via [`Deref`] yields `&mut T`, [`DerefMut`] yields `&mut T`.
+/// Access via [`Deref`] yields `&T`, [`DerefMut`] yields `&mut T`.
 pub struct GcMutexGuard<'a, T: ?Sized> {
     guard: parking_lot::MutexGuard<'a, T>,
     _marker: PhantomData<&'a T>,
