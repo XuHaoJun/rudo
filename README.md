@@ -24,7 +24,8 @@ The library is built on a **BiBOP (Big Bag of Pages)** memory layout, which allo
 - **Large Object Space (LOS)**: Specialized handling for objects larger than 2KB to prevent fragmentation.
 - **Weak References**: Support for `Weak<T>` pointers with proper lifecycle management.
 - **ZST Optimization**: Zero-Sized Types (like `()`) are handled with zero heap allocation overhead.
-- **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`, enabling safe multi-threaded data sharing.
+- **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`, enabling safe multi-threaded data sharing. Use `GcRwLock` and `GcMutex` for concurrent access.
+- **Concurrent Primitives**: `GcRwLock<T>` and `GcMutex<T>` provide thread-safe locking with automatic write barriers and GC-safe lock bypass during STW pauses.
 - **Parallel Marking**: Work-stealing based parallel marking for multi-core scalability.
 - **Lazy Sweep**: Defers memory reclamation to allocation time, reducing STW pause times (enabled by default).
 - **HandleScope**: V8-style explicit rooting for maximum performance and compiler-checked safety.
@@ -289,6 +290,98 @@ impl GcCapture for Node {
 - Enums: Not supported (use manual implementation)
 - Generic types: Not supported (use manual implementation)
 - Recursive types: Not supported (use manual implementation)
+
+## GcRwLock and GcMutex
+
+`GcRwLock<T>` and `GcMutex<T>` provide thread-safe concurrent access to GC-managed objects. Use these when sharing data between threads.
+
+### When to Use Each
+
+| Type | Use Case |
+|------|----------|
+| `GcRwLock<T>` | Read-heavy workloads, multiple readers concurrent |
+| `GcMutex<T>` | Write-heavy workloads, simple exclusive access |
+
+### GcRwLock Example
+
+```rust
+use rudo_gc::{Gc, GcRwLock, Trace};
+
+#[derive(Trace)]
+struct SharedData {
+    value: i32,
+    items: Vec<i32>,
+}
+
+let data: Gc<GcRwLock<SharedData>> = Gc::new(GcRwLock::new(SharedData {
+    value: 0,
+    items: Vec::new(),
+}));
+
+// Multiple readers can access concurrently
+let readers: Vec<_> = (0..4).map(|_| {
+    let data = Gc::clone(&data);
+    std::thread::spawn(move || {
+        for _ in 0..100 {
+            let guard = data.read();
+            println!("Reader saw: {}", guard.value);
+        }
+    })
+}).collect();
+
+// Writer has exclusive access
+let mut guard = data.write();
+guard.value = 42;
+guard.items.push(1);
+drop(guard);
+
+for handle in readers {
+    handle.join().unwrap();
+}
+```
+
+### GcMutex Example
+
+```rust
+use rudo_gc::{Gc, GcMutex, Trace};
+
+#[derive(Trace)]
+struct Counter {
+    count: i32,
+}
+
+let counter: Gc<GcMutex<Counter>> = Gc::new(GcMutex::new(Counter { count: 0 }));
+
+// Multiple threads increment the counter
+let handles: Vec<_> = (0..4).map(|_| {
+    let counter = Gc::clone(&counter);
+    std::thread::spawn(move || {
+        for _ in 0..100 {
+            let mut guard = counter.lock();
+            guard.count += 1;
+        }
+    })
+}).collect();
+
+for handle in handles {
+    handle.join().unwrap();
+}
+
+assert_eq!(counter.lock().count, 400);
+```
+
+### Write Barriers
+
+Both `GcRwLock::write()` and `GcMutex::lock()` automatically trigger generational and SATB write barriers on guard acquisition. This ensures correct GC tracking during incremental marking.
+
+### Comparison with GcCell
+
+| Characteristic | GcCell | GcRwLock | GcMutex |
+|----------------|--------|----------|---------|
+| Threading | !Sync | Sync + Send | Sync + Send |
+| Multiple readers | No | Yes | No |
+| Write barriers | On borrow_mut() | On write() | On lock() |
+| Use case | Single-threaded DOM, AST | Caches, configs | Queues, state machines |
 
 ## HandleScope  - Optional
 
