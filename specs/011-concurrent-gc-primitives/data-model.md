@@ -25,8 +25,8 @@ Reader-writer lock wrapper for GC objects, optimized for read-heavy concurrent w
 
 - `Debug`: Delegates to inner RwLock's Debug impl
 - `Trace`: Bypasses lock during GC tracing (see below)
-- `Send`: When `T: Trace + Send`
-- `Sync`: When `T: Trace + Send + Sync`
+- `Send`: When `T: Trace + Send + Sync + ?Sized`
+- `Sync`: When `T: Trace + Send + Sync + ?Sized`
 
 ### Guard Types
 
@@ -42,12 +42,12 @@ impl<T: ?Sized> GcRwLock<T> {
     pub fn read(&self) -> GcRwLockReadGuard<'_, T>
     pub fn write(&self) -> GcRwLockWriteGuard<'_, T>
     pub fn try_read(&self) -> Option<GcRwLockReadGuard<'_, T>>
-    pub fn try_write(&self) -> Option<GcRwLockWriteGuard<'_, T is_locked(&self) -> bool
+    pub fn try_write(&self) -> Option<GcRwLockWriteGuard<'_, T>>
+    pub fn is_locked(&self) -> bool
 }
 ```
 
-## Entity: GcMutex<T>>
-    pub fn>
+## Entity: GcMutex<T>
 
 Exclusive mutex wrapper for GC objects, optimized for write-heavy concurrent workloads.
 
@@ -61,8 +61,8 @@ Exclusive mutex wrapper for GC objects, optimized for write-heavy concurrent wor
 
 - `Debug`: Delegates to inner Mutex's Debug impl
 - `Trace`: Bypasses lock during GC tracing
-- `Send`: When `T: Trace + Send`
-- `Sync`: When `T: Trace + Send + Sync`
+- `Send`: When `T: Trace + Send + Sync + ?Sized`
+- `Sync`: When `T: Trace + Send + Sync + ?Sized`
 
 ### Guard Types
 
