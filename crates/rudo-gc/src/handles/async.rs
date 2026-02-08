@@ -341,7 +341,6 @@ impl AsyncHandleScope {
         F: FnOnce(AsyncHandleGuard<'_>) -> R,
     {
         let guard = AsyncHandleGuard {
-            scope: self,
             _marker: PhantomData,
         };
         f(guard)
@@ -395,8 +394,11 @@ unsafe impl Sync for AsyncHandleScope {}
 
 /// A guard for safe access to async handles.
 ///
-/// `AsyncHandleGuard` provides checked access to handles, verifying
-/// in debug builds that the handle belongs to the correct scope.
+/// `AsyncHandleGuard` provides a convenient API for accessing handles.
+/// The `get()` method performs the same scope validation as `AsyncHandle::get()`.
+///
+/// This type is primarily provided for API symmetry and potential future extensions.
+/// Using `handle.get()` directly is equally safe and idiomatic.
 ///
 /// # Example
 ///
@@ -420,7 +422,6 @@ unsafe impl Sync for AsyncHandleScope {}
 /// }
 /// ```
 pub struct AsyncHandleGuard<'scope> {
-    scope: &'scope AsyncHandleScope,
     _marker: PhantomData<&'scope ()>,
 }
 
@@ -439,17 +440,10 @@ impl<'scope> AsyncHandleGuard<'scope> {
     ///
     /// # Panics
     ///
-    /// Panics in debug mode if the handle is from a different scope
+    /// Panics if the scope that created the handle has been dropped.
     #[inline]
     pub fn get<'a, T: Trace + 'static>(&'a self, handle: &'a AsyncHandle<T>) -> &'a T {
-        #[cfg(debug_assertions)]
-        {
-            if handle.scope_id != self.scope.id {
-                panic!("AsyncHandle accessed from wrong scope");
-            }
-        }
-
-        unsafe { handle.get() }
+        handle.get()
     }
 }
 
@@ -502,9 +496,60 @@ pub struct AsyncHandle<T: Trace + 'static> {
 impl<T: Trace + 'static> AsyncHandle<T> {
     /// Gets a reference to the underlying data.
     ///
+    /// This method performs runtime validation to detect use-after-free bugs.
+    ///
     /// # Returns
     ///
     /// A reference to the GC-allocated data
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `AsyncHandleScope` that created this handle has been dropped.
+    /// This indicates a use-after-free bug where the handle was used after
+    /// the scope ended.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Trace};
+    /// use rudo_gc::handles::AsyncHandleScope;
+    ///
+    /// #[derive(Trace)]
+    /// struct Data { value: i32 }
+    ///
+    /// async fn use_handle() {
+    ///     let tcb = rudo_gc::heap::current_thread_control_block().unwrap();
+    ///     let scope = AsyncHandleScope::new(&tcb);
+    ///     let gc = Gc::new(Data { value: 42 });
+    ///     let handle = scope.handle(&gc);
+    ///
+    ///     // Safe: scope is still alive
+    ///     println!("{}", handle.get().value);
+    /// }
+    /// ```
+    #[inline]
+    #[track_caller]
+    pub fn get(&self) -> &T {
+        let tcb = crate::heap::current_thread_control_block()
+            .expect("AsyncHandle::get() must be called within a GC thread");
+
+        #[cfg(debug_assertions)]
+        {
+            if !tcb.is_scope_active(self.scope_id) {
+                panic!(
+                    "AsyncHandle used after scope was dropped. \
+                     The AsyncHandleScope that created this handle has been dropped. \
+                     Ensure the scope stays alive as long as any handles are in use."
+                );
+            }
+        }
+
+        let slot = unsafe { &*self.slot };
+        let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
+        unsafe { &*gc_box_ptr }.value()
+    }
+
+    /// Gets a reference to the underlying data without scope validation.
     ///
     /// # Safety
     ///
@@ -514,13 +559,33 @@ impl<T: Trace + 'static> AsyncHandle<T> {
     /// **Undefined behavior will occur** if these constraints are violated:
     /// the returned reference may be dangling, pointing to freed memory.
     ///
-    /// In debug builds, use `scope.with_guard()` for checked handle access.
+    /// Use this method only when you can prove the scope is still alive
+    /// and need to avoid the small overhead of the scope check.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Trace};
+    /// use rudo_gc::handles::AsyncHandleScope;
+    ///
+    /// #[derive(Trace)]
+    /// struct Data { value: i32 }
+    ///
+    /// async fn use_unchecked() {
+    ///     let tcb = rudo_gc::heap::current_thread_control_block().unwrap();
+    ///     let scope = AsyncHandleScope::new(&tcb);
+    ///     let gc = Gc::new(Data { value: 42 });
+    ///     let handle = scope.handle(&gc);
+    ///
+    ///     // Unsafe but faster - caller must ensure scope is alive
+    ///     println!("{}", unsafe { handle.get_unchecked().value });
+    /// }
+    /// ```
     #[inline]
-    pub unsafe fn get(&self) -> &T {
+    pub unsafe fn get_unchecked(&self) -> &T {
         let slot = unsafe { &*self.slot };
         let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
-        let gc_box = unsafe { &*gc_box_ptr };
-        gc_box.value()
+        unsafe { &*gc_box_ptr }.value()
     }
 
     /// Converts this handle to a `Gc<T>`.
@@ -665,7 +730,7 @@ macro_rules! spawn_with_gc {
             drop(__scope);
             __result
         })
-    }    };
+    }};
 }
 
 /// A builder for tracking multiple GC objects in async contexts.
