@@ -61,7 +61,7 @@ pub struct ThreadControlBlock {
     /// Async scope registry for cross-await handle tracking.
     async_scopes: Mutex<Vec<AsyncScopeEntry>>,
     /// Set of active async scope IDs for O(1) scope validity checking.
-    /// Used by AsyncHandle::get() to detect use-after-free.
+    /// Used by `AsyncHandle::get()` to detect use-after-free.
     active_scope_ids: Mutex<HashSet<u64>>,
     /// Local work queue for incremental marking.
     /// Reduces contention on global worklist.
@@ -159,8 +159,7 @@ impl ThreadControlBlock {
     /// Unregister an async scope.
     #[allow(clippy::missing_panics_doc)]
     pub fn unregister_async_scope(&self, id: u64) {
-        let mut scopes = self.async_scopes.lock().unwrap();
-        scopes.retain(|e| e.id != id);
+        self.async_scopes.lock().unwrap().retain(|e| e.id != id);
         self.active_scope_ids.lock().unwrap().remove(&id);
     }
 

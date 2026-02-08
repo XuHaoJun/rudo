@@ -732,6 +732,9 @@ impl Clone for TrackedGc {
     }
 }
 
+unsafe impl Send for TrackedGc {}
+unsafe impl Sync for TrackedGc {}
+
 impl GcScope {
     /// Creates a new empty `GcScope`.
     ///
@@ -880,7 +883,7 @@ impl GcScope {
     /// }
     /// ```
     #[inline]
-    pub fn track_from(&mut self, other: &GcScope) -> &mut Self {
+    pub fn track_from(&mut self, other: &Self) -> &mut Self {
         self.tracked.extend(other.tracked.iter().cloned());
         self
     }
@@ -948,8 +951,9 @@ impl GcScope {
 
         let scope = AsyncHandleScope::new(&tcb);
 
-        let handles: Vec<AsyncGcHandle> = self
-            .tracked
+        let tracked: Vec<TrackedGc> = self.tracked.clone();
+
+        let handles: Vec<AsyncGcHandle> = tracked
             .iter()
             .map(|tracked| {
                 let used = unsafe { &*scope.data.used.get() }.fetch_add(1, Ordering::Relaxed);
@@ -1145,6 +1149,9 @@ impl AsyncGcHandle {
         self.type_id
     }
 }
+
+unsafe impl Send for GcScope {}
+unsafe impl Sync for GcScope {}
 
 unsafe impl Send for AsyncGcHandle {}
 unsafe impl Sync for AsyncGcHandle {}
