@@ -855,6 +855,7 @@ fn test_miri_concurrent_gc_trace() {
 // from multiple threads. Run with: RUSTFLAGS="-Z sanitizer=thread" cargo test
 
 #[test]
+#[allow(clippy::significant_drop_tightening)]
 fn test_tsan_gc_rwlock_no_data_race() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -907,6 +908,7 @@ fn test_tsan_gc_rwlock_no_data_race() {
 }
 
 #[test]
+#[allow(clippy::significant_drop_tightening)]
 fn test_tsan_gc_mutex_no_data_race() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -930,7 +932,7 @@ fn test_tsan_gc_mutex_no_data_race() {
                 for i in 0..25 {
                     // Exclusive access to add items
                     let mut guard = state.lock();
-                    guard.items.push(i as i32);
+                    guard.items.push(i);
                     RACE_DETECTED.store(true, Ordering::SeqCst);
                 }
             })
@@ -943,8 +945,7 @@ fn test_tsan_gc_mutex_no_data_race() {
             std::thread::spawn(move || {
                 for _ in 0..25 {
                     // Exclusive access to read items
-                    let guard = state.lock();
-                    let _len = guard.items.len();
+                    let _len = state.lock().items.len();
                     RACE_DETECTED.store(true, Ordering::SeqCst);
                 }
             })
@@ -963,8 +964,6 @@ fn test_tsan_gc_mutex_no_data_race() {
 
 #[test]
 fn test_tsan_gc_rwlock_readers_no_contention() {
-    use std::sync::Barrier;
-
     rudo_gc::test_util::reset();
 
     #[derive(Trace)]
@@ -989,6 +988,7 @@ fn test_tsan_gc_rwlock_readers_no_contention() {
                 let guard = data.read();
                 // Read-only access - multiple threads can read simultaneously
                 let _sum: u64 = guard.values.iter().sum();
+                drop(guard);
             }
         }));
     }
@@ -999,7 +999,9 @@ fn test_tsan_gc_rwlock_readers_no_contention() {
 
     // Data should be unchanged after concurrent reads
     let guard = data.read();
-    assert_eq!(guard.values, [1, 2, 3, 4, 5, 6, 7, 8]);
+    let values = guard.values;
+    drop(guard);
+    assert_eq!(values, [1, 2, 3, 4, 5, 6, 7, 8]);
 }
 
 #[test]
@@ -1012,10 +1014,6 @@ fn test_tsan_interior_mutability_through_guard() {
     struct Inner {
         state: AtomicUsize,
     }
-
-    let inner: Gc<Inner> = Gc::new(Inner {
-        state: AtomicUsize::new(0),
-    });
 
     let lock: Gc<GcRwLock<Inner>> = Gc::new(GcRwLock::new(Inner {
         state: AtomicUsize::new(0),
@@ -1038,5 +1036,7 @@ fn test_tsan_interior_mutability_through_guard() {
     }
 
     let guard = lock.read();
-    assert_eq!(guard.state.load(Ordering::SeqCst), 400);
+    let state_value = guard.state.load(Ordering::SeqCst);
+    drop(guard);
+    assert_eq!(state_value, 400);
 }
