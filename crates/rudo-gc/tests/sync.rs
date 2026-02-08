@@ -5,7 +5,7 @@
 
 #![allow(clippy::redundant_clone, clippy::let_and_return, clippy::use_self)]
 
-use rudo_gc::{Gc, Trace, Weak};
+use rudo_gc::{Gc, GcMutex, GcRwLock, Trace, Weak};
 use std::sync::Arc;
 use std::thread;
 
@@ -520,3 +520,173 @@ fn test_multiple_weaks_concurrent() {
         assert!(!weak.is_alive());
     }
 }
+
+// ============================================================================
+// GcRwLock and GcMutex Tests (011-concurrent-gc-primitives)
+// ============================================================================
+
+#[derive(Trace, Debug, Default)]
+struct TestData {
+    value: i32,
+}
+
+#[test]
+fn test_gc_rwlock_read() {
+    rudo_gc::test_util::reset();
+    let lock: Gc<GcRwLock<TestData>> = Gc::new(GcRwLock::new(TestData { value: 10 }));
+
+    let guard = lock.read();
+    let value = guard.value;
+    drop(guard);
+    assert_eq!(value, 10);
+}
+
+#[test]
+fn test_gc_rwlock_write() {
+    rudo_gc::test_util::reset();
+    let lock: Gc<GcRwLock<TestData>> = Gc::new(GcRwLock::new(TestData { value: 10 }));
+
+    {
+        let mut guard = lock.write();
+        guard.value = 20;
+    }
+
+    assert_eq!(lock.read().value, 20);
+}
+
+#[test]
+fn test_gc_rwlock_try_read() {
+    rudo_gc::test_util::reset();
+    let lock: Gc<GcRwLock<TestData>> = Gc::new(GcRwLock::new(TestData { value: 10 }));
+
+    assert!(lock.try_read().is_some());
+}
+
+#[test]
+fn test_gc_rwlock_try_write() {
+    rudo_gc::test_util::reset();
+    let lock: Gc<GcRwLock<TestData>> = Gc::new(GcRwLock::new(TestData { value: 10 }));
+
+    assert!(lock.try_write().is_some());
+}
+
+#[test]
+fn test_gc_rwlock_is_locked() {
+    rudo_gc::test_util::reset();
+    let lock: Gc<GcRwLock<TestData>> = Gc::new(GcRwLock::new(TestData { value: 10 }));
+
+    // Initially not locked (no writers)
+    assert!(!lock.is_locked());
+
+    // After acquiring write lock, should be locked
+    {
+        let _guard = lock.write();
+        assert!(lock.is_locked());
+    }
+    // After releasing, should not be locked
+    assert!(!lock.is_locked());
+}
+
+#[test]
+fn test_gc_rwlock_default() {
+    rudo_gc::test_util::reset();
+    let lock: Gc<GcRwLock<TestData>> = Gc::new(GcRwLock::default());
+    assert_eq!(lock.read().value, 0);
+}
+
+#[test]
+fn test_gc_mutex_lock() {
+    rudo_gc::test_util::reset();
+    let lock: Gc<GcMutex<TestData>> = Gc::new(GcMutex::new(TestData { value: 10 }));
+
+    let guard = lock.lock();
+    let value = guard.value;
+    drop(guard);
+    assert_eq!(value, 10);
+}
+
+#[test]
+fn test_gc_mutex_try_lock() {
+    rudo_gc::test_util::reset();
+    let lock: Gc<GcMutex<TestData>> = Gc::new(GcMutex::new(TestData { value: 10 }));
+
+    assert!(lock.try_lock().is_some());
+}
+
+#[test]
+fn test_gc_mutex_is_locked() {
+    rudo_gc::test_util::reset();
+    let lock: Gc<GcMutex<TestData>> = Gc::new(GcMutex::new(TestData { value: 10 }));
+
+    assert!(!lock.is_locked());
+
+    let _guard = lock.lock();
+    assert!(lock.is_locked());
+}
+
+#[test]
+fn test_gc_mutex_default() {
+    rudo_gc::test_util::reset();
+    let lock: Gc<GcMutex<TestData>> = Gc::new(GcMutex::default());
+    assert_eq!(lock.lock().value, 0);
+}
+
+#[test]
+fn test_concurrent_readers() {
+    rudo_gc::test_util::reset();
+    let data: Gc<GcRwLock<i32>> = Gc::new(GcRwLock::new(0));
+
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let data: Gc<GcRwLock<i32>> = Gc::clone(&data);
+            std::thread::spawn(move || {
+                for _ in 0..100 {
+                    let guard = data.read();
+                    let _ = *guard;
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+#[test]
+fn test_write_exclusivity() {
+    rudo_gc::test_util::reset();
+    let data: Gc<GcRwLock<i32>> = Gc::new(GcRwLock::new(0));
+
+    // Writer thread
+    let handle = std::thread::spawn({
+        let data: Gc<GcRwLock<i32>> = Gc::clone(&data);
+        move || {
+            let mut guard = data.write();
+            *guard = 42;
+        }
+    });
+
+    // Main thread writes after spawn
+    {
+        let mut guard = data.write();
+        *guard = 100;
+    }
+
+    handle.join().unwrap();
+    // One of the writes succeeded - which one depends on thread scheduling
+    let value = *data.read();
+    assert!(value == 42 || value == 100);
+}
+
+// Compile-time assertions for GcRwLock and GcMutex Send + Sync traits
+#[allow(dead_code)]
+const _: fn() = || {
+    trait AssertSend<T: Send> {}
+    trait AssertSync<T: Sync> {}
+
+    impl<T: Trace + Send + Sync> AssertSend<GcRwLock<T>> for GcRwLock<T> {}
+    impl<T: Trace + Send + Sync> AssertSync<GcRwLock<T>> for GcRwLock<T> {}
+    impl<T: Trace + Send + Sync> AssertSend<GcMutex<T>> for GcMutex<T> {}
+    impl<T: Trace + Send + Sync> AssertSync<GcMutex<T>> for GcMutex<T> {}
+};

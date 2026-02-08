@@ -71,6 +71,8 @@ mod stack;
 mod trace;
 mod trace_closure;
 
+pub mod sync;
+
 #[cfg(feature = "tracing")]
 mod tracing;
 
@@ -89,6 +91,7 @@ pub use gc::incremental::{
     is_incremental_marking_active, is_write_barrier_active, mark_new_object_black,
     IncrementalConfig, IncrementalMarkState, MarkPhase, MarkSliceResult, MarkStats,
 };
+pub use sync::{GcMutex, GcRwLock};
 
 /// Configure incremental marking settings.
 ///
