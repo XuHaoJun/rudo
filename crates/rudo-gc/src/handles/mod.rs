@@ -67,7 +67,8 @@ pub use local_handles::{
     HandleBlock, HandleScopeData, HandleSlot, LocalHandles, HANDLE_BLOCK_SIZE,
 };
 pub use r#async::{
-    AsyncHandle, AsyncHandleGuard, AsyncHandleScope, AsyncScopeData, AsyncScopeEntry,
+    AsyncGcHandle, AsyncHandle, AsyncHandleGuard, AsyncHandleScope, AsyncScopeData,
+    AsyncScopeEntry, GcScope,
 };
 
 use std::cell::Cell;

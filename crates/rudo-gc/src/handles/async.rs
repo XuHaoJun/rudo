@@ -90,6 +90,7 @@
 #![allow(clippy::as_ptr_cast_mut)]
 #![allow(clippy::non_canonical_clone_impl)]
 
+use std::any::TypeId;
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -664,5 +665,486 @@ macro_rules! spawn_with_gc {
             drop(__scope);
             __result
         })
-    }};
+    }    };
 }
+
+/// A builder for tracking multiple GC objects in async contexts.
+///
+/// `GcScope` provides a convenient API for tracking multiple `Gc<T>` objects
+/// that need to remain valid across async await points. Unlike `spawn_with_gc!`
+/// which requires compile-time knowledge of all GC objects, `GcScope` allows
+/// dynamic tracking at runtime.
+///
+/// # Example
+///
+/// ```
+/// use rudo_gc::{Gc, Trace};
+/// use rudo_gc::handles::GcScope;
+///
+/// #[derive(Trace)]
+/// struct Data { value: i32 }
+///
+/// async fn dynamic_tracking() {
+///     let gc_a = Gc::new(Data { value: 1 });
+///     let gc_b = Gc::new(Data { value: 2 });
+///
+///     let mut scope = GcScope::new();
+///     scope.track(&gc_a).track(&gc_b);
+///
+///     let result = scope.spawn(|handles| async move {
+///         let mut sum = 0;
+///         for handle in handles {
+///             if let Some(data) = handle.downcast_ref::<Data>() {
+///                 sum += data.value;
+///             }
+///         }
+///         sum
+///     }).await;
+///
+///     assert_eq!(result, 3);
+/// }
+/// ```
+///
+/// # Comparison with `spawn_with_gc!`
+///
+/// | Aspect | `spawn_with_gc!` | `GcScope` |
+/// |--------|------------------|-----------|
+/// | Syntax | Macro-based | Builder pattern |
+/// | Multiple Gc | `gc_a, gc_b => |ha, hb| {}` | `.track(&a).track(&b)` |
+/// | Dynamic count | Compile-time fixed | Runtime dynamic |
+/// | Handle types | Preserved per-type | Type-erased with downcast |
+pub struct GcScope {
+    tracked: Vec<TrackedGc>,
+    _marker: PhantomData<*const ()>,
+}
+
+struct TrackedGc {
+    ptr: *const GcBox<()>,
+    type_id: TypeId,
+}
+
+impl Clone for TrackedGc {
+    fn clone(&self) -> Self {
+        Self {
+            ptr: self.ptr,
+            type_id: self.type_id,
+        }
+    }
+}
+
+impl GcScope {
+    /// Creates a new empty `GcScope`.
+    ///
+    /// # Returns
+    ///
+    /// A new `GcScope` ready to track GC objects.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::handles::GcScope;
+    ///
+    /// let scope = GcScope::new();
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            tracked: Vec::new(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Tracks a GC object in this scope.
+    ///
+    /// The GC object will remain valid as long as the scope (or handles created from it)
+    /// are alive. Multiple calls to `track()` can be made to add more objects.
+    ///
+    /// Takes a reference to avoid consuming the `Gc<T>`, allowing the same
+    /// object to be used elsewhere.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The type of the GC object, must implement `Trace`
+    ///
+    /// # Arguments
+    ///
+    /// * `gc` - The GC object to track
+    ///
+    /// # Returns
+    ///
+    /// `self` for method chaining.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Trace};
+    /// use rudo_gc::handles::GcScope;
+    ///
+    /// #[derive(Trace)]
+    /// struct Data { value: i32 }
+    ///
+    /// async fn track_example() {
+    ///     let gc = Gc::new(Data { value: 42 });
+    ///
+    ///     let mut scope = GcScope::new();
+    ///     scope.track(&gc);
+    /// }
+    /// ```
+    #[inline]
+    pub fn track<T: Trace + 'static>(&mut self, gc: &Gc<T>) -> &mut Self {
+        let ptr = Gc::internal_ptr(gc) as *const GcBox<()>;
+        self.tracked.push(TrackedGc {
+            ptr,
+            type_id: TypeId::of::<T>(),
+        });
+        self
+    }
+
+    /// Tracks multiple GC objects from a slice.
+    ///
+    /// This is more efficient than calling `track()` multiple times for many objects.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The type of the GC objects, must implement `Trace`
+    ///
+    /// # Arguments
+    ///
+    /// * `gc_slice` - A slice of GC objects to track
+    ///
+    /// # Returns
+    ///
+    /// `self` for method chaining.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Trace};
+    /// use rudo_gc::handles::GcScope;
+    ///
+    /// #[derive(Trace)]
+    /// struct Data { value: i32 }
+    ///
+    /// async fn track_slice() {
+    ///     let objects: Vec<Gc<Data>> = (0..10)
+    ///         .map(|i| Gc::new(Data { value: i }))
+    ///         .collect();
+    ///
+    ///     let mut scope = GcScope::new();
+    ///     scope.track_slice(&objects);
+    /// }
+    /// ```
+    #[inline]
+    pub fn track_slice<T: Trace + 'static>(&mut self, gc_slice: &[Gc<T>]) -> &mut Self {
+        let type_id = TypeId::of::<T>();
+        self.tracked.extend(gc_slice.iter().map(|gc| TrackedGc {
+            ptr: Gc::internal_ptr(gc) as *const GcBox<()>,
+            type_id,
+        }));
+        self
+    }
+
+    /// Tracks a clone of each GC object in another scope.
+    ///
+    /// This is useful when you want to track GC objects from a parent scope
+    /// without consuming them.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Another `GcScope` to clone tracking from
+    ///
+    /// # Returns
+    ///
+    /// `self` for method chaining.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Trace};
+    /// use rudo_gc::handles::GcScope;
+    ///
+    /// #[derive(Trace)]
+    /// struct Data { value: i32 }
+    ///
+    /// async fn merge_scopes() {
+    ///     let mut scope_a = GcScope::new();
+    ///     scope_a.track(&Gc::new(Data { value: 1 }));
+    ///
+    ///     let mut scope_b = GcScope::new();
+    ///     scope_b.track(&Gc::new(Data { value: 2 }));
+    ///
+    ///     let mut merged = GcScope::new();
+    ///     merged.track_from(&scope_a);
+    ///     merged.track_from(&scope_b);
+    /// }
+    /// ```
+    #[inline]
+    pub fn track_from(&mut self, other: &GcScope) -> &mut Self {
+        self.tracked.extend(other.tracked.iter().cloned());
+        self
+    }
+
+    /// Spawns an async task with all tracked GC objects as roots.
+    ///
+    /// Creates an `AsyncHandleScope` and handles for each tracked GC object,
+    /// then spawns an async task that receives these handles.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F` - The async closure type
+    /// * `R` - The return type of the closure
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - An async closure that receives handles to all tracked GC objects
+    ///
+    /// # Returns
+    ///
+    /// A `JoinHandle` for the spawned task.
+    ///
+    /// # Panics
+    ///
+    /// - Panics if called outside a GC thread
+    /// - Panics if more than 256 handles are created in total
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Trace};
+    /// use rudo_gc::handles::GcScope;
+    ///
+    /// #[derive(Trace)]
+    /// struct Data { value: i32 }
+    ///
+    /// async fn spawn_example() {
+    ///     let gc_a = Gc::new(Data { value: 10 });
+    ///     let gc_b = Gc::new(Data { value: 20 });
+    ///
+    ///     let mut scope = GcScope::new();
+    ///     scope.track(&gc_a).track(&gc_b);
+    ///
+    ///     let result = scope.spawn(|handles| async move {
+    ///         let mut sum = 0;
+    ///         for handle in handles {
+    ///             if let Some(data) = handle.downcast_ref::<Data>() {
+    ///                 sum += data.value;
+    ///             }
+    ///         }
+    ///         sum
+    ///     }).await;
+    ///
+    ///     assert_eq!(result, 30);
+    /// }
+    /// ```
+    #[inline]
+    pub async fn spawn<F, R>(&self, f: impl FnOnce(Vec<AsyncGcHandle>) -> R) -> R::Output
+    where
+        F: std::future::Future<Output = R>,
+        R: std::future::Future,
+    {
+        let tcb = crate::heap::current_thread_control_block()
+            .expect("GcScope::spawn() must be called within a GC thread");
+
+        let scope = AsyncHandleScope::new(&tcb);
+
+        let handles: Vec<AsyncGcHandle> = self
+            .tracked
+            .iter()
+            .map(|tracked| {
+                let used = unsafe { &*scope.data.used.get() }.fetch_add(1, Ordering::Relaxed);
+
+                let slot_ptr = unsafe {
+                    let slots_ptr = scope.data.block.slots.get() as *mut HandleSlot;
+                    slots_ptr.add(used)
+                };
+
+                unsafe {
+                    (*slot_ptr).set(tracked.ptr);
+                }
+
+                AsyncGcHandle {
+                    slot: slot_ptr,
+                    type_id: tracked.type_id,
+                }
+            })
+            .collect();
+
+        let result = f(handles).await;
+        drop(scope);
+        result
+    }
+
+    /// Returns the number of GC objects currently tracked.
+    ///
+    /// # Returns
+    ///
+    /// The count of tracked GC objects.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Trace};
+    /// use rudo_gc::handles::GcScope;
+    ///
+    /// #[derive(Trace)]
+    /// struct Data { value: i32 }
+    ///
+    /// fn count_example() {
+    ///     let mut scope = GcScope::new();
+    ///     scope.track(&Gc::new(Data { value: 1 }));
+    ///     scope.track(&Gc::new(Data { value: 2 }));
+    ///
+    ///     assert_eq!(scope.len(), 2);
+    /// }
+    /// ```
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.tracked.len()
+    }
+
+    /// Returns whether this scope tracks any GC objects.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the scope is empty, `false` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::handles::GcScope;
+    ///
+    /// let empty = GcScope::new();
+    /// assert!(empty.is_empty());
+    /// ```
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.tracked.is_empty()
+    }
+}
+
+impl Default for GcScope {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A type-erased async GC handle with downcasting support.
+///
+/// `AsyncGcHandle` is created by `GcScope::spawn()` and provides
+/// type-erased access to GC objects with the ability to downcast
+/// to the original type.
+///
+/// # Example
+///
+/// ```
+/// use rudo_gc::{Gc, Trace};
+/// use rudo_gc::handles::GcScope;
+///
+/// #[derive(Trace)]
+/// struct Data { value: i32 }
+///
+/// async fn downcast_example() {
+///     let gc = Gc::new(Data { value: 42 });
+///
+///     let mut scope = GcScope::new();
+///     scope.track(&gc);
+///
+///     scope.spawn(|handles| async move {
+///         for handle in handles {
+///             if let Some(data) = handle.downcast_ref::<Data>() {
+///                 println!("Found Data: {}", data.value);
+///             }
+///         }
+///     }).await;
+/// }
+/// ```
+pub struct AsyncGcHandle {
+    slot: *const HandleSlot,
+    type_id: TypeId,
+}
+
+impl AsyncGcHandle {
+    /// Attempts to downcast this handle to the specified type.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The type to downcast to, must implement `Trace + 'static`
+    ///
+    /// # Returns
+    ///
+    /// `Some(&T)` if the handle contains the specified type, `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Trace};
+    /// use rudo_gc::handles::GcScope;
+    ///
+    /// #[derive(Trace)]
+    /// struct Data { value: i32 }
+    ///
+    /// async fn downcast_example() {
+    ///     let gc = Gc::new(Data { value: 42 });
+    ///
+    ///     let mut scope = GcScope::new();
+    ///     scope.track(&gc);
+    ///
+    ///     scope.spawn(|handles| async move {
+    ///         for handle in handles {
+    ///             if let Some(data) = handle.downcast_ref::<Data>() {
+    ///                 println!("Found Data: {}", data.value);
+    ///             }
+    ///         }
+    ///     }).await;
+    /// }
+    /// ```
+    #[inline]
+    pub fn downcast_ref<T: Trace + 'static>(&self) -> Option<&T> {
+        if self.type_id == TypeId::of::<T>() {
+            let slot = unsafe { &*self.slot };
+            let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
+            Some(unsafe { &*gc_box_ptr }.value())
+        } else {
+            None
+        }
+    }
+
+    /// Returns the type ID of the tracked GC object.
+    ///
+    /// # Returns
+    ///
+    /// The `TypeId` of the original type.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Trace};
+    /// use rudo_gc::handles::GcScope;
+    /// use std::any::TypeId;
+    ///
+    /// #[derive(Trace)]
+    /// struct Data { value: i32 }
+    ///
+    /// async fn type_id_example() {
+    ///     let gc = Gc::new(Data { value: 42 });
+    ///
+    ///     let mut scope = GcScope::new();
+    ///     scope.track(&gc);
+    ///
+    ///     scope.spawn(|handles| async move {
+    ///         for handle in handles {
+    ///             assert_eq!(handle.type_id(), TypeId::of::<Data>());
+    ///         }
+    ///     }).await;
+    /// }
+    /// ```
+    #[inline]
+    pub fn type_id(&self) -> TypeId {
+        self.type_id
+    }
+}
+
+unsafe impl Send for AsyncGcHandle {}
+unsafe impl Sync for AsyncGcHandle {}
