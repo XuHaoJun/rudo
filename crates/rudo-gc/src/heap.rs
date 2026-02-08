@@ -60,6 +60,9 @@ pub struct ThreadControlBlock {
     local_handles: UnsafeCell<LocalHandles>,
     /// Async scope registry for cross-await handle tracking.
     async_scopes: Mutex<Vec<AsyncScopeEntry>>,
+    /// Set of active async scope IDs for O(1) scope validity checking.
+    /// Used by `AsyncHandle::get()` to detect use-after-free.
+    active_scope_ids: Mutex<HashSet<u64>>,
     /// Local work queue for incremental marking.
     /// Reduces contention on global worklist.
     local_mark_queue: Vec<NonNull<GcBox<()>>>,
@@ -101,6 +104,7 @@ impl ThreadControlBlock {
             stack_roots: Mutex::new(Vec::new()),
             local_handles: UnsafeCell::new(LocalHandles::new()),
             async_scopes: Mutex::new(Vec::new()),
+            active_scope_ids: Mutex::new(HashSet::new()),
             local_mark_queue: Vec::new(),
             marked_this_slice: 0,
             remembered_buffer: Vec::with_capacity(32),
@@ -149,13 +153,26 @@ impl ThreadControlBlock {
     pub fn register_async_scope(&self, id: u64, data: Arc<AsyncScopeData>) {
         let entry = AsyncScopeEntry { id, data };
         self.async_scopes.lock().unwrap().push(entry);
+        self.active_scope_ids.lock().unwrap().insert(id);
     }
 
     /// Unregister an async scope.
     #[allow(clippy::missing_panics_doc)]
     pub fn unregister_async_scope(&self, id: u64) {
-        let mut scopes = self.async_scopes.lock().unwrap();
-        scopes.retain(|e| e.id != id);
+        self.async_scopes.lock().unwrap().retain(|e| e.id != id);
+        self.active_scope_ids.lock().unwrap().remove(&id);
+    }
+
+    /// Check if an async scope is still active.
+    ///
+    /// This is used by `AsyncHandle::get()` to verify the scope hasn't been dropped.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the scope ID is still active, `false` otherwise.
+    #[inline]
+    pub fn is_scope_active(&self, id: u64) -> bool {
+        self.active_scope_ids.lock().unwrap().contains(&id)
     }
 
     /// Iterate all handles (sync and async) as GC roots.

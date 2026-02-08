@@ -425,6 +425,76 @@ async fn async_task(data: Gc<MyData>) {
 }
 ```
 
+### Safe AsyncHandle Access
+
+`AsyncHandle::get()` now performs automatic runtime validation to detect use-after-free bugs:
+
+```rust
+spawn_with_gc!(gc => |handle| {
+    // Safe: automatically validates scope is still alive
+    // Panics with clear error if scope was dropped
+    println!("{}", handle.get().value);
+});
+```
+
+For performance-critical code where you can prove the scope is still alive, use `get_unchecked()`:
+
+```rust
+// Unsafe: caller must ensure scope is alive
+// Faster: skips scope validation overhead
+let value = unsafe { handle.get_unchecked().value };
+```
+
+### GcScope - Dynamic GC Tracking
+
+For dynamic scenarios where the number or types of GC objects aren't known at compile time, use `GcScope`:
+
+```rust
+use rudo_gc::handles::GcScope;
+
+let gc_a = Gc::new(Data { value: 1 });
+let gc_b = Gc::new(Data { value: 2 });
+
+let mut scope = GcScope::new();
+scope.track(&gc_a).track(&gc_b);
+
+let result = scope.spawn(|handles| async move {
+    let mut sum = 0;
+    for handle in handles {
+        if let Some(data) = handle.downcast_ref::<Data>() {
+            sum += data.value;
+        }
+    }
+    sum
+}).await;
+```
+
+**When to use GcScope vs spawn_with_gc!:**
+
+| Scenario | Recommended API |
+|----------|----------------|
+| Known at compile time | `spawn_with_gc!(gc_a, gc_b => |ha, hb\| {})` |
+| Dynamic/heterogeneous | `GcScope::new().track().spawn()` |
+| Large numbers of GC objects | `GcScope::track_slice(&vec)` |
+
+### AsyncGcHandle - Type-Erased Handles
+
+`GcScope::spawn()` returns `Vec<AsyncGcHandle>`, which provides type-erased access with safe downcasting:
+
+```rust
+scope.spawn(|handles| async move {
+    for handle in handles {
+        // Check type and access safely
+        if let Some(data) = handle.downcast_ref::<MyType>() {
+            println!("Found MyType: {}", data.field);
+        }
+    }
+}).await;
+
+// Get the type ID for custom handling
+let type_id = handle.type_id();
+```
+
 ### Long-running Loops
 
 If your code has long-running loops that don't perform allocations, use `safepoint()` to ensure threads respond to GC requests:
