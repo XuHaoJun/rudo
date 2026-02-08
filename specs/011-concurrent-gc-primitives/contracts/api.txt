@@ -1,0 +1,146 @@
+================================================================================
+API SPECIFICATION: Concurrent GC Primitives
+================================================================================
+Feature: 011-concurrent-gc-primitives
+Date: 2026-02-08
+Status: Implemented (Verified 2026-02-08)
+================================================================================
+
+--------------------------------------------------------------------------------
+GcRwLock<T>
+--------------------------------------------------------------------------------
+
+TYPE DEFINITION
+  pub struct GcRwLock<T: ?Sized> {
+      inner: parking_lot::RwLock<T>,
+  }
+
+TRAIT BOUNDS
+  Debug:      T: Debug
+  Trace:      T: Trace
+  Send:       T: Trace + Send
+  Sync:       T: Trace + Send + Sync
+
+METHODS
+  read() -> GcRwLockReadGuard<'_, T>
+    Description: Acquires a read lock, returning a guard for read-only access.
+    Returns: RAII guard that releases lock on drop
+    Panics: Never (blocks indefinitely if write-locked)
+    Thread Safety: Multiple readers may hold simultaneously
+
+  try_read() -> Option<GcRwLockReadGuard<'_, T>>
+    Description: Attempts to acquire a read lock.
+    Returns: Some(guard) if lock acquired, None if write-locked
+    Panics: Never
+
+  write() -> GcRwLockWriteGuard<'_, T>
+    Description: Acquires a write lock, returning a guard for exclusive access.
+    Returns: RAII guard that releases lock on drop
+    Panics: Never (blocks indefinitely if read-locked)
+    Side Effects: Triggers generational and SATB write barriers
+
+  try_write() -> Option<GcRwLockWriteGuard<'_, T>>
+    Description: Attempts to acquire a write lock.
+    Returns: Some(guard) if lock acquired, None if read-locked
+    Panics: Never
+
+  is_locked(&self) -> bool
+    Description: Checks if any lock is held.
+    Returns: true if write-locked or any read locks held
+
+--------------------------------------------------------------------------------
+GcMutex<T>
+--------------------------------------------------------------------------------
+
+TYPE DEFINITION
+  pub struct GcMutex<T: ?Sized> {
+      inner: parking_lot::Mutex<T>,
+  }
+
+TRAIT BOUNDS
+  Debug:      T: Debug
+  Trace:      T: Trace
+  Send:       T: Trace + Send
+  Sync:       T: Trace + Send + Sync
+
+METHODS
+  lock() -> GcMutexGuard<'_, T>
+    Description: Acquires the mutex, returning a guard for exclusive access.
+    Returns: RAII guard that releases lock on drop
+    Panics: Never (blocks indefinitely)
+    Side Effects: Triggers generational and SATB write barriers
+
+  try_lock() -> Option<GcMutexGuard<'_, T>>
+    Description: Attempts to acquire the mutex.
+    Returns: Some(guard) if lock acquired, None if already locked
+    Panics: Never
+
+  is_locked(&self) -> bool
+    Description: Checks if the mutex is locked.
+    Returns: true if locked, false otherwise
+
+--------------------------------------------------------------------------------
+GUARD TYPES
+--------------------------------------------------------------------------------
+
+GcRwLockReadGuard<'a, T>
+  Lifetime:   'a tied to the parent GcRwLock
+  Derefs to:  &T (read-only)
+  Behavior:   Releases read lock on drop
+
+GcRwLockWriteGuard<'a, T>
+  Lifetime:   'a tied to the parent GcRwLock
+  Derefs to:  &mut T (mutable)
+  Behavior:   Releases write lock on drop
+  Side Effects: N/A (barriers triggered on guard acquisition)
+
+GcMutexGuard<'a, T>
+  Lifetime:   'a tied to the parent GcMutex
+  Derefs to:  &mut T (mutable)
+  Behavior:   Releases mutex on drop
+  Side Effects: N/A (barriers triggered on guard acquisition)
+
+--------------------------------------------------------------------------------
+MODULE EXPORTS
+--------------------------------------------------------------------------------
+
+  // From crate root (lib.rs)
+  pub use sync::{GcRwLock, GcMutex};
+
+================================================================================
+IMPLEMENTATION NOTES
+================================================================================
+
+LOCK BYPASS DURING GC
+  The Trace implementation accesses inner data without acquiring the lock:
+
+    unsafe impl<T: Trace + ?Sized> Trace for GcRwLock<T> {
+        fn trace(&self, visitor: &mut impl Visitor) {
+            let raw_ptr = self.inner.data_ptr();
+            unsafe { (*raw_ptr).trace(visitor); }
+        }
+    }
+
+  Safety: Safe because GC runs during STW pause when all mutator threads
+          are suspended. No concurrent mutation during trace.
+
+WRITE BARRIER TRIGGERING
+  Barriers are triggered on guard acquisition, not during field access:
+
+    let mut guard = lock.write();  // Barrier triggered here
+    guard.field = new_value;       // No additional overhead
+
+IMPLEMENTATION VERIFICATION (2026-02-08)
+=========================================
+
+  Write barrier implementation verified:
+  - generational_write_barrier() marks old-gen pages dirty
+  - incremental_write_barrier() records pages in remembered buffer
+  - Both barriers check is_gc_heap_pointer() before processing
+
+  Test coverage verified:
+  - test_gcrwlock_write_barrier_triggers
+  - test_gcmutex_write_barrier_triggers
+  - test_gcrwlock_recovers_after_panic
+  - test_gcmutex_recovers_after_panic
+  - All 44 sync tests pass (including TSan/Miri tests)

@@ -113,6 +113,8 @@ This project uses custom agentic workflows defined in `.agent/workflows/` (previ
 - **Async Support**: `tokio` (optional feature `tokio` for async integration)
 - Rust 1.75+ (stable) + `tracing` crate 0.1 (optional), `tracing-subscriber` (dev dependency for testing) (009-gc-tracing)
 - N/A (in-memory spans, no persistence) (009-gc-tracing)
+- Rust 1.75+ (stable) + `parking_lot` crate, existing `Trace` trait, existing write barrier infrastructure, existing STW pause mechanism (011-concurrent-gc-primitives)
+- N/A (in-memory GC heap) (011-concurrent-gc-primitives)
 
 ## Recent Features & Changes
 
@@ -185,4 +187,5 @@ All locks must be acquired in a fixed global order:
 - This separates metadata from object data, improving cache locality during marking.
 
 ## Recent Changes
+- 011-concurrent-gc-primitives: Added Rust 1.75+ (stable) + `parking_lot` crate, existing `Trace` trait, existing write barrier infrastructure, existing STW pause mechanism
 - 009-gc-tracing: Added Rust 1.75+ (stable) + `tracing` crate 0.1 (optional), `tracing-subscriber` (dev dependency for testing)
