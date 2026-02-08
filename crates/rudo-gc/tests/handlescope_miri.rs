@@ -78,7 +78,7 @@ fn miri_async_handle_across_await_points() {
 
         tokio::task::yield_now().await;
 
-        let value = unsafe { handle.get() };
+        let value = handle.get();
         assert_eq!(value.value, 777);
 
         drop(scope);
@@ -144,9 +144,9 @@ fn miri_async_handle_copy_semantics() {
         let handle2 = handle1;
         let handle3 = handle1;
 
-        assert_eq!(unsafe { handle1.get().value }, 222);
-        assert_eq!(unsafe { handle2.get().value }, 222);
-        assert_eq!(unsafe { handle3.get().value }, 222);
+        assert_eq!(handle1.get().value, 222);
+        assert_eq!(handle2.get().value, 222);
+        assert_eq!(handle3.get().value, 222);
     });
 }
 

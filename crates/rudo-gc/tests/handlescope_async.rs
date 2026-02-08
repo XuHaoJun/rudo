@@ -28,7 +28,7 @@ fn test_async_handlescope_handle() {
         let gc = Gc::new(AsyncTestData { value: 42 });
         let handle = scope.handle(&gc);
 
-        assert_eq!(unsafe { handle.get().value }, 42);
+        assert_eq!(handle.get().value, 42);
     });
 }
 
@@ -41,7 +41,7 @@ fn test_async_handle_get() {
         let gc = Gc::new(100i32);
         let handle = scope.handle(&gc);
 
-        assert_eq!(*unsafe { handle.get() }, 100);
+        assert_eq!(*handle.get(), 100);
     });
 }
 
@@ -70,9 +70,9 @@ fn test_async_handle_copy_clone() {
         let handle2 = handle1;
         let handle3 = handle1;
 
-        assert_eq!(*unsafe { handle1.get() }, 55);
-        assert_eq!(*unsafe { handle2.get() }, 55);
-        assert_eq!(*unsafe { handle3.get() }, 55);
+        assert_eq!(*handle1.get(), 55);
+        assert_eq!(*handle2.get(), 55);
+        assert_eq!(*handle3.get(), 55);
     });
 }
 
@@ -109,9 +109,9 @@ fn test_multiple_async_handles() {
         let h2 = scope.handle(&gc2);
         let h3 = scope.handle(&gc3);
 
-        assert_eq!(*unsafe { h1.get() }, 1);
-        assert_eq!(*unsafe { h2.get() }, 2);
-        assert_eq!(*unsafe { h3.get() }, 3);
+        assert_eq!(*h1.get(), 1);
+        assert_eq!(*h2.get(), 2);
+        assert_eq!(*h3.get(), 3);
     });
 }
 
@@ -166,7 +166,7 @@ fn test_spawn_with_gc_macro_single_handle() {
         let gc = Gc::new(AsyncTestData { value: 42 });
 
         let result: std::result::Result<String, _> = rudo_gc::spawn_with_gc!(gc => |h| {
-            assert_eq!(unsafe { h.get().value }, 42);
+            assert_eq!(h.get().value, 42);
             "got_value".to_string()
         })
         .await;
@@ -190,9 +190,9 @@ fn test_spawn_with_gc_macro_multiple_handles() {
         let gc2 = Gc::new(AsyncTestData { value: 200 });
 
         let result: std::result::Result<i32, _> = rudo_gc::spawn_with_gc!(gc1, gc2 => |h1, h2| {
-            assert_eq!(unsafe { h1.get().value }, 100);
-            assert_eq!(unsafe { h2.get().value }, 200);
-            unsafe { h1.get().value + h2.get().value }
+            assert_eq!(h1.get().value, 100);
+            assert_eq!(h2.get().value, 200);
+            h1.get().value + h2.get().value
         })
         .await;
 
@@ -214,9 +214,9 @@ fn test_async_handles_across_await_points() {
         let gc = Gc::new(AsyncTestData { value: 777 });
 
         let result: std::result::Result<i32, _> = rudo_gc::spawn_with_gc!(gc => |handle| {
-            let first = unsafe { handle.get().value };
+            let first = handle.get().value;
             tokio::task::yield_now().await;
-            let second = unsafe { handle.get().value };
+            let second = handle.get().value;
             first + second
         })
         .await;
@@ -241,7 +241,7 @@ fn test_spawn_with_gc_handle_copy_across_await() {
         let result: std::result::Result<i32, _> = rudo_gc::spawn_with_gc!(gc => |h| {
             let handle_copy = h;
             tokio::task::yield_now().await;
-            unsafe { handle_copy.get().value * 2 }
+            handle_copy.get().value * 2
         })
         .await;
 
@@ -286,8 +286,8 @@ fn test_spawn_with_gc_nested_async_operations() {
 
         let outer: tokio::task::JoinHandle<i32> = rudo_gc::spawn_with_gc!(gc1, gc2 => |h1, h2| {
             tokio::task::yield_now().await;
-            let val1 = unsafe { h1.get().value };
-            let val2 = unsafe { h2.get().value };
+            let val1 = h1.get().value;
+            let val2 = h2.get().value;
             val1 + val2
         });
 
@@ -317,7 +317,7 @@ fn test_spawn_with_gc_macro_complex_expression() {
         };
 
         let result: std::result::Result<i32, _> = rudo_gc::spawn_with_gc!(container.gc => |h| {
-            unsafe { h.get().value }
+            h.get().value
         })
         .await;
 

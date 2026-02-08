@@ -172,7 +172,7 @@ fn spawn_with_gc_handles_survive_gc() {
 
         let result: std::result::Result<i32, _> = rudo_gc::spawn_with_gc!(gc => |h| {
             rudo_gc::collect();
-            unsafe { h.get().value }
+            h.get().value
         })
         .await;
 
