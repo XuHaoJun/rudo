@@ -179,7 +179,10 @@ impl<T: ?Sized> GcRwLock<T> {
     /// Writers have exclusive access. Readers and other writers are blocked until
     /// all guards are dropped.
     ///
-    /// Triggers write barriers for incremental GC support.
+    /// Use [`GcCell`] inside T for write barrier support on field mutations.
+    ///
+    /// Write barriers trigger during field mutations, not lock acquisition.
+    /// See [`GcCell`] for barrier implementation details.
     ///
     /// # Examples
     ///
@@ -314,7 +317,7 @@ impl<T: ?Sized> Drop for GcRwLockReadGuard<'_, T> {
 /// Write guard for [`GcRwLock`].
 ///
 /// Holds a write lock on the `GcRwLock` and provides exclusive access to the inner data.
-/// The lock is released when the guard is dropped. Triggers write barriers on acquisition.
+/// The lock is released when the guard is dropped. Use [`GcCell`] for write barriers.
 ///
 /// Access via [`Deref`] yields `&T`, [`DerefMut`] yields `&mut T`.
 pub struct GcRwLockWriteGuard<'a, T: ?Sized> {
@@ -407,7 +410,10 @@ impl<T: ?Sized> GcMutex<T> {
     ///
     /// The lock is released when the guard is dropped.
     ///
-    /// Triggers write barriers for incremental GC support.
+    /// Use [`GcCell`] inside T for write barrier support on field mutations.
+    ///
+    /// Write barriers trigger during field mutations, not lock acquisition.
+    /// See [`GcCell`] for barrier implementation details.
     ///
     /// # Examples
     ///
@@ -569,10 +575,10 @@ unsafe impl<T: Trace + ?Sized> Trace for GcMutex<T> {
     }
 }
 
-unsafe impl<T: Trace + Send + Sized> Send for GcRwLock<T> {}
+unsafe impl<T: Trace + Send + Sync + Sized> Send for GcRwLock<T> {}
 
 unsafe impl<T: Trace + Send + Sync + Sized> Sync for GcRwLock<T> {}
 
-unsafe impl<T: Trace + Send + Sized> Send for GcMutex<T> {}
+unsafe impl<T: Trace + Send + Sync + Sized> Send for GcMutex<T> {}
 
 unsafe impl<T: Trace + Send + Sync + Sized> Sync for GcMutex<T> {}
