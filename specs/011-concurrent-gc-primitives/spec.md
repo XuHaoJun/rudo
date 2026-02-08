@@ -2,7 +2,7 @@
 
 **Feature Branch**: `011-concurrent-gc-primitives`
 **Created**: 2026-02-08
-**Status**: Draft
+**Status**: Implemented (2026-02-08)
 **Input**: User description: "Implement thread-safe concurrent GC primitives (GcRwLock and GcMutex) for sharing garbage-collected objects across threads with lock-bypass during STW pauses"
 
 ## User Scenarios & Testing *(mandatory)*
@@ -163,3 +163,58 @@ As a developer using incremental/major GC features, I want write barriers to be 
 - Fairness policies (parking_lot's default fairness).
 
 - Async-aware locks (separate future feature).
+
+## Implementation Notes (2026-02-08)
+
+### Write Barrier Integration
+
+Write barriers are triggered on guard acquisition (not during field mutations):
+
+```rust
+pub fn write(&self) -> GcRwLockWriteGuard<'_, T> {
+    // Barrier triggered here during lock acquisition
+    self.trigger_write_barrier();
+    let guard = self.inner.write();
+    GcRwLockWriteGuard { guard, _marker: PhantomData }
+}
+
+pub fn lock(&self) -> GcMutexGuard<'_, T> {
+    // Barrier triggered here during lock acquisition
+    self.trigger_write_barrier();
+    let guard = self.inner.lock();
+    GcMutexGuard { guard, _marker: PhantomData }
+}
+```
+
+### Barrier Types
+
+- **Generational Barrier**: Marks old-generation pages dirty when GcRwLock/GcMutex is modified
+- **SATB Barrier**: Records pages in remembered buffer during incremental marking
+
+### Trait Bounds
+
+Send/Sync bounds require `T: Trace + Send + Sync` (including `?Sized` types):
+
+```rust
+unsafe impl<T: Trace + Send + Sync + ?Sized> Send for GcRwLock<T> {}
+unsafe impl<T: Trace + Send + Sync + ?Sized> Sync for GcRwLock<T> {}
+unsafe impl<T: Trace + Send + Sync + ?Sized> Send for GcMutex<T> {}
+unsafe impl<T: Trace + Send + Sync + ?Sized> Sync for GcMutex<T> {}
+```
+
+### Lock Bypass During GC
+
+The Trace implementation bypasses locks during STW pauses:
+
+```rust
+unsafe impl<T: Trace + ?Sized> Trace for GcRwLock<T> {
+    fn trace(&self, visitor: &mut impl Visitor) {
+        let raw_ptr = self.inner.data_ptr();
+        unsafe { (*raw_ptr).trace(visitor); }
+    }
+}
+```
+
+### Panic Recovery
+
+Both GcRwLock and GcMutex recover gracefully after thread panics. Parking_lot locks do not poison on panic, allowing subsequent access to succeed.

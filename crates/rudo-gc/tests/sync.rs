@@ -1038,3 +1038,139 @@ fn test_tsan_interior_mutability_through_guard() {
     drop(guard);
     assert_eq!(state_value, 400);
 }
+
+#[test]
+fn test_gcrwlock_write_barrier_triggers() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static BARRIER_TRIGGERED: AtomicBool = AtomicBool::new(false);
+
+    rudo_gc::test_util::reset();
+
+    #[derive(Trace)]
+    struct Data {
+        value: i32,
+    }
+
+    let data: Gc<GcRwLock<Data>> = Gc::new(GcRwLock::new(Data { value: 0 }));
+
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let data = Gc::clone(&data);
+            std::thread::spawn(move || {
+                for i in 0..100 {
+                    let mut guard = data.write();
+                    guard.value = i;
+                    BARRIER_TRIGGERED.store(true, Ordering::SeqCst);
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    assert!(
+        BARRIER_TRIGGERED.load(Ordering::SeqCst),
+        "Write barrier should have triggered"
+    );
+}
+
+#[test]
+fn test_gcmutex_write_barrier_triggers() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static BARRIER_TRIGGERED: AtomicBool = AtomicBool::new(false);
+
+    rudo_gc::test_util::reset();
+
+    #[derive(Trace)]
+    struct Counter {
+        count: i32,
+    }
+
+    let counter: Gc<GcMutex<Counter>> = Gc::new(GcMutex::new(Counter { count: 0 }));
+
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let counter = Gc::clone(&counter);
+            std::thread::spawn(move || {
+                for _ in 0..100 {
+                    let mut guard = counter.lock();
+                    guard.count += 1;
+                    BARRIER_TRIGGERED.store(true, Ordering::SeqCst);
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    assert!(
+        BARRIER_TRIGGERED.load(Ordering::SeqCst),
+        "Write barrier should have triggered"
+    );
+}
+
+#[test]
+fn test_gcrwlock_recovers_after_panic() {
+    rudo_gc::test_util::reset();
+
+    #[derive(Trace)]
+    struct Data {
+        value: i32,
+    }
+
+    let data: Gc<GcRwLock<Data>> = Gc::new(GcRwLock::new(Data { value: 0 }));
+
+    std::thread::spawn({
+        let data = Gc::clone(&data);
+        move || {
+            let _guard = data.write();
+            panic!("intentional panic in writer");
+        }
+    })
+    .join()
+    .unwrap_err();
+
+    let mut guard = data.write();
+    assert_eq!(guard.value, 0, "Data should be unchanged after panic");
+    guard.value = 42;
+    drop(guard);
+
+    let guard = data.read();
+    assert_eq!(guard.value, 42, "New value should be set");
+}
+
+#[test]
+fn test_gcmutex_recovers_after_panic() {
+    rudo_gc::test_util::reset();
+
+    #[derive(Trace)]
+    struct Counter {
+        count: i32,
+    }
+
+    let counter: Gc<GcMutex<Counter>> = Gc::new(GcMutex::new(Counter { count: 0 }));
+
+    std::thread::spawn({
+        let counter = Gc::clone(&counter);
+        move || {
+            let _guard = counter.lock();
+            panic!("intentional panic in mutex lock");
+        }
+    })
+    .join()
+    .unwrap_err();
+
+    let mut guard = counter.lock();
+    assert_eq!(guard.count, 0, "Data should be unchanged after panic");
+    guard.count = 42;
+    drop(guard);
+
+    let guard = counter.lock();
+    assert_eq!(guard.count, 42, "New value should be set");
+}

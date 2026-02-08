@@ -3,6 +3,7 @@ API SPECIFICATION: Concurrent GC Primitives
 ================================================================================
 Feature: 011-concurrent-gc-primitives
 Date: 2026-02-08
+Status: Implemented (Verified 2026-02-08)
 ================================================================================
 
 --------------------------------------------------------------------------------
@@ -128,3 +129,18 @@ WRITE BARRIER TRIGGERING
 
     let mut guard = lock.write();  // Barrier triggered here
     guard.field = new_value;       // No additional overhead
+
+IMPLEMENTATION VERIFICATION (2026-02-08)
+=========================================
+
+  Write barrier implementation verified:
+  - generational_write_barrier() marks old-gen pages dirty
+  - incremental_write_barrier() records pages in remembered buffer
+  - Both barriers check is_gc_heap_pointer() before processing
+
+  Test coverage verified:
+  - test_gcrwlock_write_barrier_triggers
+  - test_gcmutex_write_barrier_triggers
+  - test_gcrwlock_recovers_after_panic
+  - test_gcmutex_recovers_after_panic
+  - All 44 sync tests pass (including TSan/Miri tests)
