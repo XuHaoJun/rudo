@@ -1338,6 +1338,14 @@ fn mark_major_roots_multi(
         });
     }
 
+    for (_, tcb) in stack_roots {
+        tcb.iterate_cross_thread_roots(|ptr| unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+                mark_object(gc_box, &mut visitor);
+            }
+        });
+    }
+
     #[cfg(feature = "tokio")]
     #[allow(clippy::explicit_iter_loop)]
     {
@@ -1768,6 +1776,17 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
         });
     }
 
+    if let Ok(registry) = crate::heap::thread_registry().lock() {
+        for tcb in &registry.threads {
+            tcb.iterate_cross_thread_roots(|ptr| unsafe {
+                if let Some(gc_box_ptr) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>())
+                {
+                    mark_object_minor(gc_box_ptr, &mut visitor);
+                }
+            });
+        }
+    }
+
     // Take snapshot of dirty pages for lock-free scanning
     let _dirty_count = heap.take_dirty_pages_snapshot();
 
@@ -1831,6 +1850,17 @@ fn mark_major_roots(heap: &LocalHeap) -> usize {
             }
         });
     }
+
+    if let Ok(registry) = crate::heap::thread_registry().lock() {
+        for tcb in &registry.threads {
+            tcb.iterate_cross_thread_roots(|ptr| unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+                    mark_object(gc_box, &mut visitor);
+                }
+            });
+        }
+    }
+
     visitor.process_worklist();
     visitor.objects_marked()
 }

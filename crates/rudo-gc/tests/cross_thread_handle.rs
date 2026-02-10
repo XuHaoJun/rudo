@@ -294,3 +294,63 @@ fn test_different_types() {
     assert_eq!(*int_handle.resolve(), 42);
     assert_eq!(*vec_handle.resolve(), vec![1, 2, 3]);
 }
+
+/// Test that cross-thread handles keep objects alive during MAJOR GC.
+/// This test allocates enough to trigger a real major collection.
+#[test]
+fn test_cross_thread_handle_survives_major_gc() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Trace)]
+    struct TestData {
+        value: i32,
+    }
+
+    impl Drop for TestData {
+        fn drop(&mut self) {
+            DROP_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    // Create object with drop counting
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let handle = gc.cross_thread_handle();
+
+    // Drop the original reference
+    drop(gc);
+
+    // Verify original was collected
+    assert_eq!(
+        DROP_COUNT.load(Ordering::SeqCst),
+        1,
+        "Original Gc reference should have been dropped"
+    );
+
+    // Reset for next check
+    DROP_COUNT.store(0, Ordering::SeqCst);
+
+    // Allocate >10MB to force major GC (triggers actual collection)
+    let mut allocations = Vec::with_capacity(1024);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    for i in 0..1024 {
+        allocations.push(Gc::new(vec![i as u8; 1024]));
+    }
+
+    // Force collection
+    gc::collect();
+
+    // Verify object was NOT collected (handle kept it alive)
+    let resolved: Gc<TestData> = handle.resolve();
+    assert_eq!(resolved.value, 42);
+    assert_eq!(
+        DROP_COUNT.load(Ordering::SeqCst),
+        0,
+        "Object should NOT be collected while handle exists"
+    );
+
+    // Cleanup
+    drop(allocations);
+    drop(resolved);
+}

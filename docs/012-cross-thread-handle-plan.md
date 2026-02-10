@@ -713,3 +713,88 @@ operations are on cold paths (creation, clone, drop, GC).
 - Existing Infrastructure: `AsyncHandleScope`, `GcRootSet`, `LocalHeap`, `ThreadControlBlock`
 - Thread Model: `ThreadControlBlock`, `ThreadRegistry`
 - Lock Ordering: See `heap.rs` documentation and Feature 001
+
+---
+
+## Bug Fix Notes (2026-02-10)
+
+### Critical Bug Found and Fixed
+
+During code review, a critical bug was discovered: the `iterate_cross_thread_roots` function was defined but **never called during garbage collection**. This meant:
+
+1. Objects referenced by `GcHandle<T>` were not scanned as GC roots
+2. Objects could be prematurely collected even while strong cross-thread handles existed
+3. This violated FR-003: strong handles MUST keep objects alive
+
+### Root Cause
+
+The function `iterate_cross_thread_roots` was implemented correctly on `ThreadControlBlock`, but the GC marking functions never invoked it during the root scanning phase.
+
+### Fix Applied
+
+**File: `crates/rudo-gc/src/gc/gc.rs`**
+
+1. **`mark_major_roots_multi` (line ~1341)**: Added call to `iterate_cross_thread_roots` after `iterate_all_handles`:
+```rust
+for (_, tcb) in stack_roots {
+    tcb.iterate_cross_thread_roots(|ptr| unsafe {
+        if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+            mark_object(gc_box, &mut visitor);
+        }
+    });
+}
+```
+
+2. **`mark_major_roots` (line ~1843)**: Added cross-thread root scanning for single-threaded major GC:
+```rust
+if let Ok(registry) = crate::heap::thread_registry().lock() {
+    for tcb in &registry.threads {
+        tcb.iterate_cross_thread_roots(|ptr| unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+                mark_object(gc_box, &mut visitor);
+            }
+        });
+    }
+}
+```
+
+3. **`mark_minor_roots` (line ~1789)**: Added cross-thread root scanning for minor GC to handle young objects referenced by handles:
+```rust
+if let Ok(registry) = crate::heap::thread_registry().lock() {
+    for tcb in &registry.threads {
+        tcb.iterate_cross_thread_roots(|ptr| unsafe {
+            if let Some(gc_box_ptr) =
+                crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>())
+            {
+                mark_object_minor(gc_box_ptr, &mut visitor);
+            }
+        });
+    }
+}
+```
+
+**File: `crates/rudo-gc/src/ptr.rs`**
+
+4. **`GcBox::as_weak` (line ~301)**: Fixed to increment `weak_count` when creating weak references:
+```rust
+pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
+    unsafe {
+        (*NonNull::from(self).as_ptr()).inc_weak();
+    }
+    GcBoxWeakRef::new(NonNull::from(self))
+}
+```
+
+**File: `crates/rudo-gc/src/heap.rs`**
+
+5. **`iterate_cross_thread_roots` (line ~267)**: Removed `#[allow(dead_code)]` since the function is now used.
+
+**File: `crates/rudo-gc/tests/cross_thread_handle.rs`**
+
+6. Added integration test `test_cross_thread_handle_survives_major_gc` that verifies objects survive major GC when referenced only by cross-thread handles.
+
+### Verification
+
+- All 17 cross-thread handle tests pass
+- Full test suite passes
+- Clippy passes without warnings

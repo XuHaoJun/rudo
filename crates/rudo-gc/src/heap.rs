@@ -264,7 +264,7 @@ impl ThreadControlBlock {
     ///
     /// The caller must hold any locks required by the lock ordering discipline.
     /// This method acquires `cross_thread_roots` lock.
-    #[allow(dead_code, clippy::missing_panics_doc)]
+    #[allow(clippy::missing_panics_doc)]
     pub(crate) fn iterate_cross_thread_roots<F>(&self, mut visitor: F)
     where
         F: FnMut(*const crate::ptr::GcBox<()>),

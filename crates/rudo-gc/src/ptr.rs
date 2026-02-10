@@ -299,6 +299,11 @@ impl<T: Trace> GcBox<T> {
     /// Create a weak reference to this `GcBox`.
     #[allow(dead_code)]
     pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
+        // Increment the weak count to track this weak reference.
+        // SAFETY: self is a valid GcBox pointer.
+        unsafe {
+            (*NonNull::from(self).as_ptr()).inc_weak();
+        }
         GcBoxWeakRef::new(NonNull::from(self))
     }
 }
