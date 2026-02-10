@@ -446,9 +446,19 @@ fn test_cross_thread_handle_survives_major_gc() {
     drop(resolved);
 }
 
-/// Test that cross-thread handles are safe when origin thread exits before GC.
-/// This verifies no use-after-free when iterating `cross_thread_roots`
-/// after threads have exited.
+/// Test that cross-thread handles keep objects alive after origin thread exits.
+///
+/// This test verifies that:
+/// 1. Creating a `GcHandle` increments the object's ref count
+/// 2. The handle holds `Arc<ThreadControlBlock>`, keeping roots alive
+/// 3. The original `Gc<T>` variable can be dropped without affecting liveness
+/// 4. `gc::collect()` after thread exit does NOT collect the object
+///
+/// Safety argument:
+/// - `GcHandle` stores raw pointer in TCB's `cross_thread_roots`
+/// - TCB kept alive via `Arc` owned by the handle
+/// - Object kept alive by ref count incremented at handle creation
+/// - No dependency on original `Gc<T>` variable lifetime
 #[test]
 fn test_cross_thread_handle_thread_exit_before_gc() {
     use std::sync::atomic::{AtomicPtr, Ordering};
@@ -467,8 +477,20 @@ fn test_cross_thread_handle_thread_exit_before_gc() {
     let retrieved = unsafe { Box::from_raw(HANDLE_STORAGE.load(Ordering::SeqCst)) };
 
     // Thread has exited - now force GC
-    // This should not cause use-after-free
+    //
+    // SAFETY: At this point:
+    // - The spawned thread has already stored the handle and exited
+    // - The handle holds Arc<TCB>, so cross_thread_roots is valid
+    // - The handle incremented ref count at creation (see cross_thread_handle())
+    // - Dropping `gc` only drops our local Gc<T> wrapper, not the GcBox ref count
+    // - The object cannot be collected because the handle root keeps it alive
     gc::collect();
+
+    // Verify the object was NOT collected (handle kept it alive)
+    assert!(
+        retrieved.is_valid(),
+        "Handle should still be valid after GC"
+    );
 
     // Verify handle still works
     let resolved: Gc<TestData> = retrieved.resolve();
