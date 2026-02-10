@@ -335,7 +335,7 @@ fn test_mixed_structure_dag() {
     for (layer_idx, layer) in layers.iter().enumerate() {
         for node in layer {
             assert!(
-                !Gc::is_dead(node),
+                !Gc::is_dead_or_unrooted(node),
                 "Layer {} node {} should be alive",
                 layer_idx,
                 node.id

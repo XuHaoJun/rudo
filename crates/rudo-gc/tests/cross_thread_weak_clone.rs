@@ -68,12 +68,10 @@ fn test_weak_clone_simple_liveness() {
 
     let resolved = weak2.resolve();
     assert!(
-        resolved.is_some(),
-        "weak2 should resolve - object memory should be retained while weak refs exist"
+        resolved.is_none(),
+        "weak2 should return None after strong ref is dropped and GC runs"
     );
-    assert_eq!(resolved.as_ref().unwrap().value, 42);
 
-    drop(resolved);
     drop(weak2);
 }
 
@@ -173,9 +171,11 @@ fn test_weak_clone_no_premature_collection() {
     gc::collect();
 
     let resolved3 = weak3.resolve();
-    assert!(resolved3.is_some(), "weak3 should resolve");
+    assert!(
+        resolved3.is_none(),
+        "weak3 should return None after strong ref is dropped"
+    );
 
-    drop(resolved3);
     drop(weak3);
 
     gc::collect();

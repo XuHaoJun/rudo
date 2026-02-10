@@ -270,8 +270,12 @@ impl<T: Trace + ?Sized> GcBox<T> {
         }
     }
 
-    /// Check if the value has been dropped (only weak refs remain).
-    pub fn is_value_dead(&self) -> bool {
+    /// Check if the `DEAD_FLAG` is set on this `GcBox`.
+    ///
+    /// The `DEAD_FLAG` indicates the value has been dropped but weak references
+    /// may still exist. Use [`is_dead_or_unrooted()`] to check if the object
+    /// is collectible (dead flag set OR no strong refs).
+    pub fn has_dead_flag(&self) -> bool {
         (self.weak_count.load(Ordering::Relaxed) & Self::DEAD_FLAG) != 0
     }
 
@@ -280,9 +284,12 @@ impl<T: Trace + ?Sized> GcBox<T> {
         self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Relaxed);
     }
 
-    /// Check if the value has been collected (dead).
-    pub(crate) fn is_dead(&self) -> bool {
-        // Value is dead if dead flag is set OR ref count is zero
+    /// Check if this `GcBox` is dead or unrooted (collectible).
+    ///
+    /// Returns true if the `DEAD_FLAG` is set OR if there are no strong references
+    /// (`ref_count` == 0). An object is collectible when either condition holds.
+    /// Use [`has_dead_flag()`] to check only the `DEAD_FLAG`.
+    pub(crate) fn is_dead_or_unrooted(&self) -> bool {
         (self.weak_count.load(Ordering::Acquire) & Self::DEAD_FLAG) != 0
             || self.ref_count.load(Ordering::Acquire) == 0
     }
@@ -386,7 +393,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             let gc_box = &*ptr.as_ptr();
 
             // Check if object is dead first (fast path for collected objects)
-            if gc_box.is_dead() {
+            if gc_box.is_dead_or_unrooted() {
                 return None;
             }
 
@@ -404,7 +411,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             // `ref_count` > 0, so another strong reference exists.
             // Check again if object is still alive (might have been collected
             // between our first check and the CAS failure).
-            if gc_box.is_dead() {
+            if gc_box.is_dead_or_unrooted() {
                 return None;
             }
 
@@ -1046,7 +1053,7 @@ impl<T: Trace> Gc<T> {
     }
 
     /// Check if this Gc is "dead" (refers to a collected value).
-    pub fn is_dead(gc: &Self) -> bool {
+    pub fn is_dead_or_unrooted(gc: &Self) -> bool {
         gc.ptr.load(Ordering::Acquire).is_null()
     }
 
@@ -1379,7 +1386,7 @@ impl<T: Trace> Weak<T> {
             );
 
             loop {
-                if gc_box.is_value_dead() {
+                if gc_box.has_dead_flag() {
                     return None;
                 }
 
@@ -1442,7 +1449,7 @@ impl<T: Trace> Weak<T> {
         };
 
         // SAFETY: The pointer is valid because we have a weak reference
-        unsafe { !(*ptr.as_ptr()).is_value_dead() }
+        unsafe { !(*ptr.as_ptr()).has_dead_flag() }
     }
 
     /// Gets the number of strong `Gc<T>` pointers pointing to this allocation.
@@ -1455,7 +1462,7 @@ impl<T: Trace> Weak<T> {
         };
 
         unsafe {
-            if (*ptr.as_ptr()).is_value_dead() {
+            if (*ptr.as_ptr()).has_dead_flag() {
                 0
             } else {
                 (*ptr.as_ptr()).ref_count().get()

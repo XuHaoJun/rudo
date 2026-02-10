@@ -2222,7 +2222,7 @@ impl LocalHeap {
             let alloc_size = total_size.div_ceil(page_size()) * page_size();
 
             let gc_box_ptr = addr as *mut crate::ptr::GcBox<()>;
-            if !(*gc_box_ptr).is_value_dead() {
+            if !(*gc_box_ptr).has_dead_flag() {
                 ((*gc_box_ptr).drop_fn)(addr as *mut u8);
             }
 
@@ -2257,7 +2257,7 @@ impl LocalHeap {
                             let obj_ptr = addr as *mut u8;
                             #[allow(clippy::cast_ptr_alignment)]
                             let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-                            if !unsafe { (*gc_box_ptr).is_value_dead() } {
+                            if !unsafe { (*gc_box_ptr).has_dead_flag() } {
                                 unsafe { ((*gc_box_ptr).drop_fn)(obj_ptr) };
                             }
 
@@ -2418,7 +2418,7 @@ pub fn sweep_orphan_pages() {
                 let obj_ptr = (addr as *mut u8).add(header_size);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-                if !(*gc_box_ptr).is_value_dead() {
+                if !(*gc_box_ptr).has_dead_flag() {
                     ((*gc_box_ptr).drop_fn)(obj_ptr);
                 }
             } else {
@@ -2431,7 +2431,7 @@ pub fn sweep_orphan_pages() {
                         let obj_ptr = (addr as *mut u8).add(header_size + i * block_size);
                         #[allow(clippy::cast_ptr_alignment)]
                         let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-                        if !(*gc_box_ptr).is_value_dead() {
+                        if !(*gc_box_ptr).has_dead_flag() {
                             ((*gc_box_ptr).drop_fn)(obj_ptr);
                         }
                     }

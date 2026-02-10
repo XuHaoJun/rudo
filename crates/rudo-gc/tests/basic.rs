@@ -82,7 +82,7 @@ fn test_ptr_eq() {
 #[test]
 fn test_is_dead() {
     let x = Gc::new(42);
-    assert!(!Gc::is_dead(&x));
+    assert!(!Gc::is_dead_or_unrooted(&x));
 }
 
 #[test]

@@ -87,8 +87,9 @@ impl<T: Trace + 'static> GcHandle<T> {
 
     /// Returns `true` if the underlying object is still alive.
     ///
-    /// For strong handles this is `true` while the handle is registered,
-    /// unless the origin thread's heap has been torn down.
+    /// For strong handles this is `true` while the handle is registered.
+    /// Returns `false` if the handle was unregistered or if the origin thread's
+    /// heap was torn down (in which case [`resolve()`] would panic).
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.handle_id != HandleId::INVALID
