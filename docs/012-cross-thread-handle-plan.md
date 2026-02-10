@@ -798,3 +798,76 @@ pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
 - All 17 cross-thread handle tests pass
 - Full test suite passes
 - Clippy passes without warnings
+
+---
+
+## Bug Fix Notes (2026-02-10) — Additional Fixes
+
+### Critical Bug: `GcHandle::downgrade()` Weak Count Not Incremented
+
+During a second code review, another critical bug was discovered: the `downgrade()` method did not increment the weak reference count when creating a `WeakCrossThreadHandle`.
+
+**Problem**:
+
+The original implementation called `GcBoxWeakRef::new()` directly, which does NOT increment the weak count:
+
+```rust
+pub fn downgrade(&self) -> WeakCrossThreadHandle<T> {
+    WeakCrossThreadHandle {
+        weak: GcBoxWeakRef::new(self.ptr),  // BUG: weak_count not incremented!
+        origin_tcb: Arc::clone(&self.origin_tcb),
+        origin_thread: self.origin_thread,
+    }
+}
+```
+
+**Impact**: Weak handles created via `downgrade()` would not properly track liveness. When the object was collected, the weak reference count would not prevent premature cleanup, and `is_valid()` could return incorrect results.
+
+### Fix Applied
+
+**File: `crates/rudo-gc/src/handles/cross_thread.rs`**
+
+Added `inc_weak()` call before creating the weak reference:
+
+```rust
+pub fn downgrade(&self) -> WeakCrossThreadHandle<T> {
+    unsafe {
+        (*self.ptr.as_ptr()).inc_weak();
+    }
+    WeakCrossThreadHandle {
+        weak: GcBoxWeakRef::new(self.ptr),
+        origin_tcb: Arc::clone(&self.origin_tcb),
+        origin_thread: self.origin_thread,
+    }
+}
+```
+
+### Additional Tests Added
+
+**File: `crates/rudo-gc/tests/cross_thread_handle.rs`**
+
+Added three new tests to verify weak handle liveness tracking:
+
+1. **`test_weak_is_valid_after_gc()`**: Verifies `is_valid()` returns `false` after GC collection
+
+2. **`test_weak_try_resolve_after_gc()`**: Verifies `try_resolve()` returns `None` after collection
+
+3. **`test_weak_downgrade_liveness()`**: Verifies `downgrade()` creates proper weak references that correctly detect object death
+
+Also updated **`test_downgrade()`** to verify weak handle correctly detects object collection after upgrade is dropped.
+
+### Verification
+
+- All 20 cross-thread handle tests pass (17 original + 3 new)
+- Full test suite passes
+- Clippy passes without warnings
+- Code properly formatted
+
+### Spec Clarification
+
+The spec FR-004 states: "The system MUST provide weak cross-thread handles that track object liveness without preventing collection."
+
+The fix ensures that:
+1. `downgrade()` properly increments `weak_count` (tracking liveness)
+2. Weak handles correctly report `is_valid() = false` after object collection
+3. `try_resolve()` returns `None` after object collection

@@ -191,6 +191,9 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// ```
     #[must_use]
     pub fn downgrade(&self) -> WeakCrossThreadHandle<T> {
+        unsafe {
+            (*self.ptr.as_ptr()).inc_weak();
+        }
         WeakCrossThreadHandle {
             weak: GcBoxWeakRef::new(self.ptr),
             origin_tcb: Arc::clone(&self.origin_tcb),

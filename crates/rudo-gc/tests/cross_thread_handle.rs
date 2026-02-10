@@ -196,6 +196,92 @@ fn test_weak_handle_no_prevent() {
     assert!(weak.origin_thread() == std::thread::current().id());
 }
 
+/// Test weak handle `is_valid()` returns false after GC collection.
+#[test]
+fn test_weak_is_valid_after_gc() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static DROPPED: AtomicBool = AtomicBool::new(false);
+
+    #[derive(Trace)]
+    struct TestData {
+        value: i32,
+    }
+
+    impl Drop for TestData {
+        fn drop(&mut self) {
+            DROPPED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let weak = gc.weak_cross_thread_handle();
+
+    drop(gc);
+    gc::collect();
+
+    assert!(DROPPED.load(Ordering::SeqCst));
+    assert!(!weak.is_valid());
+}
+
+/// Test weak handle `try_resolve()` returns None after GC collection.
+#[test]
+fn test_weak_try_resolve_after_gc() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static DROPPED: AtomicBool = AtomicBool::new(false);
+
+    #[derive(Trace)]
+    struct TestData {
+        value: i32,
+    }
+
+    impl Drop for TestData {
+        fn drop(&mut self) {
+            DROPPED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let weak = gc.weak_cross_thread_handle();
+
+    drop(gc);
+    gc::collect();
+
+    assert!(DROPPED.load(Ordering::SeqCst));
+    assert!(weak.try_resolve().is_none());
+}
+
+/// Test that `downgrade()` properly tracks weak references (weak count incremented).
+#[test]
+fn test_weak_downgrade_liveness() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static DROPPED: AtomicBool = AtomicBool::new(false);
+
+    #[derive(Trace)]
+    struct TestData {
+        value: i32,
+    }
+
+    impl Drop for TestData {
+        fn drop(&mut self) {
+            DROPPED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let handle = gc.cross_thread_handle();
+    let weak = handle.downgrade();
+
+    drop(gc);
+    drop(handle);
+    gc::collect();
+
+    assert!(DROPPED.load(Ordering::SeqCst));
+    assert!(!weak.is_valid());
+}
+
 /// Test strong-to-weak downgrade.
 #[test]
 fn test_downgrade() {
@@ -208,13 +294,18 @@ fn test_downgrade() {
     let resolved: Gc<TestData> = weak.resolve().unwrap();
     assert_eq!(resolved.value, 42);
 
-    // Drop strong handle
+    // Drop the resolved reference (upgraded from weak)
+    drop(resolved);
+
+    // Drop strong handle and original
     drop(handle);
     drop(gc);
 
-    // Note: GC integration for weak handles is complex
-    // For now, just verify weak handle exists
-    assert!(weak.origin_thread() == std::thread::current().id());
+    // Force GC to collect the object
+    gc::collect();
+
+    // Weak handle should detect object was collected
+    assert!(!weak.is_valid());
 }
 
 /// Test `origin_thread()` returns correct thread ID.
