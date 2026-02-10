@@ -239,6 +239,13 @@ impl<T: Trace + ?Sized> GcBox<T> {
         self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Relaxed);
     }
 
+    /// Check if the value has been collected (dead).
+    pub(crate) fn is_dead(&self) -> bool {
+        // Value is dead if dead flag is set OR ref count is zero
+        (self.weak_count.load(Ordering::Acquire) & Self::DEAD_FLAG) != 0
+            || self.ref_count.load(Ordering::Acquire) == 0
+    }
+
     /// Mark the value as dead during panic cleanup.
     /// Clears `UNDER_CONSTRUCTION_FLAG` and sets `DEAD_FLAG`.
     /// Used when weak references exist and we can't deallocate.
@@ -288,6 +295,12 @@ impl<T: Trace> GcBox<T> {
             (*gc_box).value.trace(visitor);
         }
     }
+
+    /// Create a weak reference to this `GcBox`.
+    #[allow(dead_code)]
+    pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
+        GcBoxWeakRef::new(NonNull::from(self))
+    }
 }
 
 impl GcBox<()> {
@@ -297,6 +310,55 @@ impl GcBox<()> {
     /// A no-op trace function for already-dropped objects.
     pub(crate) const unsafe fn no_op_trace(_ptr: *const u8, _visitor: &mut GcVisitor) {}
 }
+
+/// Internal weak reference type for cross-thread handles.
+///
+/// This is similar to `Weak<T>` but without the `Trace` bound since it's
+/// only used internally by the GC system.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) struct GcBoxWeakRef<T: Trace + 'static> {
+    ptr: AtomicNullable<GcBox<T>>,
+}
+
+impl<T: Trace + 'static> GcBoxWeakRef<T> {
+    /// Create a new weak reference.
+    pub(crate) fn new(ptr: NonNull<GcBox<T>>) -> Self {
+        Self {
+            ptr: AtomicNullable::new(ptr),
+        }
+    }
+
+    /// Upgrade to a strong reference.
+    pub(crate) fn upgrade(&self) -> Option<Gc<T>> {
+        let ptr = self.ptr.load(Ordering::Acquire).as_option()?;
+
+        unsafe {
+            let gc_box = &*ptr.as_ptr();
+            // Check if value is dead (collected)
+            if gc_box.is_dead() {
+                return None;
+            }
+            // Increment ref count
+            gc_box.inc_ref();
+            Some(Gc {
+                ptr: AtomicNullable::new(ptr),
+                _marker: PhantomData,
+            })
+        }
+    }
+
+    /// Clone the weak reference.
+    pub(crate) fn clone(&self) -> Self {
+        Self {
+            ptr: AtomicNullable::new(self.ptr.load(Ordering::Acquire).as_option().unwrap()),
+        }
+    }
+}
+
+#[allow(clippy::non_send_fields_in_send_ty)]
+unsafe impl<T: Trace + 'static> Send for GcBoxWeakRef<T> {}
+#[allow(clippy::non_send_fields_in_send_ty)]
+unsafe impl<T: Trace + 'static> Sync for GcBoxWeakRef<T> {}
 
 // ============================================================================
 // Nullable - A nullable pointer to unsized types
@@ -918,6 +980,103 @@ impl<T: Trace> Gc<T> {
     /// Get the raw `GcBox` pointer.
     pub(crate) fn raw_ptr(&self) -> *mut GcBox<T> {
         self.ptr.load(Ordering::Acquire).as_ptr()
+    }
+
+    /// Get a `NonNull` pointer to the `GcBox`.
+    pub(crate) fn as_non_null(&self) -> NonNull<GcBox<T>> {
+        self.ptr.load(Ordering::Acquire).as_option().unwrap()
+    }
+
+    /// Get a weak reference to this GC allocation.
+    #[allow(dead_code)]
+    pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
+        let ptr = self.ptr.load(Ordering::Acquire);
+        let gc_box_ptr = ptr.as_ptr();
+        // Increment the weak count
+        // SAFETY: ptr is valid and not null
+        unsafe {
+            (*gc_box_ptr).inc_weak();
+        }
+        GcBoxWeakRef {
+            ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(gc_box_ptr) }),
+        }
+    }
+}
+
+impl<T: Trace + 'static> Gc<T> {
+    /// Creates a cross-thread handle to this GC object.
+    ///
+    /// The handle is `Send + Sync` and can be sent to any thread.
+    /// Call `resolve()` on the creating thread to obtain a local `Gc<T>`.
+    ///
+    /// The object will not be collected while any strong handle to it exists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Trace};
+    ///
+    /// #[derive(Trace)]
+    /// struct Data { value: i32 }
+    ///
+    /// let gc: Gc<Data> = Gc::new(Data { value: 42 });
+    /// let handle = gc.cross_thread_handle();
+    ///
+    /// // Handle can be sent to another thread
+    /// ```
+    #[must_use]
+    pub fn cross_thread_handle(&self) -> crate::handles::GcHandle<T> {
+        use std::sync::Arc;
+
+        use crate::handles::GcHandle;
+
+        let tcb = crate::heap::current_thread_control_block()
+            .expect("cross_thread_handle called outside of GC context");
+
+        // Lock the root table BEFORE reading the pointer.
+        // While this lock is held, GC cannot sweep this thread's
+        // cross-thread roots (GC also acquires this lock for marking).
+        let mut roots = tcb.cross_thread_roots.lock().unwrap();
+        let handle_id = roots.allocate_id();
+
+        let ptr = self.as_non_null();
+        roots.strong.insert(handle_id, ptr.cast::<GcBox<()>>());
+
+        drop(roots);
+
+        GcHandle {
+            ptr,
+            origin_tcb: Arc::clone(&tcb),
+            origin_thread: std::thread::current().id(),
+            handle_id,
+        }
+    }
+
+    /// Creates a weak cross-thread handle that doesn't prevent collection.
+    ///
+    /// Resolve returns `None` if the object has been collected.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rudo_gc::{Gc, Trace};
+    ///
+    /// #[derive(Trace)]
+    /// struct Data { value: i32 }
+    ///
+    /// let gc: Gc<Data> = Gc::new(Data { value: 42 });
+    /// let weak = gc.weak_cross_thread_handle();
+    ///
+    /// // Weak doesn't keep the object alive
+    /// ```
+    #[must_use]
+    pub fn weak_cross_thread_handle(&self) -> crate::handles::WeakCrossThreadHandle<T> {
+        crate::handles::WeakCrossThreadHandle {
+            weak: GcBoxWeakRef::new(self.as_non_null()),
+            origin_tcb: crate::heap::current_thread_control_block()
+                .expect("weak_cross_thread_handle called outside of GC context"),
+            origin_thread: std::thread::current().id(),
+        }
     }
 }
 

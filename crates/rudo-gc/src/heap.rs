@@ -32,6 +32,54 @@ pub(crate) fn get_thread_id() -> u64 {
 }
 
 // ============================================================================
+// Cross-Thread Handle Root Storage
+// ============================================================================
+
+/// Root entries for cross-thread handles. Protected by Mutex so that
+/// handles can be registered/unregistered from any thread.
+///
+/// Lock ordering: This mutex is acquired AFTER `LocalHeap`, `GlobalMarkState`,
+/// and `GcRequest` locks to prevent deadlocks.
+pub(crate) struct CrossThreadRootTable {
+    /// Monotonically increasing ID counter.
+    next_id: u64,
+    /// Strong handle root entries: maps `HandleId` -> raw `GcBox` pointer.
+    /// These are treated as roots during GC marking.
+    pub(crate) strong: HashMap<HandleId, NonNull<GcBox<()>>>,
+}
+
+impl CrossThreadRootTable {
+    /// Create a new empty root table.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            next_id: 0,
+            strong: HashMap::new(),
+        }
+    }
+
+    /// Allocate a new unique handle ID.
+    #[must_use]
+    #[allow(dead_code, clippy::missing_const_for_fn)]
+    pub fn allocate_id(&mut self) -> HandleId {
+        let id = HandleId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+}
+
+/// Opaque ID for a registered cross-thread handle root entry.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct HandleId(pub(crate) u64);
+
+impl HandleId {
+    /// Sentinel value indicating the handle is not registered.
+    #[allow(dead_code)]
+    #[allow(clippy::use_self)]
+    pub(crate) const INVALID: HandleId = Self(u64::MAX);
+}
+
+// ============================================================================
 // Thread Registry & Control Block - Multi-threaded GC Support
 // ============================================================================
 
@@ -78,6 +126,11 @@ pub struct ThreadControlBlock {
     /// When true (default), normal work-stealing behavior applies.
     /// When false, this thread's work is only processed by itself.
     stealing_allowed: bool,
+    /// Root entries for cross-thread handles. Protected by Mutex so that
+    /// handles can be registered/unregistered from any thread.
+    ///
+    /// Lock ordering: `LocalHeap` → `GlobalMarkState` → `GcRequest` → `CrossThreadRootTable`
+    pub(crate) cross_thread_roots: Mutex<CrossThreadRootTable>,
 }
 
 #[allow(clippy::non_send_fields_in_send_ty)]
@@ -110,6 +163,7 @@ impl ThreadControlBlock {
             remembered_buffer: Vec::with_capacity(32),
             remembered_buffer_capacity: 32,
             stealing_allowed: true,
+            cross_thread_roots: Mutex::new(CrossThreadRootTable::new()),
         }
     }
 
@@ -198,6 +252,29 @@ impl ThreadControlBlock {
                     }
                 }
             }
+        }
+    }
+
+    /// Iterate cross-thread handle roots for GC marking.
+    ///
+    /// This is called during the mark phase to ensure objects referenced
+    /// by cross-thread handles are kept alive.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold any locks required by the lock ordering discipline.
+    /// This method acquires `cross_thread_roots` lock.
+    #[allow(dead_code, clippy::missing_panics_doc)]
+    pub(crate) fn iterate_cross_thread_roots<F>(&self, mut visitor: F)
+    where
+        F: FnMut(*const crate::ptr::GcBox<()>),
+    {
+        let roots = self.cross_thread_roots.lock().unwrap();
+        for ptr in roots.strong.values() {
+            // SAFETY: ptr validity is guaranteed because the handle registered
+            // it before releasing the lock, and the GC holds the lock now,
+            // so no concurrent Drop can remove it mid-iteration.
+            visitor(ptr.as_ptr());
         }
     }
 

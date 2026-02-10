@@ -58,11 +58,13 @@
 #![allow(clippy::manual_assert)]
 
 mod r#async;
+mod cross_thread;
 mod local_handles;
 
 #[cfg(test)]
 mod tests;
 
+pub use cross_thread::{GcHandle, WeakCrossThreadHandle};
 pub use local_handles::{
     HandleBlock, HandleScopeData, HandleSlot, LocalHandles, HANDLE_BLOCK_SIZE,
 };
