@@ -26,6 +26,7 @@ The library is built on a **BiBOP (Big Bag of Pages)** memory layout, which allo
 - **ZST Optimization**: Zero-Sized Types (like `()`) are handled with zero heap allocation overhead.
 - **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`, enabling safe multi-threaded data sharing. Use `GcRwLock` and `GcMutex` for concurrent access.
 - **Concurrent Primitives**: `GcRwLock<T>` and `GcMutex<T>` provide thread-safe locking with automatic write barriers and GC-safe lock bypass during STW pauses.
+- **Cross-Thread Handles**: `GcHandle<T>` and `WeakCrossThreadHandle<T>` allow safe handoff of GC-managed objects between threads without requiring `T: Send + Sync`. Resolution is enforced at runtime on the origin thread only.
 - **Parallel Marking**: Work-stealing based parallel marking for multi-core scalability.
 - **Lazy Sweep**: Defers memory reclamation to allocation time, reducing STW pause times (enabled by default).
 - **HandleScope**: V8-style explicit rooting for maximum performance and compiler-checked safety.
@@ -383,7 +384,89 @@ Both `GcRwLock::write()` and `GcMutex::lock()` automatically trigger generationa
 | Write barriers | On borrow_mut() | On write() | On lock() |
 | Use case | Single-threaded DOM, AST | Caches, configs | Queues, state machines |
 
-## HandleScope  - Optional
+## Cross-Thread GC Handles
+
+`GcHandle<T>` and `WeakCrossThreadHandle<T>` enable safe transfer of GC-managed objects between threads without requiring `T: Send + Sync`. Handles can be sent through channels or stored in other threads, but can only be resolved back to `Gc<T>` on the thread where they were created.
+
+### When to Use Cross-Thread Handles
+
+| Scenario | Recommended API |
+|----------|-----------------|
+| Non-Send signal types shared across threads | `GcHandle<T>` |
+| Checking if object is still alive without preventing collection | `WeakCrossThreadHandle<T>` |
+| Thread-uncertain contexts | `try_resolve()` for graceful fallback |
+
+### Creating Handles
+
+```rust
+use rudo_gc::{Gc, Trace, GcHandle};
+
+#[derive(Trace)]
+struct SignalData {
+    value: i32,
+}
+
+let gc: Gc<SignalData> = Gc::new(SignalData { value: 42 });
+let handle: GcHandle<SignalData> = gc.cross_thread_handle();
+```
+
+### Sending Between Threads
+
+Handles implement `Send + Sync` regardless of the inner type:
+
+```rust
+use std::sync::mpsc;
+use std::thread;
+
+let (sender, receiver) = mpsc::channel::<GcHandle<SignalData>>();
+
+thread::spawn(move || {
+    sender.send(handle).unwrap();
+});
+
+let received_handle = receiver.recv().unwrap();
+```
+
+### Resolving Handles
+
+Resolution is enforced at runtime on the origin thread:
+
+```rust
+// Works on the origin thread
+let signal: Gc<SignalData> = handle.resolve();
+```
+
+For graceful handling when thread identity is uncertain:
+
+```rust
+if let Some(signal) = handle.try_resolve() {
+    signal.value += 1;
+} else {
+    // Wrong thread - queue for later
+    other_thread_sender.send(handle.clone());
+}
+```
+
+### Weak Handles
+
+```rust
+let weak: WeakCrossThreadHandle<SignalData> = gc.weak_cross_thread_handle();
+
+if weak.is_valid() {
+    let signal = weak.upgrade().unwrap();
+    // Use signal...
+}
+```
+
+### Safety Guarantees
+
+1. **Thread-Safe Handles**: `GcHandle<T>` implements `Send + Sync` even when `T` does not
+2. **Origin Thread Enforcement**: Resolution panics if attempted from wrong thread
+3. **Liveness Guarantee**: Strong handles prevent collection while registered
+4. **Safe Drop**: Handles can be dropped from any thread
+5. **Graceful Degradation**: `try_resolve()` returns `None` instead of panicking
+
+### HandleScope - Optional
 
 `rudo-gc` introduces **HandleScope**, a V8-inspired explicit rooting mechanism. While not required (the GC will automatically fallback to **Conservative Stack Scanning** if you don't use it), HandleScopes provide:
 
@@ -624,7 +707,7 @@ For a deeper dive into the philosophy behind the collector, see the [design docu
 
 ## Safety & Limitations
 
-- **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`. This allows safe sharing of GC-managed data between threads.
+- **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`. For non-Send types that need cross-thread communication, use `GcHandle<T>` to safely transfer references between threads without requiring the type itself to be thread-safe.
 - **Address Stability**: While objects don't move, their memory is reclaimed once unreachable. Holding an `&T` across a collection point is safe as long as the parent `Gc<T>` is still rooted.
 - **Platform Support**: Conservative stack scanning is currently supported on **x86_64 Linux, macOS, and Windows**, as well as **aarch64 Linux**. Miri is also fully supported for testing.
 - **Conservative Stack Scanning**: Roots are discovered by scanning the stack and registers. This may cause false positives (integers mistaken as pointers), leading to memory bloat. It also prevents implementing moving/compacting GC.
@@ -647,6 +730,7 @@ Gc<T> is well-suited for:
 - Complex cyclic data structures
 - Graphs and trees with arbitrary sharing
 - Scenarios where manual Weak<T> management is error-prone
+- Reactive frameworks with non-Send signal types (via `GcHandle<T>`)
 
 Consider alternatives when:
 - Data size is small and predictable (consider Rc/Arc)
