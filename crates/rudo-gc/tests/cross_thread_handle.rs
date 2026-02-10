@@ -447,7 +447,7 @@ fn test_cross_thread_handle_survives_major_gc() {
 }
 
 /// Test that cross-thread handles are safe when origin thread exits before GC.
-/// This verifies no use-after-free when iterating cross_thread_roots
+/// This verifies no use-after-free when iterating `cross_thread_roots`
 /// after threads have exited.
 #[test]
 fn test_cross_thread_handle_thread_exit_before_gc() {

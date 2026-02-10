@@ -1788,19 +1788,20 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
 
     #[allow(clippy::type_complexity)]
     let cross_thread_roots: Vec<*const GcBox<()>> = {
-        if let Ok(registry) = crate::heap::thread_registry().lock() {
-            registry
-                .threads
-                .iter()
-                .flat_map(|tcb| {
-                    let mut roots = Vec::new();
-                    tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
-                    roots
-                })
-                .collect()
-        } else {
-            Vec::new()
-        }
+        crate::heap::thread_registry().lock().map_or_else(
+            |_| Vec::new(),
+            |registry| {
+                registry
+                    .threads
+                    .iter()
+                    .flat_map(|tcb| {
+                        let mut roots = Vec::new();
+                        tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
+                        roots
+                    })
+                    .collect()
+            },
+        )
     };
 
     for ptr in cross_thread_roots {
@@ -1877,19 +1878,20 @@ fn mark_major_roots(heap: &LocalHeap) -> usize {
 
     #[allow(clippy::type_complexity)]
     let cross_thread_roots: Vec<*const GcBox<()>> = {
-        if let Ok(registry) = crate::heap::thread_registry().lock() {
-            registry
-                .threads
-                .iter()
-                .flat_map(|tcb| {
-                    let mut roots = Vec::new();
-                    tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
-                    roots
-                })
-                .collect()
-        } else {
-            Vec::new()
-        }
+        crate::heap::thread_registry().lock().map_or_else(
+            |_| Vec::new(),
+            |registry| {
+                registry
+                    .threads
+                    .iter()
+                    .flat_map(|tcb| {
+                        let mut roots = Vec::new();
+                        tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
+                        roots
+                    })
+                    .collect()
+            },
+        )
     };
 
     for ptr in cross_thread_roots {

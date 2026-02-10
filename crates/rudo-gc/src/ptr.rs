@@ -192,7 +192,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Try to increment `ref_count` atomically when it is currently zero.
-    /// Returns true if successful, false if ref_count was non-zero or object is dead.
+    /// Returns true if successful, false if `ref_count` was non-zero or object is dead.
     ///
     /// This is used by weak upgrades to atomically transition from ref=0 to ref=1
     /// without racing with concurrent collection. The transition is only allowed
