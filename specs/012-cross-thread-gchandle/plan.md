@@ -547,6 +547,94 @@ fn test_weak_cross_thread_handle_increments_weak_count() {
 
 **Similar Issue:** The same pattern exists in `Gc::as_weak()` at `ptr.rs:1059-1072` which has a duplicate increment issue (calls `inc_weak()` AND then `GcBoxWeakRef::new()`). However, this method is marked `#[allow(dead_code)]` and is not currently used. Future cleanup should address this inconsistency.
 
+---
+
+### Critical Bug: `WeakCrossThreadHandle` Missing Drop Implementation (2026-02-10)
+
+**Problem:**
+
+`WeakCrossThreadHandle` was missing a `Drop` implementation, causing weak reference count leaks. Every call to `GcHandle::downgrade()` or `Gc::weak_cross_thread_handle()` would increment weak count but never decrement it on drop.
+
+**Locations:**
+
+- `crates/rudo-gc/src/handles/cross_thread.rs:193-202` (`GcHandle::downgrade`)
+- `crates/rudo-gc/src/ptr.rs:1142-1150` (`Gc::weak_cross_thread_handle`)
+
+**Impact:**
+
+- Weak count overflow/leak for every weak cross-thread handle created
+- Objects with weak handles may never be collected even after all strong refs drop
+- Incorrect collection behavior for downgraded handles
+
+**Root Cause:**
+
+`GcHandle::downgrade()` correctly calls `inc_weak()` before creating the handle, but `WeakCrossThreadHandle` had no `Drop` impl to call `dec_weak()`.
+
+**Fix Applied:**
+
+Added `Drop` implementation to `WeakCrossThreadHandle` at `crates/rudo-gc/src/handles/cross_thread.rs:340-350`:
+
+```rust
+impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
+    fn drop(&mut self) {
+        let ptr = self.weak.as_ptr();
+        let Some(ptr) = ptr else {
+            return;
+        };
+        unsafe {
+            (*ptr.as_ptr()).dec_weak();
+        }
+    }
+}
+```
+
+Also added helper method to `GcBoxWeakRef` at `crates/rudo-gc/src/ptr.rs:425-428`:
+
+```rust
+pub(crate) fn as_ptr(&self) -> Option<NonNull<GcBox<T>>> {
+    self.ptr.load(Ordering::Acquire).as_option()
+}
+```
+
+**Test Extended:**
+
+Extended `test_weak_cross_thread_handle_increments_weak_count` to verify both increment AND decrement on drop:
+
+```rust
+#[test]
+fn test_weak_cross_thread_handle_increments_weak_count() {
+    // ... setup ...
+    let before = Gc::weak_count(&gc);
+    let weak = gc.weak_cross_thread_handle();
+    let after_create = Gc::weak_count(&gc);
+    assert_eq!(after_create, before + 1, "should increment weak count by 1");
+    drop(weak);
+    let after_drop = Gc::weak_count(&gc);
+    assert_eq!(after_drop, before, "should decrement weak count on drop");
+}
+```
+
+**Documentation Fix:**
+
+Fixed imprecise documentation for `GcHandle::is_valid()` at `crates/rudo-gc/src/handles/cross_thread.rs:88-91`:
+
+```rust
+/// Returns `true` if the underlying object is still alive.
+///
+/// For strong handles this is `true` while the handle is registered,
+/// unless the origin thread's heap has been torn down.
+```
+
+Changed "always `true`" to just "`true`" for accuracy.
+
+**Verification:**
+
+- All 498 tests pass (including `test_weak_cross_thread_handle_increments_weak_count`)
+- Clippy passes with zero warnings
+- Code formatted with `cargo fmt --all`
+
+---
+
 ## Quick Reference
 
 **Branch**: `012-cross-thread-gchandle`  

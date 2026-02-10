@@ -500,7 +500,7 @@ fn test_cross_thread_handle_thread_exit_before_gc() {
     let _ = Box::into_raw(retrieved);
 }
 
-/// Test that `weak_cross_thread_handle` increments weak count.
+/// Test that `weak_cross_thread_handle` increments and decrements weak count.
 /// This reproduces the bug where `GcBoxWeakRef::new()` was called
 /// without incrementing `weak_count`, causing incorrect liveness tracking.
 #[test]
@@ -513,12 +513,20 @@ fn test_weak_cross_thread_handle_increments_weak_count() {
     let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
     let before = Gc::weak_count(&gc);
 
-    let _weak = gc.weak_cross_thread_handle();
+    let weak = gc.weak_cross_thread_handle();
 
-    let after = Gc::weak_count(&gc);
+    let after_create = Gc::weak_count(&gc);
     assert_eq!(
-        after,
+        after_create,
         before + 1,
         "weak_cross_thread_handle should increment weak count by 1"
+    );
+
+    drop(weak);
+
+    let after_drop = Gc::weak_count(&gc);
+    assert_eq!(
+        after_drop, before,
+        "weak_cross_thread_handle should decrement weak count on drop"
     );
 }

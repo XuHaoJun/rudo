@@ -87,7 +87,7 @@ impl<T: Trace + 'static> GcHandle<T> {
 
     /// Returns `true` if the underlying object is still alive.
     ///
-    /// For strong handles this is always `true` while the handle is registered,
+    /// For strong handles this is `true` while the handle is registered,
     /// unless the origin thread's heap has been torn down.
     #[must_use]
     pub fn is_valid(&self) -> bool {
@@ -333,6 +333,18 @@ impl<T: Trace + 'static> Clone for WeakCrossThreadHandle<T> {
             weak: self.weak.clone(),
             origin_tcb: Arc::clone(&self.origin_tcb),
             origin_thread: self.origin_thread,
+        }
+    }
+}
+
+impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
+    fn drop(&mut self) {
+        let ptr = self.weak.as_ptr();
+        let Some(ptr) = ptr else {
+            return;
+        };
+        unsafe {
+            (*ptr.as_ptr()).dec_weak();
         }
     }
 }

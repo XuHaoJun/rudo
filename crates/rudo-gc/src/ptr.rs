@@ -422,6 +422,11 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             ptr: AtomicNullable::new(self.ptr.load(Ordering::Acquire).as_option().unwrap()),
         }
     }
+
+    /// Get the raw pointer, for use in Drop implementations.
+    pub(crate) fn as_ptr(&self) -> Option<NonNull<GcBox<T>>> {
+        self.ptr.load(Ordering::Acquire).as_option()
+    }
 }
 
 #[allow(clippy::non_send_fields_in_send_ty)]
