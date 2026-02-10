@@ -205,10 +205,12 @@ impl<T: Trace + ?Sized> GcBox<T> {
     pub(crate) fn try_inc_ref_from_zero(&self) -> bool {
         loop {
             let ref_count = self.ref_count.load(Ordering::Acquire);
-            let weak_count = self.weak_count.load(Ordering::Acquire);
+            let weak_count_raw = self.weak_count.load(Ordering::Acquire);
 
-            let flags = weak_count & (Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG);
-            if flags != 0 {
+            let flags = weak_count_raw & (Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG);
+            let weak_count = weak_count_raw & !Self::FLAGS_MASK;
+
+            if flags != 0 && weak_count == 0 {
                 return false;
             }
 
@@ -225,7 +227,6 @@ impl<T: Trace + ?Sized> GcBox<T> {
                     if new_count != 0 {
                         return false;
                     }
-                    // Retry loop
                 }
             }
         }
@@ -418,8 +419,12 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
     /// Clone the weak reference.
     pub(crate) fn clone(&self) -> Self {
+        let ptr = self.ptr.load(Ordering::Acquire).as_option().unwrap();
+        unsafe {
+            (*ptr.as_ptr()).inc_weak();
+        }
         Self {
-            ptr: AtomicNullable::new(self.ptr.load(Ordering::Acquire).as_option().unwrap()),
+            ptr: AtomicNullable::new(ptr),
         }
     }
 
