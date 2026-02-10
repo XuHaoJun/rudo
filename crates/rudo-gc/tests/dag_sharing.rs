@@ -81,7 +81,7 @@ fn test_shared_child_two_parents() {
     collect();
 
     assert!(
-        !Gc::is_dead(&child),
+        !Gc::is_dead_or_unrooted(&child),
         "Child should still be alive via parent2"
     );
 
@@ -118,11 +118,11 @@ fn test_shared_child_three_parents() {
     // Drop parents one by one, verify child survives
     drop(parent1);
     collect();
-    assert!(!Gc::is_dead(&child));
+    assert!(!Gc::is_dead_or_unrooted(&child));
 
     drop(parent2);
     collect();
-    assert!(!Gc::is_dead(&child));
+    assert!(!Gc::is_dead_or_unrooted(&child));
 
     drop(parent3);
     collect();
@@ -162,8 +162,14 @@ fn test_shared_child_partial_overlap() {
     drop(parent1);
     collect();
 
-    assert!(!Gc::is_dead(&child1), "child1 should survive via parent2");
-    assert!(!Gc::is_dead(&child2), "child2 should survive via parent3");
+    assert!(
+        !Gc::is_dead_or_unrooted(&child1),
+        "child1 should survive via parent2"
+    );
+    assert!(
+        !Gc::is_dead_or_unrooted(&child2),
+        "child2 should survive via parent3"
+    );
 
     // Drop parent2, child1 should now have no strong references
     // (parent1 was already dropped, parent2 is being dropped now)
@@ -174,7 +180,7 @@ fn test_shared_child_partial_overlap() {
     // while child1 root variable is in scope
     // child2 should still survive via parent3
     assert!(
-        !Gc::is_dead(&child2),
+        !Gc::is_dead_or_unrooted(&child2),
         "child2 should still survive via parent3"
     );
 
@@ -223,17 +229,20 @@ fn test_multiple_shared_children() {
     drop(parent1);
     collect();
 
-    assert!(!Gc::is_dead(&shared1), "shared1 via parent3");
-    assert!(!Gc::is_dead(&shared2), "shared2 via parent2");
-    assert!(!Gc::is_dead(&shared3), "shared3 via parent3");
+    assert!(!Gc::is_dead_or_unrooted(&shared1), "shared1 via parent3");
+    assert!(!Gc::is_dead_or_unrooted(&shared2), "shared2 via parent2");
+    assert!(!Gc::is_dead_or_unrooted(&shared3), "shared3 via parent3");
 
     // Drop parent2, shared2 and shared3 should survive
     drop(parent2);
     collect();
 
-    assert!(!Gc::is_dead(&shared1), "shared1 via parent3");
-    assert!(!Gc::is_dead(&shared2), "shared2 has no refs now?");
-    assert!(!Gc::is_dead(&shared3), "shared3 via parent3");
+    assert!(!Gc::is_dead_or_unrooted(&shared1), "shared1 via parent3");
+    assert!(
+        !Gc::is_dead_or_unrooted(&shared2),
+        "shared2 has no refs now?"
+    );
+    assert!(!Gc::is_dead_or_unrooted(&shared3), "shared3 via parent3");
 
     // Drop parent3
     drop(parent3);
@@ -287,11 +296,11 @@ fn test_chain_of_sharing() {
     // Drop nodes one by one
     drop(node_a);
     collect();
-    assert!(!Gc::is_dead(&shared));
+    assert!(!Gc::is_dead_or_unrooted(&shared));
 
     drop(node_b);
     collect();
-    assert!(!Gc::is_dead(&shared));
+    assert!(!Gc::is_dead_or_unrooted(&shared));
 
     drop(node_c);
     collect();
@@ -501,13 +510,13 @@ fn test_diamond_pattern() {
     drop(root);
     collect();
 
-    assert!(!Gc::is_dead(&shared_child));
+    assert!(!Gc::is_dead_or_unrooted(&shared_child));
 
     // Drop a, shared_child should still survive via b
     drop(node_a);
     collect();
 
-    assert!(!Gc::is_dead(&shared_child));
+    assert!(!Gc::is_dead_or_unrooted(&shared_child));
 
     // Drop b, shared_child should be dead (but shared_child variable is still a root)
     // We need to drop the shared_child root variable first

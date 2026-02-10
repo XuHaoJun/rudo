@@ -99,7 +99,7 @@ fn test_new_cyclic_with_immediate_self_ref() {
     if let Some(ref inner_gc) = *inner {
         // The inner Gc might be dead (implementation limitation)
         // or might point to the same node
-        if !Gc::is_dead(inner_gc) {
+        if !Gc::is_dead_or_unrooted(inner_gc) {
             assert!(Gc::ptr_eq(&node, inner_gc));
         }
     }

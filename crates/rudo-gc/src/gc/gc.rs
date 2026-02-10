@@ -1338,6 +1338,24 @@ fn mark_major_roots_multi(
         });
     }
 
+    #[allow(clippy::type_complexity)]
+    let cross_thread_roots: Vec<*const GcBox<()>> = stack_roots
+        .iter()
+        .flat_map(|(_, tcb)| {
+            let mut roots = Vec::new();
+            tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
+            roots
+        })
+        .collect();
+
+    for ptr in cross_thread_roots {
+        unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+                mark_object(gc_box, &mut visitor);
+            }
+        }
+    }
+
     #[cfg(feature = "tokio")]
     #[allow(clippy::explicit_iter_loop)]
     {
@@ -1768,6 +1786,32 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
         });
     }
 
+    #[allow(clippy::type_complexity)]
+    let cross_thread_roots: Vec<*const GcBox<()>> = {
+        crate::heap::thread_registry().lock().map_or_else(
+            |_| Vec::new(),
+            |registry| {
+                registry
+                    .threads
+                    .iter()
+                    .flat_map(|tcb| {
+                        let mut roots = Vec::new();
+                        tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
+                        roots
+                    })
+                    .collect()
+            },
+        )
+    };
+
+    for ptr in cross_thread_roots {
+        unsafe {
+            if let Some(gc_box_ptr) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+                mark_object_minor(gc_box_ptr, &mut visitor);
+            }
+        }
+    }
+
     // Take snapshot of dirty pages for lock-free scanning
     let _dirty_count = heap.take_dirty_pages_snapshot();
 
@@ -1831,6 +1875,33 @@ fn mark_major_roots(heap: &LocalHeap) -> usize {
             }
         });
     }
+
+    #[allow(clippy::type_complexity)]
+    let cross_thread_roots: Vec<*const GcBox<()>> = {
+        crate::heap::thread_registry().lock().map_or_else(
+            |_| Vec::new(),
+            |registry| {
+                registry
+                    .threads
+                    .iter()
+                    .flat_map(|tcb| {
+                        let mut roots = Vec::new();
+                        tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
+                        roots
+                    })
+                    .collect()
+            },
+        )
+    };
+
+    for ptr in cross_thread_roots {
+        unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+                mark_object(gc_box, &mut visitor);
+            }
+        }
+    }
+
     visitor.process_worklist();
     visitor.objects_marked()
 }
@@ -1946,7 +2017,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
 
                     if weak_count > 0 {
                         // Has weak refs - drop value but keep allocation
-                        if !(*gc_box_ptr).is_value_dead() {
+                        if !(*gc_box_ptr).has_dead_flag() {
                             ((*gc_box_ptr).drop_fn)(obj_ptr);
                             (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                             (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
@@ -1958,7 +2029,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
 
                         // CRITICAL FIX: Mark as dead so phase 2 knows to reclaim.
-                        // Without this, is_value_dead() returns false in phase 2,
+                        // Without this, has_dead_flag() returns false in phase 2,
                         // objects are never reclaimed, and the next GC cycle will
                         // try to drop them again - use-after-free!
                         (*gc_box_ptr).set_dead();
@@ -2030,7 +2101,7 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
 
                     let weak_count = (*gc_box_ptr).weak_count();
 
-                    if weak_count == 0 && (*gc_box_ptr).is_value_dead() {
+                    if weak_count == 0 && (*gc_box_ptr).has_dead_flag() {
                         // No weak refs, already dropped and dead - reclaim
                         // CRITICAL FIX: Write free list head BEFORE clearing allocated bit
                         // to prevent new allocations from reusing this slot with corrupted metadata
@@ -2165,7 +2236,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 let weak_count = (*gc_box_ptr).weak_count();
 
                 if weak_count > 0 {
-                    if !(*gc_box_ptr).is_value_dead() {
+                    if !(*gc_box_ptr).has_dead_flag() {
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
                         (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                         (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
@@ -2268,7 +2339,7 @@ unsafe fn lazy_sweep_page(
             let weak_count = (*gc_box_ptr).weak_count();
 
             if weak_count > 0 {
-                if !(*gc_box_ptr).is_value_dead() {
+                if !(*gc_box_ptr).has_dead_flag() {
                     ((*gc_box_ptr).drop_fn)(obj_ptr);
                     (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                     (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
@@ -2388,7 +2459,7 @@ unsafe fn lazy_sweep_page_all_dead(
             let weak_count = (*gc_box_ptr).weak_count();
 
             if weak_count > 0 {
-                if !(*gc_box_ptr).is_value_dead() {
+                if !(*gc_box_ptr).has_dead_flag() {
                     ((*gc_box_ptr).drop_fn)(obj_ptr);
                     (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                     (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;

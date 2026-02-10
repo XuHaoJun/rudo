@@ -216,7 +216,10 @@ fn test_vec_gc_partial_removal() {
     collect();
 
     for (i, child) in children.iter().enumerate() {
-        assert!(!Gc::is_dead(child), "Child {i} should still be alive");
+        assert!(
+            !Gc::is_dead_or_unrooted(child),
+            "Child {i} should still be alive"
+        );
     }
     drop(children);
     collect();
@@ -243,7 +246,7 @@ fn test_vec_gc_with_shared_elements() {
 
     drop(container);
     collect();
-    assert!(!Gc::is_dead(&shared_child));
+    assert!(!Gc::is_dead_or_unrooted(&shared_child));
     drop(shared_child);
     collect();
 }
@@ -346,7 +349,7 @@ fn test_nested_gc_in_box() {
 
     drop(outer);
     collect();
-    assert!(!Gc::is_dead(&inner));
+    assert!(!Gc::is_dead_or_unrooted(&inner));
     drop(inner);
     collect();
 }
@@ -382,7 +385,7 @@ fn test_gc_inside_gc() {
 
     drop(outer);
     collect();
-    assert!(!Gc::is_dead(&inner));
+    assert!(!Gc::is_dead_or_unrooted(&inner));
     drop(inner);
     collect();
 }
