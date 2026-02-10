@@ -467,6 +467,86 @@ All pull requests MUST satisfy:
 |-----------|------------|-------------------------------------|
 | N/A | This feature follows all constitution requirements | N/A |
 
+## Bug Fix Notes (2026-02-10)
+
+### Critical Bug: `Gc::weak_cross_thread_handle()` Weak Count Not Incremented
+
+**Problem:**
+
+During code review, a critical bug was discovered: the `weak_cross_thread_handle()` method did not increment the weak reference count when creating a `GcBoxWeakRef`.
+
+**Location:** `crates/rudo-gc/src/ptr.rs:1142-1149`
+
+Original (buggy) implementation:
+```rust
+pub fn weak_cross_thread_handle(&self) -> crate::handles::WeakCrossThreadHandle<T> {
+    crate::handles::WeakCrossThreadHandle {
+        weak: GcBoxWeakRef::new(self.as_non_null()),  // BUG: weak_count not incremented!
+        origin_tcb: crate::heap::current_thread_control_block()
+            .expect("weak_cross_thread_handle called outside of GC context"),
+        origin_thread: std::thread::current().id(),
+    }
+}
+```
+
+**Impact:** Weak handles created via `weak_cross_thread_handle()` would not properly track liveness. When the object was collected, the weak reference count would not prevent incorrect behavior, and methods like `is_valid()` could return misleading results.
+
+**Root Cause:** This is the same class of bug that was documented and fixed for `GcHandle::downgrade()` (see `@docs/012-cross-thread-handle-plan.md:806`). The `GcBoxWeakRef::new()` constructor does NOT increment weak count—it must be done explicitly by the caller.
+
+**Fix Applied:**
+
+Added `inc_weak()` call before creating the weak reference:
+
+```rust
+pub fn weak_cross_thread_handle(&self) -> crate::handles::WeakCrossThreadHandle<T> {
+    unsafe {
+        (*self.as_non_null().as_ptr()).inc_weak();
+    }
+    crate::handles::WeakCrossThreadHandle {
+        weak: GcBoxWeakRef::new(self.as_non_null()),
+        origin_tcb: crate::heap::current_thread_control_block()
+            .expect("weak_cross_thread_handle called outside of GC context"),
+        origin_thread: std::thread::current().id(),
+    }
+}
+```
+
+**Reproduction Test Added:**
+
+**File:** `crates/rudo-gc/tests/cross_thread_handle.rs`
+
+```rust
+#[test]
+fn test_weak_cross_thread_handle_increments_weak_count() {
+    #[derive(Trace)]
+    struct TestData {
+        value: i32,
+    }
+
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let before = Gc::weak_count(&gc);
+
+    let _weak = gc.weak_cross_thread_handle();
+
+    let after = Gc::weak_count(&gc);
+    assert_eq!(
+        after,
+        before + 1,
+        "weak_cross_thread_handle should increment weak count by 1"
+    );
+}
+```
+
+**Verification:**
+
+- Reproduction test failed before fix (weak_count remained 0)
+- Reproduction test passed after fix (weak_count incremented to 1)
+- Full test suite passes
+- Clippy passes with zero warnings
+- Code formatted with `cargo fmt --all`
+
+**Similar Issue:** The same pattern exists in `Gc::as_weak()` at `ptr.rs:1059-1072` which has a duplicate increment issue (calls `inc_weak()` AND then `GcBoxWeakRef::new()`). However, this method is marked `#[allow(dead_code)]` and is not currently used. Future cleanup should address this inconsistency.
+
 ## Quick Reference
 
 **Branch**: `012-cross-thread-gchandle`  

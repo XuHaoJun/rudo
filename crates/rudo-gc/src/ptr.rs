@@ -1140,6 +1140,9 @@ impl<T: Trace + 'static> Gc<T> {
     /// ```
     #[must_use]
     pub fn weak_cross_thread_handle(&self) -> crate::handles::WeakCrossThreadHandle<T> {
+        unsafe {
+            (*self.as_non_null().as_ptr()).inc_weak();
+        }
         crate::handles::WeakCrossThreadHandle {
             weak: GcBoxWeakRef::new(self.as_non_null()),
             origin_tcb: crate::heap::current_thread_control_block()
