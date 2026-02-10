@@ -1338,12 +1338,22 @@ fn mark_major_roots_multi(
         });
     }
 
-    for (_, tcb) in stack_roots {
-        tcb.iterate_cross_thread_roots(|ptr| unsafe {
+    #[allow(clippy::type_complexity)]
+    let cross_thread_roots: Vec<*const GcBox<()>> = stack_roots
+        .iter()
+        .flat_map(|(_, tcb)| {
+            let mut roots = Vec::new();
+            tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
+            roots
+        })
+        .collect();
+
+    for ptr in cross_thread_roots {
+        unsafe {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
                 mark_object(gc_box, &mut visitor);
             }
-        });
+        }
     }
 
     #[cfg(feature = "tokio")]
@@ -1776,14 +1786,28 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
         });
     }
 
-    if let Ok(registry) = crate::heap::thread_registry().lock() {
-        for tcb in &registry.threads {
-            tcb.iterate_cross_thread_roots(|ptr| unsafe {
-                if let Some(gc_box_ptr) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>())
-                {
-                    mark_object_minor(gc_box_ptr, &mut visitor);
-                }
-            });
+    #[allow(clippy::type_complexity)]
+    let cross_thread_roots: Vec<*const GcBox<()>> = {
+        if let Ok(registry) = crate::heap::thread_registry().lock() {
+            registry
+                .threads
+                .iter()
+                .flat_map(|tcb| {
+                    let mut roots = Vec::new();
+                    tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
+                    roots
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    };
+
+    for ptr in cross_thread_roots {
+        unsafe {
+            if let Some(gc_box_ptr) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+                mark_object_minor(gc_box_ptr, &mut visitor);
+            }
         }
     }
 
@@ -1851,13 +1875,28 @@ fn mark_major_roots(heap: &LocalHeap) -> usize {
         });
     }
 
-    if let Ok(registry) = crate::heap::thread_registry().lock() {
-        for tcb in &registry.threads {
-            tcb.iterate_cross_thread_roots(|ptr| unsafe {
-                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
-                    mark_object(gc_box, &mut visitor);
-                }
-            });
+    #[allow(clippy::type_complexity)]
+    let cross_thread_roots: Vec<*const GcBox<()>> = {
+        if let Ok(registry) = crate::heap::thread_registry().lock() {
+            registry
+                .threads
+                .iter()
+                .flat_map(|tcb| {
+                    let mut roots = Vec::new();
+                    tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
+                    roots
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    };
+
+    for ptr in cross_thread_roots {
+        unsafe {
+            if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+                mark_object(gc_box, &mut visitor);
+            }
         }
     }
 

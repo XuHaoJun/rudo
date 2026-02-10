@@ -191,6 +191,46 @@ impl<T: Trace + ?Sized> GcBox<T> {
         self.weak_count.store(flags | new_count, Ordering::Relaxed);
     }
 
+    /// Try to increment `ref_count` atomically when it is currently zero.
+    /// Returns true if successful, false if ref_count was non-zero or object is dead.
+    ///
+    /// This is used by weak upgrades to atomically transition from ref=0 to ref=1
+    /// without racing with concurrent collection. The transition is only allowed
+    /// if the object is fully alive (not under construction, not dead).
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure that if this returns true, they will properly use the
+    /// resulting strong reference to prevent use-after-free.
+    pub(crate) fn try_inc_ref_from_zero(&self) -> bool {
+        loop {
+            let ref_count = self.ref_count.load(Ordering::Acquire);
+            let weak_count = self.weak_count.load(Ordering::Acquire);
+
+            let flags = weak_count & (Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG);
+            if flags != 0 {
+                return false;
+            }
+
+            if ref_count != 0 {
+                return false;
+            }
+
+            match self
+                .ref_count
+                .compare_exchange_weak(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => return true,
+                Err(new_count) => {
+                    if new_count != 0 {
+                        return false;
+                    }
+                    // Retry loop
+                }
+            }
+        }
+    }
+
     /// Decrement the weak reference count. Returns true if count reached zero.
     /// Uses `AcqRel` ordering to synchronize weak count changes.
     pub fn dec_weak(&self) -> bool {
@@ -334,16 +374,40 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
     }
 
     /// Upgrade to a strong reference.
+    ///
+    /// Uses atomic CAS to transition from `ref_count=0` to `ref_count=1`,
+    /// preventing races with concurrent GC that could resurrect dead objects.
+    /// If `ref_count` > 0, increments normally since strong refs already exist.
     pub(crate) fn upgrade(&self) -> Option<Gc<T>> {
         let ptr = self.ptr.load(Ordering::Acquire).as_option()?;
 
         unsafe {
             let gc_box = &*ptr.as_ptr();
-            // Check if value is dead (collected)
+
+            // Check if object is dead first (fast path for collected objects)
             if gc_box.is_dead() {
                 return None;
             }
-            // Increment ref count
+
+            // Try atomic transition from 0 to 1.
+            // This fails if: (a) another thread already incremented (`ref_count` > 0),
+            // or (b) object became dead between checks.
+            if gc_box.try_inc_ref_from_zero() {
+                // Successfully transitioned from 0 to 1
+                return Some(Gc {
+                    ptr: AtomicNullable::new(ptr),
+                    _marker: PhantomData,
+                });
+            }
+
+            // `ref_count` > 0, so another strong reference exists.
+            // Check again if object is still alive (might have been collected
+            // between our first check and the CAS failure).
+            if gc_box.is_dead() {
+                return None;
+            }
+
+            // Object is alive and has strong refs - increment normally
             gc_box.inc_ref();
             Some(Gc {
                 ptr: AtomicNullable::new(ptr),

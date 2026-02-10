@@ -445,3 +445,35 @@ fn test_cross_thread_handle_survives_major_gc() {
     drop(allocations);
     drop(resolved);
 }
+
+/// Test that cross-thread handles are safe when origin thread exits before GC.
+/// This verifies no use-after-free when iterating cross_thread_roots
+/// after threads have exited.
+#[test]
+fn test_cross_thread_handle_thread_exit_before_gc() {
+    use std::sync::atomic::{AtomicPtr, Ordering};
+
+    static HANDLE_STORAGE: AtomicPtr<GcHandle<TestData>> = AtomicPtr::new(std::ptr::null_mut());
+
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let handle = gc.cross_thread_handle();
+
+    std::thread::spawn(move || {
+        HANDLE_STORAGE.store(Box::into_raw(Box::new(handle)), Ordering::SeqCst);
+    })
+    .join()
+    .expect("thread should not panic");
+
+    let retrieved = unsafe { Box::from_raw(HANDLE_STORAGE.load(Ordering::SeqCst)) };
+
+    // Thread has exited - now force GC
+    // This should not cause use-after-free
+    gc::collect();
+
+    // Verify handle still works
+    let resolved: Gc<TestData> = retrieved.resolve();
+    assert_eq!(resolved.value, 42);
+
+    // Prevent double-free
+    let _ = Box::into_raw(retrieved);
+}

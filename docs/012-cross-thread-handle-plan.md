@@ -871,3 +871,233 @@ The fix ensures that:
 1. `downgrade()` properly increments `weak_count` (tracking liveness)
 2. Weak handles correctly report `is_valid() = false` after object collection
 3. `try_resolve()` returns `None` after object collection
+
+---
+
+## Bug Fix Notes (2026-02-10) — Thread Safety Fixes
+
+### Critical Issue 1: Use-after-Free with Exited Threads
+
+During code review, a critical thread safety issue was discovered: when GC marking iterates over `registry.threads`, threads can exit mid-iteration and have their TCB deallocated while we're holding references through the iterator.
+
+**Problem**:
+
+```rust
+// Original code - unsafe during thread exit
+for tcb in &registry.threads {
+    tcb.iterate_cross_thread_roots(|ptr| {
+        // ptr may become dangling if thread exits
+    });
+}
+```
+
+**Scenario**: Thread A creates handle → Thread A exits → TCB deallocated → GC iterates `registry.threads` → UB
+
+### Fix Applied
+
+**File: `crates/rudo-gc/src/gc/gc.rs`**
+
+All three marking functions now copy root pointers under lock before marking:
+
+**`mark_major_roots_multi`**:
+```rust
+#[allow(clippy::type_complexity)]
+let cross_thread_roots: Vec<*const GcBox<()>> = stack_roots
+    .iter()
+    .flat_map(|(_, tcb)| {
+        let mut roots = Vec::new();
+        tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
+        roots
+    })
+    .collect();
+
+for ptr in cross_thread_roots {
+    unsafe {
+        if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+            mark_object(gc_box, &mut visitor);
+        }
+    }
+}
+```
+
+**`mark_minor_roots`**:
+```rust
+#[allow(clippy::type_complexity)]
+let cross_thread_roots: Vec<*const GcBox<()>> = {
+    if let Ok(registry) = crate::heap::thread_registry().lock() {
+        registry
+            .threads
+            .iter()
+            .flat_map(|tcb| {
+                let mut roots = Vec::new();
+                tcb.iterate_cross_thread_roots(|ptr| roots.push(ptr));
+                roots
+            })
+            .collect()
+    } else {
+        Vec::new()
+    }
+};
+
+for ptr in cross_thread_roots {
+    unsafe {
+        if let Some(gc_box_ptr) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
+            mark_object_minor(gc_box_ptr, &mut visitor);
+        }
+    }
+}
+```
+
+**`mark_major_roots`**: Same pattern applied.
+
+---
+
+### Critical Issue 2: Race in Weak Upgrade (TOCTOU Bug)
+
+During code review, a TOCTOU (Time-of-Check-Time-of-Use) race condition was discovered in `GcBoxWeakRef::upgrade()`.
+
+**Problem**:
+
+```rust
+// Original code - race between check and increment
+pub(crate) fn upgrade(&self) -> Option<Gc<T>> {
+    let ptr = self.ptr.load(Ordering::Acquire).as_option()?;
+    unsafe {
+        let gc_box = &*ptr.as_ptr();
+        if gc_box.is_dead() {  // CHECK
+            return None;
+        }
+        gc_box.inc_ref();       // <- RACE: object could die between CHECK and INC
+        // Object resurrected!
+    }
+}
+```
+
+**Scenario**: Strong refs = 0, Weak refs = 1 → Thread 1 calls `upgrade()` → checks `is_dead()` (false) → Thread 2 runs GC, marks object dead → Thread 1 calls `inc_ref()`, creates new `Gc<T>` → Object resurrected
+
+### Fix Applied
+
+**File: `crates/rudo-gc/src/ptr.rs`**
+
+Added `try_inc_ref_from_zero()` method with atomic CAS:
+
+```rust
+/// Try to increment ref_count atomically when it is currently zero.
+/// Returns true if successful, false if ref_count was non-zero or object is dead.
+pub(crate) fn try_inc_ref_from_zero(&self) -> bool {
+    loop {
+        let ref_count = self.ref_count.load(Ordering::Acquire);
+        let weak_count = self.weak_count.load(Ordering::Acquire);
+
+        let flags = weak_count & (Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG);
+        if flags != 0 {
+            return false;
+        }
+
+        if ref_count != 0 {
+            return false;
+        }
+
+        match self.ref_count.compare_exchange_weak(
+            0,
+            1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(new_count) => {
+                if new_count != 0 {
+                    return false;
+                }
+            }
+        }
+    }
+}
+```
+
+Updated `GcBoxWeakRef::upgrade()` to use atomic transition:
+
+```rust
+pub(crate) fn upgrade(&self) -> Option<Gc<T>> {
+    let ptr = self.ptr.load(Ordering::Acquire).as_option()?;
+
+    unsafe {
+        let gc_box = &*ptr.as_ptr();
+
+        if gc_box.is_dead() {
+            return None;
+        }
+
+        if !gc_box.try_inc_ref_from_zero() {
+            return None;
+        }
+
+        Some(Gc {
+            ptr: AtomicNullable::new(ptr),
+            _marker: PhantomData,
+        })
+    }
+}
+```
+
+---
+
+### Documentation Update
+
+**File: `crates/rudo-gc/src/handles/cross_thread.rs`**
+
+Updated `is_valid()` documentation for `WeakCrossThreadHandle`:
+
+```rust
+/// Returns `true` if `upgrade()` would succeed.
+///
+/// This checks whether the underlying object is still alive and not being
+/// dropped. Note that even if `is_valid()` returns `true`, another thread
+/// may collect the object immediately after this call returns.
+/// Use `upgrade()` (which atomically transitions `ref_count`) to safely
+/// obtain a strong reference.
+```
+
+---
+
+### Thread Exit Safety Test
+
+**File: `crates/rudo-gc/tests/cross_thread_handle.rs`**
+
+Added test verifying no use-after-free when origin thread exits before GC:
+
+```rust
+#[test]
+fn test_cross_thread_handle_thread_exit_before_gc() {
+    use std::sync::atomic::{AtomicPtr, Ordering};
+
+    static HANDLE_STORAGE: AtomicPtr<GcHandle<TestData>> = AtomicPtr::new(std::ptr::null_mut());
+
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let handle = gc.cross_thread_handle();
+
+    std::thread::spawn(move || {
+        HANDLE_STORAGE.store(Box::into_raw(Box::new(handle)), Ordering::SeqCst);
+    })
+    .join()
+    .expect("thread should not panic");
+
+    let retrieved = unsafe { Box::from_raw(HANDLE_STORAGE.load(Ordering::SeqCst)) };
+
+    gc::collect();
+
+    let resolved: Gc<TestData> = retrieved.resolve();
+    assert_eq!(resolved.value, 42);
+
+    let _ = Box::into_raw(retrieved);
+}
+```
+
+---
+
+### Verification
+
+- All 21 cross-thread handle tests pass
+- Full test suite passes
+- Clippy passes (2 minor warnings remain)
+- Code properly formatted

@@ -285,7 +285,13 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
         self.origin_thread
     }
 
-    /// Returns `true` if the underlying object is still alive.
+    /// Returns `true` if `upgrade()` would succeed.
+    ///
+    /// This checks whether the underlying object is still alive and not being
+    /// dropped. Note that even if `is_valid()` returns `true`, another thread
+    /// may collect the object immediately after this call returns.
+    /// Use `upgrade()` (which atomically transitions `ref_count`) to safely
+    /// obtain a strong reference.
     ///
     /// Can be called from any thread (doesn't access `T`).
     #[must_use]
