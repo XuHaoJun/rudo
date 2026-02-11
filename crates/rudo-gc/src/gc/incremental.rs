@@ -516,6 +516,26 @@ fn resume_all_mutators() {
     state.reset_rendezvous_ack();
 }
 
+#[inline]
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn mark_root_for_snapshot(ptr: NonNull<GcBox<()>>, visitor: &mut crate::trace::GcVisitor) {
+    let ptr_addr = ptr.as_ptr() as *const u8;
+    let header = crate::heap::ptr_to_page_header(ptr_addr);
+
+    if (*header.as_ptr()).magic != crate::heap::MAGIC_GC_PAGE {
+        return;
+    }
+
+    if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+        let was_marked = (*header.as_ptr()).is_marked(idx);
+        if !was_marked {
+            (*header.as_ptr()).set_mark(idx);
+            visitor.objects_marked += 1;
+        }
+        visitor.worklist.push(ptr);
+    }
+}
+
 pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
     stop_all_mutators_for_snapshot();
 
@@ -531,7 +551,7 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
         unsafe {
             crate::stack::spill_registers_and_scan(|ptr, _addr, _is_reg| {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
-                    crate::gc::gc::mark_object(gc_box, &mut visitor);
+                    mark_root_for_snapshot(gc_box, &mut visitor);
                 }
             });
 
@@ -540,7 +560,7 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
                 crate::test_util::iter_test_roots(|roots: &std::cell::RefCell<Vec<*const u8>>| {
                     for &ptr in roots.borrow().iter() {
                         if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr) {
-                            crate::gc::gc::mark_object(gc_box, &mut visitor);
+                            mark_root_for_snapshot(gc_box, &mut visitor);
                         }
                     }
                 });
@@ -552,7 +572,7 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
                 for &ptr in &GcRootSet::global().snapshot(heap) {
                     if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8)
                     {
-                        crate::gc::gc::mark_object(gc_box, &mut visitor);
+                        mark_root_for_snapshot(gc_box, &mut visitor);
                     }
                 }
             }
@@ -851,22 +871,23 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Mark a newly allocated object as black (live) during incremental marking.
+/// Mark a newly allocated object as black (live).
 ///
-/// This implements the "black allocation" optimization where new objects
+/// This implements the "black allocation" SATB optimization where new objects
 /// are immediately considered reachable from the mutator. This is safe
 /// because:
 /// 1. New objects are only visible to the thread that created them
 /// 2. The creating thread is at a safepoint during GC marking
 /// 3. No other thread can have a reference to a brand new object
 ///
-/// Returns true if the object was marked, false if marking is not active.
+/// Unlike similar barriers, this always marks new objects as live regardless
+/// of whether incremental marking is active. This ensures correct behavior
+/// during concurrent marking phases and maintains the SATB invariant that
+/// objects allocated during marking are treated as live.
+///
+/// Returns true if the object was marked, false if already marked or invalid.
 #[inline]
 pub fn mark_new_object_black(ptr: *const u8) -> bool {
-    if !is_incremental_marking_active() {
-        return false;
-    }
-
     unsafe {
         if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
             let header = crate::heap::ptr_to_page_header(ptr);

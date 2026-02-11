@@ -876,6 +876,26 @@ fn perform_multi_threaded_collect_full() {
             roots.into_iter().map(move |ptr| (ptr, tcb.clone()))
         })
         .collect();
+
+    // Phase 1: Clear all marks on ALL heaps
+    for tcb in &tcbs {
+        unsafe {
+            clear_all_marks_and_dirty(&*tcb.heap.get());
+        }
+    }
+
+    // Also clear marks on orphan pages from terminated threads
+    // This is necessary because mark_new_object_black() marks objects at allocation time,
+    // and those marks would otherwise persist and prevent sweeping of dead orphan pages
+    {
+        let manager = crate::heap::segment_manager().lock().unwrap();
+        for orphan in &manager.orphan_pages {
+            unsafe {
+                let header = orphan.addr as *mut crate::heap::PageHeader;
+                (*header).clear_all_marks();
+            }
+        }
+    }
     clear_duration = clear_start.elapsed();
 
     // CRITICAL FIX: Use three-phase approach to correctly handle cross-heap references.
