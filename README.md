@@ -736,3 +736,123 @@ Consider alternatives when:
 - Data size is small and predictable (consider Rc/Arc)
 - Maximum performance is critical and cycles are unlikely
 - Tight loops cannot include safepoint() calls or allocations
+
+## Common Pitfall: Vec<Gc<T>>
+
+**⚠️ Important**: Using `Vec<Gc<T>>` directly can cause memory corruption!
+
+### The Problem
+
+```rust
+// ❌ DANGEROUS: May cause memory corruption!
+let items: RefCell<Vec<Gc<Component>>> = RefCell::new(Vec::new());
+```
+
+The `Vec` is stored in standard Rust allocation (not GC-managed). When GC runs:
+1. Stack scanning doesn't find the Vec's contents
+2. Write barriers don't mark the Vec's buffer as dirty
+3. Gc pointers inside the Vec are not marked as reachable
+4. Objects are incorrectly swept and their memory is reused
+5. **Result**: Memory corruption with dangling pointers
+
+### The Solution
+
+**Use `Gc<Vec<Gc<T>>>` instead:**
+
+```rust
+// ✅ SAFE: Vec is GC-managed, will be traced correctly
+let items: Gc<RefCell<Vec<Gc<Component>>>> = Gc::new(RefCell::new(Vec::new()));
+
+// Or with GcCell for mutation:
+#[derive(Trace, GcCell)]
+struct GameState {
+    entities: Vec<Gc<Entity>>,
+}
+
+let state: Gc<GcCell<GameState>> = Gc::new(GcCell::new(GameState {
+    entities: Vec::new(),
+}));
+```
+
+### Why This Works
+
+- `Gc<Vec<Gc<T>>>` is a GC-managed object
+- It has a `Trace` implementation that traverses all elements
+- When GC marks the Vec, it finds and marks all contained `Gc<T>` objects
+- Write barriers correctly track the Vec's page as dirty
+
+### For Testing (test-util feature)
+
+For tests using `Vec<Gc<T>>` without `Gc<Vec<Gc<T>>>`, you can manually register the Vec's buffer:
+
+```rust
+use rudo_gc::gc::register_test_root_region;
+
+let items: RefCell<Vec<Gc<Component>>> = RefCell::new(Vec::with_capacity(1000));
+
+// Register the Vec's buffer for conservative scanning during GC
+register_test_root_region(
+    items.borrow().as_ptr() as *const u8,
+    items.borrow().capacity() * std::mem::size_of::<Gc<Component>>()
+);
+
+// Re-register after pushes (Vec may reallocate)
+```
+
+**Note**: The `test-util` feature is required for this API.
+
+## Future: Automatic Detection of Vec<Gc<T>> Issues
+
+**Planned Feature**: Runtime detection and panic for suspicious GC sweeps.
+
+### Goal
+
+Automatically detect when young generation objects are being incorrectly swept and provide a helpful error message pointing to `Vec<Gc<T>>` as the likely cause.
+
+### Implementation Plan
+
+1. **Young Object History Tracking**
+   - Record recently created GC objects in a circular buffer
+   - Track pointer + creation round for each object
+   - Low overhead: ~1024 entries, O(1) insert
+
+2. **Suspicious Sweep Detection**
+   - During sweep phase, check if a young object is being collected
+   - Cross-reference with young object history
+   - If recently created object is being swept → panic with hint
+
+3. **Helpful Error Message**
+
+```
+Thread 'main' panicked at 'rudo-gc detected suspicious GC behavior:
+
+A young generation object (ptr=0x600000000668) was not marked but is being swept.
+This typically indicates Vec<Gc<T>> was used without Gc<Vec<Gc<T>>>.
+
+Solution:
+  Change: let items: RefCell<Vec<Gc<T>>> = ...
+  To:     let items: Gc<RefCell<Vec<Gc<T>>>> = Gc::new(RefCell::new(Vec::new()));
+
+For more information, see: crates/rudo-gc/docs/vec-gc-usage.md
+
+This check only runs in debug builds. Enable 'debug-suspicious-sweep' feature for release builds.
+'
+```
+
+### Configuration
+
+| Feature | Behavior |
+|---------|----------|
+| Default (debug builds) | Detection enabled, helpful panic |
+| `debug-suspicious-sweep` | Enable in release builds |
+| `paranoid-sweep` | More aggressive detection (may have false positives) |
+
+### Status
+
+- [ ] YoungObjectHistory tracking in Gc::new()
+- [ ] Sweep phase detection hook
+- [ ] Helpful panic message
+- [ ] Feature flags
+- [ ] Documentation
+
+Contributions welcome!
