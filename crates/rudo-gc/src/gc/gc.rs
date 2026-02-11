@@ -152,6 +152,8 @@ thread_local! {
     static IN_COLLECT: Cell<bool> = const { Cell::new(false) };
 
     static TEST_ROOTS: std::cell::RefCell<Vec<*const u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    static TEST_ROOTS_SCAN: std::cell::RefCell<Vec<(*const u8, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Register a root for GC marking. This is useful for tests where Miri cannot find
@@ -160,9 +162,17 @@ pub fn register_test_root(ptr: *const u8) {
     TEST_ROOTS.with(|roots| roots.borrow_mut().push(ptr));
 }
 
+/// Register a memory region to be conservatively scanned for Gc pointers.
+/// This is useful for containers (like Vec) that store Gc pointers but are not
+/// themselves GC-allocated.
+pub fn register_test_root_region(ptr: *const u8, len: usize) {
+    TEST_ROOTS_SCAN.with(|roots| roots.borrow_mut().push((ptr, len)));
+}
+
 /// Clear all registered test roots.
 pub fn clear_test_roots() {
     TEST_ROOTS.with(|roots| roots.borrow_mut().clear());
+    TEST_ROOTS_SCAN.with(|roots| roots.borrow_mut().clear());
 }
 
 /// Iterate over registered test roots.
@@ -1043,6 +1053,16 @@ fn mark_minor_roots_multi(
         }
     });
 
+    // Also scan registered regions for Gc pointers (conservative scanning)
+    #[cfg(any(test, feature = "test-util"))]
+    TEST_ROOTS_SCAN.with(|roots| {
+        for &(ptr, len) in roots.borrow().iter() {
+            unsafe {
+                crate::scan::scan_heap_region_conservatively(ptr, len, &mut visitor);
+            }
+        }
+    });
+
     for (_, tcb) in stack_roots {
         tcb.iterate_all_handles(|ptr| unsafe {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
@@ -1071,10 +1091,6 @@ fn mark_minor_roots_multi(
     for page_ptr in heap.dirty_pages_iter() {
         unsafe {
             let header = page_ptr.as_ptr();
-            // Defensive: skip young pages (shouldn't happen)
-            if (*header).generation == 0 {
-                continue;
-            }
             if (*header).is_large_object() {
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
                 #[allow(clippy::cast_ptr_alignment)]
@@ -1225,10 +1241,6 @@ fn mark_minor_roots_parallel(
     for page_ptr in heap.dirty_pages_iter() {
         unsafe {
             let header = page_ptr.as_ptr();
-            // Defensive: skip young pages (shouldn't happen)
-            if (*header).generation == 0 {
-                continue;
-            }
             // Handle large objects: add to work queue for parallel marking
             if (*header).is_large_object() {
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
@@ -1784,6 +1796,16 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
                 }
             }
         });
+
+        // Also scan registered regions for Gc pointers (conservative scanning)
+        #[cfg(any(test, feature = "test-util"))]
+        TEST_ROOTS_SCAN.with(|roots| {
+            for &(ptr, len) in roots.borrow().iter() {
+                unsafe {
+                    crate::scan::scan_heap_region_conservatively(ptr, len, &mut visitor);
+                }
+            }
+        });
     }
 
     #[allow(clippy::type_complexity)]
@@ -1819,10 +1841,6 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
     for page_ptr in heap.dirty_pages_iter() {
         unsafe {
             let header = page_ptr.as_ptr();
-            // Defensive: skip young pages (shouldn't happen)
-            if (*header).generation == 0 {
-                continue;
-            }
             if (*header).is_large_object() {
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
                 #[allow(clippy::cast_ptr_alignment)]
@@ -1923,10 +1941,6 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
             return;
         }
 
-        if (*header.as_ptr()).generation > 0 {
-            return;
-        }
-
         let block_size = (*header.as_ptr()).block_size as usize;
         let header_size = PageHeader::header_size(block_size);
         let data_start = page_addr + header_size;
@@ -1939,6 +1953,10 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
 
         (*header.as_ptr()).set_mark(index);
         visitor.objects_marked += 1;
+
+        if (*header.as_ptr()).generation > 0 {
+            return;
+        }
 
         visitor.worklist.push(ptr);
     }
@@ -2770,15 +2788,16 @@ impl Visitor for GcVisitor {
                 }
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
-                    if self.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
-                        return;
-                    }
-
                     if (*header.as_ptr()).is_marked(idx) {
                         return;
                     }
+
                     (*header.as_ptr()).set_mark(idx);
                     self.objects_marked += 1;
+
+                    if self.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
+                        return;
+                    }
                 } else {
                     return;
                 }

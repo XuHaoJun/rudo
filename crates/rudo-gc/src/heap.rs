@@ -2569,6 +2569,34 @@ pub const fn update_tcb_heap_ptr() {
     // No-op now since heap is stored directly in TCB
 }
 
+/// Mark the page containing a pointer as dirty.
+///
+/// This is used by container `Trace` implementations (like `Vec`) to ensure
+/// that when a container holding `Gc` pointers is traced, the container's
+/// storage buffer's page is marked dirty so GC will scan it.
+///
+/// # Safety
+///
+/// The pointer must be valid and readable. The pointer does not need to be
+/// aligned or point to the start of an object.
+#[inline]
+pub unsafe fn mark_page_dirty_for_ptr(ptr: *const u8) {
+    if ptr.is_null() {
+        return;
+    }
+
+    let page_addr = ptr as usize & page_mask();
+
+    HEAP.with(|local| {
+        let heap = unsafe { &mut *local.tcb.heap.get() };
+
+        if heap.small_pages.contains(&page_addr) {
+            let header = unsafe { ptr_to_page_header(ptr) };
+            unsafe { heap.add_to_dirty_pages(header) };
+        }
+    });
+}
+
 /// Get the minimum address managed by the thread-local heap.
 #[must_use]
 pub fn heap_start() -> usize {
