@@ -182,11 +182,8 @@ fn test_idle_phase_allows_normal_operation() {
 }
 
 #[test]
-fn test_incremental_gc_disabled_uses_normal_path() {
+fn test_incremental_gc_enabled_uses_incremental_path() {
     test_util::reset();
-
-    IncrementalMarkState::global().set_config(IncrementalConfig::default());
-    assert!(!IncrementalMarkState::global().config().enabled);
 
     let gc = Gc::new(Data { value: 42 });
     assert_eq!(gc.value, 42);

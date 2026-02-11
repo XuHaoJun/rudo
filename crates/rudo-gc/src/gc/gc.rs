@@ -1643,9 +1643,10 @@ fn promote_young_pages(heap: &mut LocalHeap) {
 ///
 /// This avoids introducing a `GcRequest` struct when the existing flag-based approach works.
 fn collect_major(heap: &mut LocalHeap) -> CollectResult {
-    let config = crate::gc::incremental::IncrementalMarkState::global().config();
+    let state = crate::gc::incremental::IncrementalMarkState::global();
+    let enabled = state.is_enabled();
 
-    if config.enabled {
+    if enabled {
         collect_major_incremental(heap)
     } else {
         collect_major_stw(heap)
@@ -1707,14 +1708,16 @@ fn collect_major_stw(heap: &mut LocalHeap) -> CollectResult {
 fn collect_major_incremental(heap: &mut LocalHeap) -> CollectResult {
     let mut timer = crate::metrics::PhaseTimer::new();
     let state = IncrementalMarkState::global();
-    let config = state.config();
+    {
+        let _config = state.config();
 
-    let heaps: [&LocalHeap; 1] = [&*heap];
-    timer.start();
-    execute_snapshot(&heaps);
-    timer.end_clear();
+        let heaps: [&LocalHeap; 1] = [&*heap];
+        timer.start();
+        execute_snapshot(&heaps);
+        timer.end_clear();
+    }
 
-    let per_worker_budget = config.increment_size;
+    let per_worker_budget = state.config().increment_size;
 
     timer.start();
     loop {

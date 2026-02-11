@@ -28,7 +28,7 @@ fn test_incremental_config_defaults() {
     test_util::reset();
 
     let config = IncrementalConfig::default();
-    assert!(!config.enabled);
+    assert!(config.enabled);
     assert_eq!(config.increment_size, 1000);
     assert_eq!(config.max_dirty_pages, 1000);
     assert_eq!(config.remembered_buffer_len, 32);
@@ -310,7 +310,7 @@ fn test_config_persists_across_state_changes() {
 
     {
         let config = IncrementalMarkState::global().config();
-        assert!(!config.enabled);
+        assert!(config.enabled);
     }
 
     IncrementalMarkState::global().set_config(IncrementalConfig {

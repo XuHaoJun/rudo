@@ -266,11 +266,11 @@ fn state_with_config(config: IncrementalConfig) {
 }
 
 #[test]
-fn test_incremental_gc_disabled_by_default() {
+fn test_incremental_gc_enabled_by_default() {
     test_util::reset();
 
     let config = IncrementalConfig::default();
-    assert!(!config.enabled);
+    assert!(config.enabled);
 }
 
 #[test]

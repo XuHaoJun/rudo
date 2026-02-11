@@ -112,7 +112,7 @@ pub struct IncrementalConfig {
 impl Default for IncrementalConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             increment_size: DEFAULT_INCREMENT_SIZE,
             max_dirty_pages: DEFAULT_MAX_DIRTY_PAGES,
             remembered_buffer_len: DEFAULT_REMEMBERED_BUFFER_LEN,
@@ -246,7 +246,7 @@ impl IncrementalMarkState {
             phase: AtomicUsize::new(MarkPhase::Idle as usize),
             worklist: UnsafeCell::new(SegQueue::new()),
             config: Mutex::new(IncrementalConfig::default()),
-            enabled: AtomicBool::new(false),
+            enabled: AtomicBool::new(true),
             stats: MarkStats::new(),
             fallback_requested: AtomicBool::new(false),
             root_count: AtomicUsize::new(0),
@@ -404,6 +404,10 @@ impl IncrementalMarkState {
         self.config.lock()
     }
 
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
     pub fn set_config(&self, config: IncrementalConfig) {
         *self.config.lock() = config;
         self.enabled.store(config.enabled, Ordering::Relaxed);
@@ -497,7 +501,7 @@ fn stop_all_mutators_for_snapshot() {
         let ack_count = state.rendezvous_ack_count();
         let thread_count = registry.threads.len();
 
-        if active == 1 && ack_count == thread_count {
+        if active == 1 && ack_count >= thread_count {
             break;
         }
     }

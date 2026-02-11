@@ -163,7 +163,7 @@ fn test_config_update() {
 
     let state = IncrementalMarkState::global();
     let config = state.config();
-    assert!(!config.enabled);
+    assert!(config.enabled);
     assert_eq!(config.increment_size, 1000);
 
     drop(config);
