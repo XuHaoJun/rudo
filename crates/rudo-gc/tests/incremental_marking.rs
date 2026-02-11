@@ -206,6 +206,11 @@ fn test_execute_snapshot_captures_roots() {
         root_count >= 1,
         "execute_snapshot should capture at least 1 root"
     );
+
+    assert!(
+        root_count >= 1,
+        "execute_snapshot should capture at least 1 root"
+    );
     assert_eq!(state.phase(), MarkPhase::Marking);
     assert!(
         !state.worklist_is_empty(),

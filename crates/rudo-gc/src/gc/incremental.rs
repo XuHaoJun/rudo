@@ -501,6 +501,12 @@ fn stop_all_mutators_for_snapshot() {
         let ack_count = state.rendezvous_ack_count();
         let thread_count = registry.threads.len();
 
+        // If no threads registered (e.g., after reset), we're the only mutator
+        // so we can proceed immediately
+        if thread_count == 0 {
+            break;
+        }
+
         if active == 1 && ack_count >= thread_count {
             break;
         }

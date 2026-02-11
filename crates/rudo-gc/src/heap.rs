@@ -2935,6 +2935,10 @@ fn clear_local_heap() {
         heap.old_allocated = 0;
         heap.min_addr = usize::MAX;
         heap.max_addr = 0;
+
+        // Clear dirty page tracking to prevent dangling pointers and stale state
+        heap.dirty_pages.lock().clear();
+        heap.dirty_pages_snapshot.clear();
     });
 }
 
