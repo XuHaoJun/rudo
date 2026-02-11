@@ -2,11 +2,12 @@
 
 #![allow(clippy::significant_drop_tightening, clippy::items_after_statements)]
 
+use rudo_gc::cell::{GcCapture, GcCell};
 use rudo_gc::gc::incremental::{
     is_incremental_marking_active, IncrementalConfig, IncrementalMarkState, MarkPhase,
 };
 use rudo_gc::test_util;
-use rudo_gc::{Gc, Trace};
+use rudo_gc::{Gc, GcBox, Trace};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -440,4 +441,68 @@ fn test_incremental_config_respected_by_write_barrier() {
     *cell2.borrow_mut() = new2;
 
     assert_eq!(cell2.borrow().value, 300);
+}
+
+#[derive(Trace)]
+struct Item {
+    id: u32,
+    data: String,
+}
+
+impl GcCapture for Item {
+    fn capture_gc_ptrs(&self) -> &[std::ptr::NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _ptrs: &mut Vec<std::ptr::NonNull<GcBox<()>>>) {}
+}
+
+#[test]
+#[allow(clippy::cast_possible_truncation)]
+fn test_gc_capture_gc_pointer_stability_in_loop() {
+    use std::collections::HashSet;
+
+    test_util::reset();
+
+    IncrementalMarkState::global().set_config(IncrementalConfig {
+        enabled: true,
+        ..Default::default()
+    });
+
+    let items_cell: GcCell<Vec<Option<Gc<Item>>>> = GcCell::new(Vec::new());
+
+    for i in 0..10 {
+        let item = Gc::new(Item {
+            id: i,
+            data: format!("item_{i}"),
+        });
+
+        let mut items = items_cell.borrow_mut();
+        items.push(Some(item.clone()));
+
+        rudo_gc::safepoint();
+    }
+
+    let items = items_cell.borrow();
+    let addrs: Vec<_> = items
+        .iter()
+        .filter_map(|o| o.as_ref())
+        .map(|gc| Gc::as_ptr(gc) as usize)
+        .collect();
+
+    let unique_addrs: HashSet<_> = addrs.iter().collect();
+    assert_eq!(
+        addrs.len(),
+        unique_addrs.len(),
+        "BUG: GcBox addresses reused! Got {} unique addresses for 10 items. Addrs: {:?}",
+        unique_addrs.len(),
+        addrs
+    );
+
+    for (idx, item) in items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, o)| o.as_ref().map(|gc| (i, gc)))
+    {
+        assert_eq!(item.id, idx as u32, "Item {idx} corrupted");
+    }
 }
