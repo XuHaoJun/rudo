@@ -309,11 +309,21 @@ unsafe impl<T: Trace + ?Sized> Trace for Arc<T> {
 }
 
 // SAFETY: Vec traces all elements
+/// Additionally marks the Vec's storage buffer page as dirty so GC will scan it.
 unsafe impl<T: Trace> Trace for Vec<T> {
     #[inline]
     fn trace(&self, visitor: &mut impl Visitor) {
+        // Trace all elements first
         for item in self {
             item.trace(visitor);
+        }
+
+        // Mark the Vec's storage buffer page as dirty
+        // This ensures GC will scan this page to find Gc pointers
+        if !self.is_empty() {
+            unsafe {
+                crate::heap::mark_page_dirty_for_ptr(self.as_ptr().cast::<u8>());
+            }
         }
     }
 }
@@ -380,11 +390,22 @@ unsafe impl<T: Trace + ?Sized> Trace for RefCell<T> {
 }
 
 // SAFETY: VecDeque traces all elements
+/// Additionally marks the `VecDeque`'s storage buffer page as dirty so GC will scan it.
 unsafe impl<T: Trace> Trace for VecDeque<T> {
     #[inline]
     fn trace(&self, visitor: &mut impl Visitor) {
         for item in self {
             item.trace(visitor);
+        }
+        // Mark the VecDeque's storage buffer page as dirty
+        // This ensures GC will scan this page to find Gc pointers
+        // VecDeque uses a ring buffer - get pointer to first element if any
+        if !self.is_empty() {
+            // SAFETY: VecDeque is non-empty, so there's at least one element
+            let ptr = std::ptr::from_ref(self.front().unwrap()).cast::<u8>();
+            unsafe {
+                crate::heap::mark_page_dirty_for_ptr(ptr);
+            }
         }
     }
 }

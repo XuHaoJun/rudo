@@ -23,8 +23,8 @@ pub mod tracing;
 // Re-exports from gc
 pub use gc::{
     clear_test_roots, collect, collect_full, default_collect_condition, is_collecting, mark_object,
-    mark_object_minor, notify_created_gc, notify_dropped_gc, register_test_root, safepoint,
-    set_collect_condition, CollectInfo,
+    mark_object_minor, notify_created_gc, notify_dropped_gc, register_test_root,
+    register_test_root_region, safepoint, set_collect_condition, CollectInfo,
 };
 
 #[cfg(any(test, feature = "test-util"))]

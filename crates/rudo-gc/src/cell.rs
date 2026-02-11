@@ -262,24 +262,27 @@ impl<T: ?Sized> GcCell<T> {
 
         unsafe {
             crate::heap::with_heap(|heap| {
-                let page_addr = (ptr as usize) & crate::heap::page_mask();
+                let ptr_addr = ptr as usize;
+                let page_addr = ptr_addr & crate::heap::page_mask();
                 let is_large = heap.large_object_map.contains_key(&page_addr);
 
                 if is_large {
-                    if let Some(&(head_addr, _, _)) = heap.large_object_map.get(&page_addr) {
+                    if let Some(&(head_addr, _obj_size, _h_size)) =
+                        heap.large_object_map.get(&page_addr)
+                    {
                         let header = head_addr as *mut crate::heap::PageHeader;
                         if (*header).magic == crate::heap::MAGIC_GC_PAGE && (*header).generation > 0
                         {
                             let block_size = (*header).block_size as usize;
                             let header_size = (*header).header_size as usize;
                             let header_page_addr = head_addr;
-                            let ptr_addr = ptr as usize;
 
                             if ptr_addr >= header_page_addr + header_size {
                                 let offset = ptr_addr - (header_page_addr + header_size);
                                 let index = offset / block_size;
+                                let obj_count = (*header).obj_count as usize;
 
-                                if index < (*header).obj_count as usize {
+                                if index < obj_count {
                                     (*header).set_dirty(index);
                                     heap.add_to_dirty_pages(NonNull::new_unchecked(header));
                                 }
@@ -294,13 +297,13 @@ impl<T: ?Sized> GcCell<T> {
                         let block_size = (*header.as_ptr()).block_size as usize;
                         let header_size = (*header.as_ptr()).header_size as usize;
                         let header_page_addr = header.as_ptr() as usize;
-                        let ptr_addr = ptr as usize;
+                        let obj_count = (*header.as_ptr()).obj_count as usize;
 
                         if ptr_addr >= header_page_addr + header_size {
                             let offset = ptr_addr - (header_page_addr + header_size);
                             let index = offset / block_size;
 
-                            if index < (*header.as_ptr()).obj_count as usize {
+                            if index < obj_count {
                                 (*header.as_ptr()).set_dirty(index);
                                 heap.add_to_dirty_pages(header);
                             }
