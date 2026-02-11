@@ -644,6 +644,52 @@ impl<T: GcCapture + 'static> GcCapture for RwLock<T> {
     }
 }
 
+/// Macro to implement `GcCapture` for types that don't contain `Gc<T>` pointers.
+///
+/// This is useful for simple types (e.g., primitives, String, non-Gc structs)
+/// that need to be stored in `GcCell` but don't contain any GC pointers.
+///
+/// # Example
+///
+/// ```rust
+/// use rudo_gc::{cell::GcCell, impl_gc_capture};
+///
+/// #[derive(Clone)]
+/// struct MyItem {
+///     id: i64,
+///     name: String,
+/// }
+///
+/// unsafe impl rudo_gc::Trace for MyItem {
+///     fn trace(&self, _visitor: &mut impl rudo_gc::Visitor) {}
+/// }
+///
+/// impl_gc_capture!(MyItem);
+/// ```
+///
+/// # Warning
+///
+/// Only use this macro for types that truly contain no `Gc<T>` fields.
+/// Using it on types with GC pointers will cause memory corruption.
+#[macro_export]
+macro_rules! impl_gc_capture {
+    ($t:ty) => {
+        unsafe impl ::rudo_gc::cell::GcCapture for $t {
+            #[inline]
+            fn capture_gc_ptrs(&self) -> &[::std::ptr::NonNull<::rudo_gc::GcBox<()>>] {
+                &[]
+            }
+
+            #[inline]
+            fn capture_gc_ptrs_into(
+                &self,
+                _ptrs: &mut Vec<::std::ptr::NonNull<::rudo_gc::GcBox<()>>>,
+            ) {
+            }
+        }
+    };
+}
+
 // SAFETY: GcCell is Trace if T is Trace.
 // It just traces the inner value.
 //
