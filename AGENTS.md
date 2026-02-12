@@ -158,7 +158,7 @@ This project uses custom agentic workflows defined in `.agent/workflows/` (previ
 
 ## Recent Features & Changes
 
-### 008 - Incremental Marking (In Progress)
+### 008 - Incremental Marking 
 - **Goal**: Reduce major GC pause times by splitting marking into cooperative increments
 - **Algorithm**: Hybrid SATB (Snapshot-At-The-Beginning) + Dijkstra insertion barrier
 - **Write Barriers**: Fast-path optimized barriers in `GcCell::borrow_mut()` with per-thread remembered buffer
@@ -166,7 +166,7 @@ This project uses custom agentic workflows defined in `.agent/workflows/` (previ
 - **Key Types**: `IncrementalMarkState`, `MarkPhase` enum, `IncrementalConfig`, `MarkStats`
 - **Public API**: `set_incremental_config()`, `get_incremental_config()`, `is_incremental_marking_active()`
 
-### 005 - Lazy Sweep (In Progress)
+### 005 - Lazy Sweep 
 - Implements lazy sweeping to reduce pause times.
 - Two-phase sweep: fast initial sweep for availability, background/lazy sweep for reclamation.
 
@@ -227,6 +227,3 @@ All locks must be acquired in a fixed global order:
 - This separates metadata from object data, improving cache locality during marking.
 
 ## Recent Changes
-- 012-cross-thread-gchandle: Added Rust 1.75+ (stable) | **Target Crate**: `rudo-gc` + None (uses existing `ThreadId`, `ThreadControlBlock`, `Arc`, `Mutex`, `HashMap`)
-- 011-concurrent-gc-primitives: Added Rust 1.75+ (stable) + `parking_lot` crate, existing `Trace` trait, existing write barrier infrastructure, existing STW pause mechanism
-- 009-gc-tracing: Added Rust 1.75+ (stable) + `tracing` crate 0.1 (optional), `tracing-subscriber` (dev dependency for testing)
