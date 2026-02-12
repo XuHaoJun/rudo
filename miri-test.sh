@@ -7,4 +7,4 @@
 #
 # Note: We skip the sync tests because they intentionally test concurrent access
 # which Miri's ThreadSanitizer mode flags as data races.
-MIRIFLAGS="-Zmiri-ignore-leaks -Zmiri-permissive-provenance" cargo +nightly miri test --features test-util --lib
+MIRIFLAGS="-Zmiri-ignore-leaks -Zmiri-permissive-provenance" cargo miri test --features test-util --lib

@@ -31,6 +31,7 @@ jobs:
       - name: Install Nightly Rust
         uses: dtolnay/rust-toolchain@nightly
         with:
+          toolchain: nightly-2026-02-11
           components: miri, rust-src, rustfmt, clippy
       
       - name: Rust Cache
@@ -48,4 +49,4 @@ jobs:
         run: cargo +stable test --workspace --lib --bins --tests --all-features -- --include-ignored --test-threads=1
       
       - name: Run Miri Tests
-        run: bash ./miri-test.sh
+        run: rm -rf ~/.cache/miri target/miri && bash ./miri-test.sh
