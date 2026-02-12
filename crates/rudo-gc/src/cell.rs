@@ -674,7 +674,7 @@ impl<T: GcCapture + 'static> GcCapture for RwLock<T> {
 #[macro_export]
 macro_rules! impl_gc_capture {
     ($t:ty) => {
-        unsafe impl ::rudo_gc::cell::GcCapture for $t {
+        impl ::rudo_gc::cell::GcCapture for $t {
             #[inline]
             fn capture_gc_ptrs(&self) -> &[::std::ptr::NonNull<::rudo_gc::GcBox<()>>] {
                 &[]
