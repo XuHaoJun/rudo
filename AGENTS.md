@@ -86,6 +86,45 @@ use crate::ptr::GcBox;
 - Use `#[derive(Trace)]` with `test-util` feature for test utilities
 - Register test roots: `register_test_root(ptr)` for Miri tests
 
+#### External Reference Tracking Tests
+External reference tracking verifies GC correctness by storing `Gc<Rc<T>>` where `Rc<T>` provides external reference counting.
+
+**Feature**: `"test-util"`
+
+**Usage**:
+```rust
+use rudo_gc::{static_collect, Gc, Trace, collect_full};
+use std::rc::Rc;
+use std::cell::Cell;
+
+#[derive(Clone)]
+struct RefTracker {
+    marker: Rc<Cell<bool>>,
+}
+static_collect!(RefTracker);
+
+#[test]
+fn test_external_ref_tracking() {
+    let (gc, external_rc) = Gc::new(RefTracker {
+        marker: Rc::new(Cell::new(false)),
+    });
+
+    // Verify external Rc count
+    let initial_count = Rc::strong_count(&gc.marker);
+    assert_eq!(initial_count, 1);
+
+    // Drop the Gc and collect
+    drop(gc);
+    collect_full();
+
+    // Verify external Rc count is now 0
+    let after_collection = Rc::strong_count(&gc.marker);
+    assert_eq!(after_collection, 0);
+}
+```
+
+**Test file**: `tests/external_reference_tracking.rs`
+
 ## Workspace Structure
 - Three crates: `rudo-gc` (main), `rudo-gc-derive` (proc macro), `sys_alloc` (system allocator)
 - Default features: `derive` for `#[derive(Trace)]` macro

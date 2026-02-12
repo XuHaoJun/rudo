@@ -536,3 +536,40 @@ unsafe impl Trace for std::num::NonZeroI128 {
 unsafe impl Trace for std::num::NonZeroIsize {
     fn trace(&self, _visitor: &mut impl Visitor) {}
 }
+
+#[cfg(feature = "test-util")]
+pub mod test_util {
+    /// Creates a static `Trace` implementation for types that cannot contain `Gc` pointers.
+    ///
+    /// This macro is used for external reference tracking tests. It provides a no-op `Trace`
+    /// implementation for types that are `'static` and guaranteed not to contain any `Gc` pointers.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use rudo_gc::static_collect;
+    ///
+    /// struct MyType;
+    /// static_collect!(MyType);
+    /// ```
+    #[macro_export]
+    macro_rules! static_collect {
+        (<$($params:tt),+ $(,)*> $type:ty $(where $($bounds:tt)+)?) => {
+            unsafe impl<'gc, $($params),*> $crate::Trace for $type
+            where
+                $type: 'static,
+                $($($bounds)+)*
+            {
+                fn trace(&self, _visitor: &mut impl $crate::Visitor) {}
+            }
+        };
+        ($type:ty) => {
+            unsafe impl<'gc> $crate::Trace for $type
+            where
+                $type: 'static,
+            {
+                fn trace(&self, _visitor: &mut impl $crate::Visitor) {}
+            }
+        }
+    }
+}
