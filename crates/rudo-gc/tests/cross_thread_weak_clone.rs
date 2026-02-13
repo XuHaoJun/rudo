@@ -216,3 +216,37 @@ fn test_weak_clone_across_threads() {
 
     gc::collect();
 }
+
+/// Test that `try_upgrade` works on valid weak handle.
+#[test]
+fn test_weak_try_upgrade_basic() {
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let weak = gc.weak_cross_thread_handle();
+
+    let upgraded = weak.try_upgrade();
+    assert!(upgraded.is_some());
+    assert_eq!(upgraded.unwrap().value, 42);
+}
+
+/// Test that `may_be_valid` returns true for valid weak handle.
+#[test]
+fn test_weak_may_be_valid_basic() {
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let weak = gc.weak_cross_thread_handle();
+
+    assert!(weak.may_be_valid());
+}
+
+/// Test that `try_upgrade` panics when called from wrong thread.
+#[test]
+fn test_weak_try_upgrade_wrong_thread() {
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let weak = gc.weak_cross_thread_handle();
+
+    let result = std::thread::spawn(move || weak.try_upgrade()).join();
+
+    assert!(
+        result.is_err(),
+        "try_upgrade should panic when called from wrong thread"
+    );
+}

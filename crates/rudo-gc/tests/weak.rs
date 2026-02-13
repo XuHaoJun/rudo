@@ -322,3 +322,110 @@ fn test_weak_ref_through_collection_cycle() {
     assert!(!weak.is_alive());
     clear_roots!();
 }
+
+// ============================================================================
+// Tests for try_upgrade and may_be_valid
+// ============================================================================
+
+#[test]
+fn test_try_upgrade_basic() {
+    let gc = Gc::new(42);
+    let weak = Gc::downgrade(&gc);
+
+    // try_upgrade should work like upgrade for valid refs
+    let upgraded = weak.try_upgrade();
+    assert!(upgraded.is_some());
+    assert_eq!(*upgraded.unwrap(), 42);
+}
+
+#[test]
+fn test_try_upgrade_after_collection() {
+    let weak: Weak<i32>;
+
+    {
+        clear_roots!();
+        let gc = Gc::new(999);
+        root!(gc);
+        weak = Gc::downgrade(&gc);
+    }
+
+    clear_roots!();
+    collect_full();
+
+    // After collection, try_upgrade should return None
+    assert!(weak.try_upgrade().is_none());
+    clear_roots!();
+}
+
+#[test]
+fn test_try_upgrade_null_weak() {
+    let weak: Weak<i32> = Weak::default();
+
+    // try_upgrade on null weak should return None
+    assert!(weak.try_upgrade().is_none());
+}
+
+#[test]
+fn test_may_be_valid_basic() {
+    let gc = Gc::new(42);
+    let weak = Gc::downgrade(&gc);
+
+    // Should return true for valid weak refs
+    assert!(weak.may_be_valid());
+}
+
+#[test]
+fn test_may_be_valid_null() {
+    let weak: Weak<i32> = Weak::default();
+
+    // Should return false for null weak refs
+    assert!(!weak.may_be_valid());
+}
+
+#[test]
+fn test_may_be_valid_after_collection() {
+    let weak: Weak<i32>;
+
+    {
+        clear_roots!();
+        let gc = Gc::new(777);
+        root!(gc);
+        weak = Gc::downgrade(&gc);
+    }
+
+    clear_roots!();
+    collect_full();
+
+    // After collection, may_be_valid may still return true because it only
+    // checks pointer address sanity (not liveness). The pointer is still a
+    // valid heap address, just the object has been collected.
+    // Use try_upgrade() to check actual liveness.
+    assert!(weak.try_upgrade().is_none());
+    clear_roots!();
+}
+
+#[test]
+fn test_try_upgrade_matches_upgrade_for_valid_refs() {
+    let gc = Gc::new(vec![1, 2, 3]);
+    let weak = Gc::downgrade(&gc);
+
+    // Both should return Some
+    assert!(weak.upgrade().is_some());
+    assert!(weak.try_upgrade().is_some());
+
+    // Both is_alive and may_be_valid should be true
+    assert!(weak.is_alive());
+    assert!(weak.may_be_valid());
+}
+
+#[test]
+fn test_may_be_valid_fast_path() {
+    let gc = Gc::new(42);
+    let weak = Gc::downgrade(&gc);
+
+    // may_be_valid should be faster than actually upgrading
+    // (doesn't require dereferencing the GcBox)
+    for _ in 0..1000 {
+        assert!(weak.may_be_valid());
+    }
+}

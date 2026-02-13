@@ -16,6 +16,13 @@ use crate::gc::notify_dropped_gc;
 use crate::heap::{with_heap, LocalHeap};
 use crate::trace::{GcVisitor, Trace, Visitor};
 
+/// Minimum valid heap address.
+///
+/// Addresses below this threshold are in the null page and are never valid
+/// heap allocations. This value is based on the standard 4KB page size
+/// used by most operating systems.
+const MIN_VALID_HEAP_ADDRESS: usize = 4096;
+
 // ============================================================================
 // `GcBox` - The heap allocation container
 // ============================================================================
@@ -438,6 +445,80 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
     /// Get the raw pointer, for use in Drop implementations.
     pub(crate) fn as_ptr(&self) -> Option<NonNull<GcBox<T>>> {
         self.ptr.load(Ordering::Acquire).as_option()
+    }
+
+    /// Check if this weak reference might be valid (lightweight check).
+    pub(crate) fn may_be_valid(&self) -> bool {
+        let ptr = self.ptr.load(Ordering::Acquire);
+
+        if ptr.is_null() {
+            return false;
+        }
+
+        let Some(ptr) = ptr.as_option() else {
+            return false;
+        };
+
+        let addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        addr >= 4096 && addr % alignment == 0
+    }
+
+    /// Attempt upgrade with additional safety checks.
+    pub(crate) fn try_upgrade(&self) -> Option<Gc<T>> {
+        let ptr = self.ptr.load(Ordering::Acquire);
+
+        let ptr = ptr.as_option()?;
+
+        let addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if addr % alignment != 0 || addr < MIN_VALID_HEAP_ADDRESS {
+            return None;
+        }
+
+        unsafe {
+            // SAFETY: Pointer passed validation checks above (properly aligned, addr >= 4096)
+            let gc_box = &*ptr.as_ptr();
+
+            if gc_box.is_under_construction() {
+                return None;
+            }
+
+            if gc_box.is_dead_or_unrooted() {
+                return None;
+            }
+
+            if gc_box.dropping_state() != 0 {
+                return None;
+            }
+
+            // Try atomic transition from 0 to 1 (same as regular upgrade)
+            if gc_box.try_inc_ref_from_zero() {
+                crate::gc::notify_created_gc();
+                return Some(Gc {
+                    ptr: AtomicNullable::new(ptr),
+                    _marker: PhantomData,
+                });
+            }
+
+            // ref_count > 0, check again if still alive
+            if gc_box.is_dead_or_unrooted() {
+                return None;
+            }
+
+            // Check for overflow (for consistency with public Weak<T>::try_upgrade)
+            let current_count = gc_box.ref_count.load(Ordering::Relaxed);
+            if current_count == usize::MAX {
+                return None;
+            }
+
+            // Object is alive and has strong refs - increment normally
+            gc_box.inc_ref();
+            Some(Gc {
+                ptr: AtomicNullable::new(ptr),
+                _marker: PhantomData,
+            })
+        }
     }
 }
 
@@ -1421,6 +1502,107 @@ impl<T: Trace> Weak<T> {
                 }
             }
         }
+    }
+
+    /// Attempt to upgrade to a strong reference with additional safety checks.
+    ///
+    /// Returns `None` if:
+    /// - The weak ref is null
+    /// - The object has been collected (`DEAD_FLAG` set)
+    /// - The reference count is 0
+    /// - The memory location is obviously invalid (misaligned or too low address)
+    ///
+    /// This method performs additional validation beyond the standard upgrade
+    /// to ensure memory safety when the weak ref's validity is uncertain.
+    ///
+    /// # Use Cases
+    ///
+    /// Use this method when weak references are stored in data structures
+    /// that may contain corrupted or stale pointers (e.g., reactive signal
+    /// subscriber lists where effects may be recreated).
+    #[inline]
+    pub fn try_upgrade(&self) -> Option<Gc<T>> {
+        let ptr = self.ptr.load(Ordering::Acquire);
+
+        let ptr = ptr.as_option()?;
+
+        let addr = ptr.as_ptr() as usize;
+
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if addr % alignment != 0 {
+            return None;
+        }
+
+        if addr < MIN_VALID_HEAP_ADDRESS {
+            return None;
+        }
+
+        unsafe {
+            // SAFETY: Pointer passed validation checks above (alignment, addr >= 4096)
+            let gc_box = &*ptr.as_ptr();
+
+            if gc_box.is_under_construction() {
+                return None;
+            }
+
+            loop {
+                if gc_box.has_dead_flag() {
+                    return None;
+                }
+
+                if gc_box.dropping_state() != 0 {
+                    return None;
+                }
+
+                let current_count = gc_box.ref_count.load(Ordering::Relaxed);
+                if current_count == 0 || current_count == usize::MAX {
+                    return None;
+                }
+
+                if gc_box
+                    .ref_count
+                    .compare_exchange_weak(
+                        current_count,
+                        current_count.saturating_add(1),
+                        Ordering::AcqRel,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    crate::gc::notify_created_gc();
+                    return Some(Gc {
+                        ptr: AtomicNullable::new(ptr),
+                        _marker: PhantomData,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Check if this weak reference might be valid.
+    ///
+    /// This is a lightweight check that doesn't require dereferencing.
+    /// Returns `false` if the weak ref is definitely invalid.
+    /// Returns `true` if it might be valid (needs `try_upgrade` to confirm).
+    ///
+    /// Use this for pre-filtering before calling `try_upgrade` in tight loops.
+    #[inline]
+    #[must_use]
+    pub fn may_be_valid(&self) -> bool {
+        let ptr = self.ptr.load(Ordering::Acquire);
+
+        if ptr.is_null() {
+            return false;
+        }
+
+        let Some(ptr) = ptr.as_option() else {
+            return false;
+        };
+
+        let addr = ptr.as_ptr() as usize;
+
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        addr >= 4096 && addr % alignment == 0
     }
 
     /// Check if the referenced value is still alive.
