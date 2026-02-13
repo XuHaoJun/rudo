@@ -326,6 +326,38 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
         }
         self.weak.upgrade()
     }
+
+    /// Check if this weak reference might be valid.
+    ///
+    /// This is a lightweight check that doesn't require dereferencing.
+    /// Returns `false` if the weak ref is definitely invalid.
+    /// Returns `true` if it might be valid (needs `try_upgrade` to confirm).
+    #[inline]
+    #[must_use]
+    pub fn may_be_valid(&self) -> bool {
+        self.weak.may_be_valid()
+    }
+
+    /// Attempt to upgrade with additional safety checks.
+    ///
+    /// Returns `None` if:
+    /// - The weak ref is null
+    /// - The object has been collected
+    /// - The memory location is obviously invalid (misaligned or too low address)
+    ///
+    /// # Panics
+    ///
+    /// Panics if called from a thread other than the origin thread,
+    /// because `T` may be `!Send`.
+    #[track_caller]
+    pub fn try_upgrade(&self) -> Option<Gc<T>> {
+        assert_eq!(
+            std::thread::current().id(),
+            self.origin_thread,
+            "WeakCrossThreadHandle::try_upgrade() must be called on the origin thread"
+        );
+        self.weak.try_upgrade()
+    }
 }
 
 impl<T: Trace + 'static> Clone for WeakCrossThreadHandle<T> {
