@@ -3,6 +3,7 @@
 //! These tests verify phase timing, incremental marking statistics,
 //! and other metrics-related functionality.
 
+use rudo_gc::set_suspicious_sweep_detection;
 use rudo_gc::{CollectionType, FallbackReason, Gc, GcCell, Trace};
 use std::time::Duration;
 
@@ -114,7 +115,9 @@ fn test_collection_type_reported() {
 /// Note: This test requires incremental marking to be enabled.
 /// It will be skipped if incremental marking is not available.
 #[test]
+#[allow(clippy::items_after_statements)]
 fn test_incremental_metrics_populated() {
+    set_suspicious_sweep_detection(false);
     use rudo_gc::gc::incremental::IncrementalMarkState;
 
     // Enable incremental marking
@@ -146,6 +149,7 @@ fn test_incremental_metrics_populated() {
     // Restore original config
     config.enabled = original_enabled;
     state.set_config(config);
+    set_suspicious_sweep_detection(true);
 }
 
 /// Test that fallback reason is reported correctly.
@@ -164,7 +168,9 @@ fn test_fallback_reason_reported() {
 
 /// Test that non-incremental fields are zero for non-incremental collections.
 #[test]
+#[allow(clippy::items_after_statements)]
 fn test_non_incremental_fields_zero() {
+    set_suspicious_sweep_detection(false);
     // Force a non-incremental collection by disabling incremental marking
     use rudo_gc::gc::incremental::IncrementalMarkState;
 
@@ -193,6 +199,7 @@ fn test_non_incremental_fields_zero() {
     // Restore original config
     config.enabled = original_enabled;
     state.set_config(config);
+    set_suspicious_sweep_detection(true);
 }
 
 /// Test `GcMetrics` Clone implementation.

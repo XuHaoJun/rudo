@@ -23,8 +23,8 @@ pub mod young_object_history;
 
 #[cfg(feature = "debug-suspicious-sweep")]
 pub use young_object_history::{
-    clear_history, is_detection_enabled, is_suspicious_sweep, record_young_object,
-    set_detection_enabled,
+    clear_history, current_gc_cycle_id, get_gc_cycle_id, is_detection_enabled, is_suspicious_sweep,
+    record_young_object, set_detection_enabled,
 };
 
 #[cfg(feature = "tracing")]

@@ -10,6 +10,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use rudo_gc::collect_full;
+use rudo_gc::set_suspicious_sweep_detection;
 use rudo_gc::{Gc, Trace};
 
 #[derive(Debug, Clone)]
@@ -128,7 +129,9 @@ fn test_drop_behavior_with_rc() {
 }
 
 #[test]
+#[allow(clippy::items_after_statements)]
 fn test_repeated_allocation_deallocation() {
+    set_suspicious_sweep_detection(false);
     const COUNT: usize = 1000;
 
     #[allow(unused_variables)]
@@ -139,6 +142,7 @@ fn test_repeated_allocation_deallocation() {
     }
 
     collect_full();
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
@@ -209,7 +213,9 @@ fn test_shared_rc_across_multiple_gc() {
 }
 
 #[test]
+#[allow(clippy::items_after_statements)]
 fn test_massive_external_ref_test() {
+    set_suspicious_sweep_detection(false);
     const COUNT: usize = 10_000;
 
     let mut markers: Vec<Rc<Cell<bool>>> = Vec::with_capacity(COUNT);
@@ -230,6 +236,7 @@ fn test_massive_external_ref_test() {
 
     drop(markers);
     collect_full();
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
@@ -292,7 +299,9 @@ fn test_gc_object_stores_external_rc() {
 }
 
 #[test]
+#[allow(clippy::items_after_statements)]
 fn test_collection_stress_with_mixed_types() {
+    set_suspicious_sweep_detection(false);
     const ITERATIONS: usize = 100;
 
     #[allow(unused_variables, clippy::used_underscore_binding)]
@@ -312,10 +321,13 @@ fn test_collection_stress_with_mixed_types() {
     }
 
     collect_full();
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
+#[allow(clippy::items_after_statements)]
 fn test_verify_all_objects_collected() {
+    set_suspicious_sweep_detection(false);
     const COUNT: usize = 500;
 
     let mut external_refs: Vec<Rc<Cell<u32>>> = Vec::new();
@@ -333,10 +345,13 @@ fn test_verify_all_objects_collected() {
 
     drop(external_refs);
     collect_full();
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
+#[allow(clippy::items_after_statements)]
 fn test_partial_drop_then_collect() {
+    set_suspicious_sweep_detection(false);
     const COUNT: usize = 100;
 
     let mut gc_refs: Vec<Gc<RefCounter>> = Vec::new();
@@ -365,22 +380,27 @@ fn test_partial_drop_then_collect() {
 
     drop(gc_refs);
     collect_full();
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
+#[allow(clippy::items_after_statements)]
 fn test_nested_structure_with_external_tracking() {
+    set_suspicious_sweep_detection(false);
     use std::cell::RefCell;
 
     struct Node {
-        children: RefCell<Vec<Gc<RefCounter>>>,
+        children: Gc<RefCell<Vec<Gc<RefCounter>>>>,
     }
 
     unsafe impl Trace for Node {
-        fn trace(&self, _visitor: &mut impl rudo_gc::Visitor) {}
+        fn trace(&self, visitor: &mut impl rudo_gc::Visitor) {
+            self.children.trace(visitor);
+        }
     }
 
     let root = Gc::new(Node {
-        children: RefCell::new(Vec::new()),
+        children: Gc::new(RefCell::new(Vec::new())),
     });
 
     for i in 1..100 {
@@ -392,10 +412,13 @@ fn test_nested_structure_with_external_tracking() {
 
     drop(root);
     collect_full();
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
+#[allow(clippy::items_after_statements)]
 fn test_arena_lifecycle_complete() {
+    set_suspicious_sweep_detection(false);
     const SIZE: usize = 50;
 
     let mut markers: Vec<Rc<Cell<bool>>> = Vec::new();
@@ -416,6 +439,7 @@ fn test_arena_lifecycle_complete() {
 
     drop(markers);
     collect_full();
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]

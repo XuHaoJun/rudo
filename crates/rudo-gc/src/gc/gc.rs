@@ -293,6 +293,9 @@ fn log_fallback_reason(reason: FallbackReason) {
 /// Decides between Minor and Major collection based on heuristics.
 /// Implements cooperative rendezvous for multi-threaded safety.
 pub fn collect() {
+    #[cfg(feature = "debug-suspicious-sweep")]
+    let _gc_cycle_id = crate::gc::young_object_history::get_gc_cycle_id();
+
     // Reentrancy guard
     if IN_COLLECT.with(Cell::get) {
         return;
@@ -578,6 +581,9 @@ fn perform_multi_threaded_collect() {
 /// This will collect all unreachable objects in both Young and Old generations.
 /// Implements cooperative rendezvous for multi-threaded safety.
 pub fn collect_full() {
+    #[cfg(feature = "debug-suspicious-sweep")]
+    let _gc_cycle_id = crate::gc::young_object_history::get_gc_cycle_id();
+
     if IN_COLLECT.with(Cell::get) {
         return;
     }

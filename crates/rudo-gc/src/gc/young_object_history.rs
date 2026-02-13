@@ -4,18 +4,16 @@ use std::sync::LazyLock;
 const DEFAULT_HISTORY_SIZE: usize = 1024;
 const SUSPICIOUS_THRESHOLD: u64 = 2;
 
-static GC_COUNTER: AtomicU64 = AtomicU64::new(1);
+static GC_CYCLE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[inline]
-fn get_current_gc_id() -> u64 {
-    #[cfg(feature = "tracing")]
-    {
-        crate::tracing::internal::next_gc_id().0
-    }
-    #[cfg(not(feature = "tracing"))]
-    {
-        GC_COUNTER.fetch_add(1, Ordering::Relaxed)
-    }
+pub fn get_gc_cycle_id() -> u64 {
+    GC_CYCLE_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+#[inline]
+pub fn current_gc_cycle_id() -> u64 {
+    GC_CYCLE_COUNTER.load(Ordering::Relaxed)
 }
 
 /// Tracks young object allocations for suspicious sweep detection.
@@ -125,11 +123,6 @@ impl YoungObjectHistory {
             }
         }
     }
-
-    pub fn record_count(&self) -> usize {
-        let idx = self.write_idx.load(Ordering::Relaxed);
-        idx.min(self.max_size)
-    }
 }
 
 impl Default for YoungObjectHistory {
@@ -144,7 +137,7 @@ static HISTORY: LazyLock<YoungObjectHistory> = LazyLock::new(YoungObjectHistory:
 pub fn record_young_object(ptr: *const u8) {
     #[cfg(feature = "debug-suspicious-sweep")]
     {
-        let gc_id = get_current_gc_id();
+        let gc_id = current_gc_cycle_id();
         HISTORY.record(ptr, gc_id);
     }
 }
@@ -153,7 +146,7 @@ pub fn record_young_object(ptr: *const u8) {
 pub fn is_suspicious_sweep(ptr: *const u8) -> bool {
     #[cfg(feature = "debug-suspicious-sweep")]
     {
-        let gc_id = get_current_gc_id();
+        let gc_id = current_gc_cycle_id();
         HISTORY.is_suspicious(ptr, gc_id)
     }
     #[cfg(not(feature = "debug-suspicious-sweep"))]
@@ -189,5 +182,63 @@ pub fn clear_history() {
     #[cfg(feature = "debug-suspicious-sweep")]
     {
         HISTORY.clear();
+    }
+}
+
+#[cfg(all(test, feature = "debug-suspicious-sweep"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_suspicious_young_object() {
+        let history = YoungObjectHistory::with_capacity(16);
+        history.set_enabled(true);
+
+        let ptr = 0x1000usize as *const u8;
+
+        history.record(ptr, 1);
+
+        assert!(history.is_suspicious(ptr, 2));
+        assert!(history.is_suspicious(ptr, 3));
+        assert!(!history.is_suspicious(ptr, 4));
+    }
+
+    #[test]
+    fn test_is_suspicious_not_recorded() {
+        let history = YoungObjectHistory::with_capacity(16);
+        history.set_enabled(true);
+
+        let ptr = 0x1000usize as *const u8;
+
+        assert!(!history.is_suspicious(ptr, 5));
+    }
+
+    #[test]
+    fn test_is_suspicious_disabled() {
+        let history = YoungObjectHistory::with_capacity(16);
+        history.set_enabled(false);
+
+        let ptr = 0x1000usize as *const u8;
+        history.record(ptr, 1);
+
+        assert!(!history.is_suspicious(ptr, 2));
+    }
+
+    #[test]
+    fn test_is_suspicious_null_ptr() {
+        let history = YoungObjectHistory::with_capacity(16);
+        history.set_enabled(true);
+
+        assert!(!history.is_suspicious(std::ptr::null(), 5));
+    }
+
+    #[test]
+    fn test_is_suspicious_initial_gc_id_zero() {
+        let history = YoungObjectHistory::new();
+        history.set_enabled(true);
+
+        let ptr = 0x1000usize as *const u8;
+
+        assert!(!history.is_suspicious(ptr, 0));
     }
 }
