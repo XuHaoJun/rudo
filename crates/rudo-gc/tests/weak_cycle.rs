@@ -1,3 +1,4 @@
+#![cfg(feature = "test-util")]
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::unnecessary_cast)]
 #![allow(clippy::cast_possible_truncation)]
@@ -195,8 +196,8 @@ fn test_weak_vec_preserves_access() {
     }
 
     // Register gc_refs as root to ensure GC sees it
-    for gc in &gc_refs {
-        root!(gc);
+    for _gc in &gc_refs {
+        root!(_gc);
     }
 
     // Verify all weak refs work
