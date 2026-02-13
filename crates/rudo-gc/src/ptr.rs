@@ -1769,6 +1769,199 @@ impl<T: Trace> Default for Weak<T> {
 }
 
 // ============================================================================
+// `Ephemeron<K, V>` - Key-value pair where value is only reachable if key is
+// ============================================================================
+
+/// An ephemeron is a key-value pair where the value is only reachable if the key is reachable.
+///
+/// Unlike `Weak<T>` which only holds a weak reference to a single value, an `Ephemeron<K, V>`:
+/// - Holds a weak reference to the key
+/// - Holds a strong reference to the value
+/// - The value can only be accessed (via `upgrade`) if the key is still alive from roots
+/// - When the key becomes unreachable from roots, the value becomes unreachable too
+///
+/// This is useful for implementing weak caches, memoization tables, and other
+/// data structures where the value should be collected when the key is no longer
+/// reachable from roots.
+///
+/// # Example
+///
+/// ```ignore
+/// use rudo_gc::{Gc, Ephemeron, collect_full};
+///
+/// let key = Gc::new("key");
+/// let value = Gc::new(42);
+/// let ephemeron = Ephemeron::new(&key, value);
+///
+/// // Value is accessible because key is alive
+/// assert!(ephemeron.upgrade().is_some());
+///
+/// // Drop the key root
+/// drop(key);
+/// collect_full();
+///
+/// // Value is no longer accessible because key is dead
+/// assert!(ephemeron.upgrade().is_none());
+/// ```
+///
+/// # Current Implementation Status
+///
+/// **Partial Implementation**: This type provides the correct API for ephemeron semantics,
+/// but full GC-level semantics are not yet implemented.
+///
+/// ✅ What works:
+/// - `upgrade()` correctly returns `None` when the key is no longer reachable
+/// - `is_key_alive()` correctly detects when key has been collected
+/// - The value is properly kept alive while the key is alive
+///
+/// ⚠️ Current limitation:
+/// - The value is NOT automatically collected when the key becomes unreachable
+/// - This is because the current `Trace` implementation unconditionally traces the value
+/// - Full implementation would require GC-level ephemeron tracking (future work)
+///
+/// This limitation means memory usage may be higher than expected for some use cases,
+/// but the API is sound and correctly prevents accessing values when keys are dead.
+///
+/// # Future Work
+///
+/// Full ephemeron semantics would require:
+/// 1. Track ephemerons in a global list during marking
+/// 2. In mark phase: if key is marked, trace value; if not, skip (broken ephemeron)
+/// 3. In sweep phase: clear broken ephemerons' value references
+pub struct Ephemeron<K: Trace + 'static, V: Trace + 'static> {
+    /// Weak reference to key - does NOT keep key alive
+    key: Weak<K>,
+    /// Strong reference to value - keeps value alive IF key is alive
+    value: Gc<V>,
+}
+
+impl<K: Trace + 'static, V: Trace + 'static> Ephemeron<K, V> {
+    /// Creates a new ephemeron from a key and value.
+    ///
+    /// The key is stored as a weak reference (does not keep key alive).
+    /// The value is stored as a strong reference (keeps value alive).
+    /// The value will only be accessible via `upgrade()` while the key is still reachable.
+    ///
+    /// # Important
+    ///
+    /// The `key` parameter is taken by reference to prevent it from being dropped
+    /// when passed to this function. The caller must ensure the key remains alive
+    /// for the duration of this call (which is guaranteed by passing a reference).
+    pub fn new(key: &Gc<K>, value: Gc<V>) -> Self {
+        let weak_key = Gc::downgrade(key);
+        Self {
+            key: weak_key,
+            value,
+        }
+    }
+
+    /// Returns a reference to the key (if still alive).
+    ///
+    /// Returns `None` if the key has been collected.
+    pub const fn key(&self) -> Option<&Gc<K>> {
+        // This is tricky - Weak doesn't give us &Gc<K>, it gives us Option<Gc<K>>
+        // For now, we don't expose direct key access
+        None
+    }
+
+    /// Returns a reference to the value without checking if the key is alive.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the key is alive before accessing the value.
+    /// Use `upgrade()` for safe access to the value.
+    pub const unsafe fn value_unsafe(&self) -> &Gc<V> {
+        &self.value
+    }
+
+    /// Attempts to upgrade to a strong reference to the value.
+    ///
+    /// Returns `Some(Gc<V>)` if the key is still alive and reachable.
+    /// Returns `None` if the key has been collected (or was never rooted).
+    ///
+    /// This is the primary way to access the value - it ensures type safety
+    /// by only returning the value when the key is still alive.
+    pub fn upgrade(&self) -> Option<Gc<V>> {
+        if self.is_key_alive() {
+            // Clone the Gc to return - this increments the ref count
+            Gc::try_clone(&self.value)
+        } else {
+            None
+        }
+    }
+
+    /// Checks if the key is still alive and reachable.
+    ///
+    /// Returns `true` if the key has not been collected.
+    /// Returns `false` if the key has been collected.
+    pub fn is_key_alive(&self) -> bool {
+        self.key.is_alive()
+    }
+
+    /// Checks if the ephemeron might be valid (lightweight check).
+    ///
+    /// This is a fast check that doesn't fully validate the key or value.
+    /// Use `is_key_alive()` for a more thorough check.
+    pub fn may_be_valid(&self) -> bool {
+        self.key.may_be_valid()
+    }
+}
+
+impl<K: Trace + 'static, V: Trace + 'static> Clone for Ephemeron<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            value: Gc::try_clone(&self.value).unwrap_or_else(|| Gc {
+                ptr: AtomicNullable::null(),
+                _marker: PhantomData,
+            }),
+        }
+    }
+}
+
+impl<K: Trace + 'static, V: Trace + 'static> Default for Ephemeron<K, V> {
+    fn default() -> Self {
+        Self {
+            key: Weak {
+                ptr: AtomicNullable::null(),
+            },
+            value: Gc {
+                ptr: AtomicNullable::null(),
+                _marker: PhantomData,
+            },
+        }
+    }
+}
+
+impl<K: Trace + 'static, V: Trace + 'static> std::fmt::Debug for Ephemeron<K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ephemeron")
+            .field("key_alive", &self.is_key_alive())
+            .field("value_accessible", &self.upgrade().is_some())
+            .finish()
+    }
+}
+
+unsafe impl<K: Trace + 'static, V: Trace + 'static> Trace for Ephemeron<K, V> {
+    fn trace(&self, visitor: &mut impl Visitor) {
+        // For basic ephemeron implementation:
+        // - The key is stored as a Weak, so it's not traced (correct)
+        // - The value is always traced while the ephemeron exists
+        //
+        // NOTE: This keeps the value alive as long as the ephemeron exists.
+        // For true ephemeron semantics where value is collected when key dies,
+        // the GC would need special ephemeron handling:
+        // - Track ephemerons in a special list during marking
+        // - Only trace value if key was marked (reachable)
+        // - Clear broken ephemerons during sweep
+        //
+        // For now, this basic implementation provides the API but not the
+        // full GC semantics. The value will stay in memory even after key dies.
+        visitor.visit(&self.value);
+    }
+}
+
+// ============================================================================
 // Send + Sync trait implementations
 // ============================================================================
 
@@ -1780,6 +1973,10 @@ unsafe impl<T: Trace + Send + Sync> Sync for Gc<T> {}
 unsafe impl<T: Trace + Send + Sync> Send for Weak<T> {}
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl<T: Trace + Send + Sync> Sync for Weak<T> {}
+#[allow(clippy::non_send_fields_in_send_ty)]
+unsafe impl<K: Trace + Send + Sync, V: Trace + Send + Sync> Send for Ephemeron<K, V> {}
+#[allow(clippy::non_send_fields_in_send_ty)]
+unsafe impl<K: Trace + Send + Sync, V: Trace + Send + Sync> Sync for Ephemeron<K, V> {}
 
 // ============================================================================
 // Helper functions

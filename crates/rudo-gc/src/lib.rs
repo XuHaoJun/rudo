@@ -155,7 +155,7 @@ pub use metrics::{
     current_heap_size, current_old_size, current_young_size, gc_history, global_metrics,
     last_gc_metrics, CollectionType, FallbackReason, GcHistory, GcMetrics, GlobalMetrics,
 };
-pub use ptr::{Gc, GcBox, Weak};
+pub use ptr::{Ephemeron, Gc, GcBox, Weak};
 pub use scan::scan_heap_region_conservatively;
 pub use trace::{Trace, Visitor};
 pub use trace_closure::TraceClosure;
