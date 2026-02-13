@@ -1791,7 +1791,7 @@ impl<T: Trace> Default for Weak<T> {
 ///
 /// let key = Gc::new("key");
 /// let value = Gc::new(42);
-/// let ephemeron = Ephemeron::new(key, value);
+/// let ephemeron = Ephemeron::new(&key, value);
 ///
 /// // Value is accessible because key is alive
 /// assert!(ephemeron.upgrade().is_some());
@@ -1803,6 +1803,31 @@ impl<T: Trace> Default for Weak<T> {
 /// // Value is no longer accessible because key is dead
 /// assert!(ephemeron.upgrade().is_none());
 /// ```
+///
+/// # Current Implementation Status
+///
+/// **Partial Implementation**: This type provides the correct API for ephemeron semantics,
+/// but full GC-level semantics are not yet implemented.
+///
+/// ✅ What works:
+/// - `upgrade()` correctly returns `None` when the key is no longer reachable
+/// - `is_key_alive()` correctly detects when key has been collected
+/// - The value is properly kept alive while the key is alive
+///
+/// ⚠️ Current limitation:
+/// - The value is NOT automatically collected when the key becomes unreachable
+/// - This is because the current `Trace` implementation unconditionally traces the value
+/// - Full implementation would require GC-level ephemeron tracking (future work)
+///
+/// This limitation means memory usage may be higher than expected for some use cases,
+/// but the API is sound and correctly prevents accessing values when keys are dead.
+///
+/// # Future Work
+///
+/// Full ephemeron semantics would require:
+/// 1. Track ephemerons in a global list during marking
+/// 2. In mark phase: if key is marked, trace value; if not, skip (broken ephemeron)
+/// 3. In sweep phase: clear broken ephemerons' value references
 pub struct Ephemeron<K: Trace + 'static, V: Trace + 'static> {
     /// Weak reference to key - does NOT keep key alive
     key: Weak<K>,
