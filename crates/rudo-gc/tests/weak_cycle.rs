@@ -17,6 +17,9 @@
 //! - Weak references in containers
 //! - Memory preservation for weak refs
 //! - Mixed strong/weak reference graphs
+//!
+//! # Requirements
+//! - Requires `test-util` feature to run: `cargo test --test weak_cycle --features test-util`
 
 use rudo_gc::{collect_full, Gc, Trace, Weak};
 
@@ -82,8 +85,8 @@ fn test_transitive_death() {
         assert!(weak_inner.upgrade().is_some());
     }
 
-    // Drop outer (weak_inner is the only remaining ref to inner)
-    // But since no strong refs remain, inner should be collectable
+    // Clear roots and collect - inner was registered as test root at line 76,
+    // so clearing roots releases it for collection
     drop(outer);
 
     // Collect - inner should be dead
@@ -125,10 +128,34 @@ fn test_weak_cycle_with_external_strong() {
     // Verify: root_ref -> node_a
     assert_eq!(root_ref.value, 1);
 
+    // Weak refs should work while targets are alive
+    assert!(
+        _weak_a.upgrade().is_some(),
+        "weak_a should upgrade while node_a is alive"
+    );
+    assert!(
+        _weak_b.upgrade().is_some(),
+        "weak_b should upgrade while node_b is alive"
+    );
+
     drop(root_ref);
+
+    // Drop the Gc nodes so they can be collected
+    drop(node_a);
+    drop(node_b);
 
     clear_roots!();
     collect_full();
+
+    // After collection, both nodes should be dead (no external strong refs remain)
+    assert!(
+        _weak_a.upgrade().is_none(),
+        "node_a should be collected (no strong refs)"
+    );
+    assert!(
+        _weak_b.upgrade().is_none(),
+        "node_b should be collected (no strong refs)"
+    );
 
     clear_roots!();
 }
@@ -339,6 +366,7 @@ fn test_weak_ptr_still_valid_after_collection() {
     let weak = Gc::downgrade(&gc);
 
     drop(gc);
+    clear_roots!();
     collect_full();
 
     // is_alive should return false
