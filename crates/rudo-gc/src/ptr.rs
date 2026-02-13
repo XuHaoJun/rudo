@@ -840,6 +840,10 @@ impl<T: Trace> Gc<T> {
         // Notify that we created a Gc
         crate::gc::notify_created_gc();
 
+        // Record for suspicious sweep detection
+        #[cfg(feature = "debug-suspicious-sweep")]
+        crate::gc::record_young_object(gc_box_ptr.as_ptr() as *const u8);
+
         Self {
             ptr: AtomicNullable::new(gc_box_ptr),
             _marker: PhantomData,
