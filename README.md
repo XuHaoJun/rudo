@@ -22,7 +22,7 @@ The library is built on a **BiBOP (Big Bag of Pages)** memory layout, which allo
 - **Write Barriers**: Efficiently tracks old-to-young pointers using card-marking (dirty bitmaps) for fast minor collections.
 - **Incremental Marking**: Splits major GC mark phase into cooperative increments, reducing pause times by 50-80%. Uses hybrid SATB + Dijkstra insertion barrier.
 - **Large Object Space (LOS)**: Specialized handling for objects larger than 2KB to prevent fragmentation.
-- **Weak References**: Support for `Weak<T>` pointers with proper lifecycle management.
+- **Weak References**: Support for `Weak<T>` pointers with proper lifecycle management. Includes `try_upgrade()` for safe handling of potentially corrupted weak refs and `may_be_valid()` for lightweight pre-filtering.
 - **ZST Optimization**: Zero-Sized Types (like `()`) are handled with zero heap allocation overhead.
 - **Thread Safety**: `Gc<T>` implements `Send` and `Sync` when `T: Send + Sync`, enabling safe multi-threaded data sharing. Use `GcRwLock` and `GcMutex` for concurrent access.
 - **Concurrent Primitives**: `GcRwLock<T>` and `GcMutex<T>` provide thread-safe locking with automatic write barriers and GC-safe lock bypass during STW pauses.
@@ -620,6 +620,55 @@ let weak = node.self_ref.borrow();
 let self_ref = weak.as_ref().unwrap().upgrade().unwrap();
 assert_eq!(self_ref.data, 42);
 ```
+
+## Safe Weak Reference Handling
+
+For scenarios where weak references may become corrupted or stale (e.g., reactive signal systems), use `try_upgrade()` and `may_be_valid()` for safe handling.
+
+### try_upgrade()
+
+`try_upgrade()` performs additional safety checks before attempting to upgrade a weak reference:
+
+```rust
+use rudo_gc::{Gc, Weak, Trace};
+
+let gc = Gc::new(42);
+let weak = Gc::downgrade(&gc);
+
+// Safe upgrade - returns None instead of crashing on invalid pointers
+if let Some(value) = weak.try_upgrade() {
+    println!("Value: {}", *value);
+}
+```
+
+**Safety checks performed:**
+- Null pointer check
+- Alignment validation
+- Minimum address check (rejects null page addresses)
+- Object liveness verification
+- Reference count overflow protection
+
+### may_be_valid()
+
+Lightweight pre-filter check that doesn't require dereferencing:
+
+```rust
+// Fast check before trying upgrade in tight loops
+for weak in subscribers.iter() {
+    if weak.may_be_valid() {
+        if let Some(effect) = weak.try_upgrade() {
+            effect.notify();
+        }
+    }
+}
+```
+
+### Use Cases
+
+This is particularly useful for:
+- Reactive frameworks with signal/subscriber patterns
+- Caches with weak references that may become stale
+- Any data structure where weak refs might contain garbage data
 
 ## Tokio Async Integration
 
