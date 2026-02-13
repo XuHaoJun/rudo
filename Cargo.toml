@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/rudo-gc", "crates/rudo-gc-derive", "crates/rudo-gc-tokio-derive", "crates/sys_alloc"]
 
 [workspace.package]
-version = "0.8.8"
+version = "0.8.9"
 edition = "2021"
 rust-version = "1.84"
 license = "MIT OR Apache-2.0"

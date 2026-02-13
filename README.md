@@ -40,21 +40,21 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rudo-gc = "0.7"
+rudo-gc = "0.8"
 ```
 
 If you want to use the `#[derive(Trace)]` macro, enable the `derive` feature:
 
 ```toml
 [dependencies]
-rudo-gc = { version = "0.7", features = ["derive"] }
+rudo-gc = { version = "0.8", features = ["derive"] }
 ```
 
 For Tokio async/await integration:
 
 ```toml
 [dependencies]
-rudo-gc = { version = "0.7", features = ["derive", "tokio"] }
+rudo-gc = { version = "0.8", features = ["derive", "tokio"] }
 ```
 
 ### Tracing Support (Opt-in)
@@ -63,7 +63,7 @@ Enable the `tracing` feature to get structured logging of GC operations using th
 
 ```toml
 [dependencies]
-rudo-gc = { version = "0.7", features = ["tracing"] }
+rudo-gc = { version = "0.8", features = ["tracing"] }
 ```
 
 Then configure a tracing subscriber in your application:
@@ -93,11 +93,11 @@ DEBUG rudo_gc::gc: phase_end phase="clear" bytes_reclaimed=0
 
 ### Incremental Marking (Opt-in)
 
-Incremental marking is available starting from v0.7. Enable it to reduce major GC pause times:
+Incremental marking is available starting from v0.8. Enable it to reduce major GC pause times:
 
 ```toml
 [dependencies]
-rudo-gc = { version = "0.7", features = ["incremental"] }
+rudo-gc = { version = "0.8", features = ["incremental"] }
 ```
 
 Then configure it in your code:
@@ -119,7 +119,7 @@ The `lazy-sweep` feature (enabled by default) defers memory reclamation to alloc
 
 ```toml
 [dependencies]
-rudo-gc = { version = "0.7", default-features = false }
+rudo-gc = { version = "0.8", default-features = false }
 ```
 
 Lazy sweep is recommended for applications where latency matters more than peak throughput. The eager sweep path (when disabled) may perform better in batch processing workloads.
@@ -676,7 +676,7 @@ Enable the `tokio` feature for async/await support:
 
 ```toml
 [dependencies]
-rudo-gc = { version = "0.7", features = ["derive", "tokio"] }
+rudo-gc = { version = "0.8", features = ["derive", "tokio"] }
 ```
 
 ### Root Guards
