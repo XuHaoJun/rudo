@@ -1903,7 +1903,7 @@ impl<K: Trace + 'static, V: Trace + 'static> Ephemeron<K, V> {
     /// This is a fast check that doesn't fully validate the key or value.
     /// Use `is_key_alive()` for a more thorough check.
     pub fn may_be_valid(&self) -> bool {
-        self.key.may_be_valid() || !Gc::internal_ptr(&self.value).is_null()
+        self.key.may_be_valid()
     }
 }
 
