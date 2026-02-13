@@ -2,8 +2,24 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::LazyLock;
 
 const DEFAULT_HISTORY_SIZE: usize = 1024;
+
 const SUSPICIOUS_THRESHOLD: u64 = 2;
 
+/// Threshold for detecting suspicious young object sweep.
+///
+/// A young generation object (gen 0) that survives 2+ full GC cycles without being
+/// promoted to old generation is suspicious. This typically indicates the anti-pattern:
+///   `Vec<Gc<T>>` (non-GC-managed container holding GC pointers)
+/// instead of:
+///   `Gc<Vec<Gc<T>>>` (GC-managed container)
+///
+/// Objects in young gen for 2+ cycles that get swept are likely created using this
+/// incorrect pattern - the container is not traced by GC, so inner Gc pointers become
+/// invisible to the collector.
+///
+/// Note: This is a debug-only feature gated behind `debug-suspicious-sweep`. The race
+/// condition in the ring buffer is acceptable because worst case is detection giving
+/// wrong result, not memory corruption.
 static GC_CYCLE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[inline]
