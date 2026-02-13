@@ -16,6 +16,13 @@ use crate::gc::notify_dropped_gc;
 use crate::heap::{with_heap, LocalHeap};
 use crate::trace::{GcVisitor, Trace, Visitor};
 
+/// Minimum valid heap address.
+///
+/// Addresses below this threshold are in the null page and are never valid
+/// heap allocations. This value is based on the standard 4KB page size
+/// used by most operating systems.
+const MIN_VALID_HEAP_ADDRESS: usize = 4096;
+
 // ============================================================================
 // `GcBox` - The heap allocation container
 // ============================================================================
@@ -465,7 +472,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
         let addr = ptr.as_ptr() as usize;
         let alignment = std::mem::align_of::<GcBox<T>>();
-        if addr % alignment != 0 || addr < 4096 {
+        if addr % alignment != 0 || addr < MIN_VALID_HEAP_ADDRESS {
             return None;
         }
 
@@ -1520,7 +1527,7 @@ impl<T: Trace> Weak<T> {
             return None;
         }
 
-        if addr < 4096 {
+        if addr < MIN_VALID_HEAP_ADDRESS {
             return None;
         }
 
