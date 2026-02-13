@@ -579,7 +579,7 @@ fn perform_multi_threaded_collect() {
 /// Implements cooperative rendezvous for multi-threaded safety.
 pub fn collect_full() {
     #[cfg(feature = "debug-suspicious-sweep")]
-    let _gc_cycle_id = crate::gc::young_object_history::get_gc_cycle_id();
+    let _ = crate::gc::young_object_history::get_gc_cycle_id();
 
     if IN_COLLECT.with(Cell::get) {
         return;

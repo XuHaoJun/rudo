@@ -71,9 +71,9 @@ impl YoungObjectHistory {
             record_ptr.write(YoungObjectRecord { ptr, gc_id });
         }
 
-        if self.initial_gc_id.load(Ordering::Relaxed) == 0 {
-            self.initial_gc_id.store(gc_id, Ordering::Relaxed);
-        }
+        self.initial_gc_id
+            .compare_exchange(0, gc_id, Ordering::Relaxed, Ordering::Relaxed)
+            .ok();
     }
 
     #[inline]
@@ -102,6 +102,9 @@ impl YoungObjectHistory {
         for record in &self.records {
             if record.ptr == ptr {
                 let age = current_gc_id.saturating_sub(record.gc_id);
+                if age == 0 {
+                    return false;
+                }
                 return age <= SUSPICIOUS_THRESHOLD;
             }
         }
