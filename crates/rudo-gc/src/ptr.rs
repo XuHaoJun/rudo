@@ -470,6 +470,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
         }
 
         unsafe {
+            // SAFETY: Pointer passed validation checks above (alignment >= 1, addr >= 4096)
             let gc_box = &*ptr.as_ptr();
 
             if gc_box.is_under_construction() {
@@ -1524,6 +1525,7 @@ impl<T: Trace> Weak<T> {
         }
 
         unsafe {
+            // SAFETY: Pointer passed validation checks above (alignment, addr >= 4096)
             let gc_box = &*ptr.as_ptr();
 
             if gc_box.is_under_construction() {
