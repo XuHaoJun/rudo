@@ -506,6 +506,12 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return None;
             }
 
+            // Check for overflow (for consistency with public Weak<T>::try_upgrade)
+            let current_count = gc_box.ref_count.load(Ordering::Relaxed);
+            if current_count == usize::MAX {
+                return None;
+            }
+
             // Object is alive and has strong refs - increment normally
             gc_box.inc_ref();
             Some(Gc {
