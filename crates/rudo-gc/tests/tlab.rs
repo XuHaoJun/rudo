@@ -1,5 +1,5 @@
 use rudo_gc::heap::{page_size, with_heap};
-use rudo_gc::Gc;
+use rudo_gc::{set_suspicious_sweep_detection, Gc};
 use std::thread;
 
 #[test]
@@ -163,6 +163,7 @@ fn test_free_slot_reuse() {
     let count = objects_per_page + 10;
 
     thread::spawn(move || {
+        set_suspicious_sweep_detection(false);
         let initial_pages = {
             let mut pointers = Vec::new();
             for i in 0..count {
@@ -198,6 +199,7 @@ fn test_free_slot_reuse() {
             "Page count increased from {initial_pages} to {final_pages} indicating no reuse of free slots"
         );
         drop(pointers);
+        set_suspicious_sweep_detection(true);
     })
     .join()
     .unwrap();

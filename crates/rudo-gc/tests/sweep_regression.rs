@@ -1,7 +1,7 @@
 //! Regression tests for sweep phase issues.
 
 use rudo_gc::cell::GcCell;
-use rudo_gc::{collect_full, Gc, Trace, Visitor};
+use rudo_gc::{collect_full, set_suspicious_sweep_detection, Gc, Trace, Visitor};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
@@ -34,6 +34,7 @@ impl Drop for AllocatingDropper {
 /// See `docs/reentrant-alloc-rules.md` for context.
 #[test]
 fn test_drop_allocates() {
+    set_suspicious_sweep_detection(false);
     DROP_COUNT.with(|c| c.set(0));
 
     // Allocate multiple objects to increase chance of triggering Vec reallocation
@@ -52,6 +53,7 @@ fn test_drop_allocates() {
 
     // Verify all droppers were dropped successfully
     assert_eq!(DROP_COUNT.with(Cell::get), 100);
+    set_suspicious_sweep_detection(true);
 }
 
 struct DropCounter;

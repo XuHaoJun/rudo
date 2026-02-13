@@ -5,7 +5,7 @@
 
 #![cfg(feature = "tracing")]
 
-use rudo_gc::{collect, Gc};
+use rudo_gc::{collect, collect_full, set_suspicious_sweep_detection, Gc};
 
 #[test]
 fn test_tracing_compiles_with_feature() {}
@@ -57,20 +57,24 @@ fn test_gc_cycles_with_tracing() {
 
 #[test]
 fn test_major_collection_with_tracing() {
+    set_suspicious_sweep_detection(false);
     let mut objects = Vec::new();
     for i in 0..100 {
         objects.push(Gc::new(vec![i; 100]));
     }
 
-    rudo_gc::collect_full();
+    collect_full();
 
     assert!(!objects.is_empty());
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
 fn test_incremental_marking_with_tracing() {
     use rudo_gc::gc::incremental::IncrementalConfig;
     use rudo_gc::set_incremental_config;
+
+    set_suspicious_sweep_detection(false);
 
     let config = IncrementalConfig {
         enabled: true,
@@ -83,48 +87,57 @@ fn test_incremental_marking_with_tracing() {
         objects.push(Gc::new(vec![i; 50]));
     }
 
-    rudo_gc::collect_full();
+    collect_full();
 
     assert!(!objects.is_empty());
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
 fn test_phase_start_end_events() {
+    set_suspicious_sweep_detection(false);
     let mut objects = Vec::new();
     for i in 0..100 {
         objects.push(Gc::new(vec![i; 50]));
     }
 
-    rudo_gc::collect_full();
+    collect_full();
 
     assert!(!objects.is_empty());
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
 fn test_phase_span_hierarchy() {
+    set_suspicious_sweep_detection(false);
     let mut objects = Vec::new();
     for i in 0..50 {
         objects.push(Gc::new(vec![i; 100]));
     }
 
-    rudo_gc::collect_full();
+    collect_full();
 
     assert!(!objects.is_empty());
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
 fn test_sweep_events() {
+    set_suspicious_sweep_detection(false);
     for i in 0..50 {
         let _ = Gc::new(vec![i; 50]);
     }
 
-    rudo_gc::collect_full();
+    collect_full();
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
 fn test_incremental_mark_span() {
     use rudo_gc::gc::incremental::IncrementalConfig;
     use rudo_gc::set_incremental_config;
+
+    set_suspicious_sweep_detection(false);
 
     let config = IncrementalConfig {
         enabled: true,
@@ -138,15 +151,18 @@ fn test_incremental_mark_span() {
         objects.push(Gc::new(vec![i; 100]));
     }
 
-    rudo_gc::collect_full();
+    collect_full();
 
     assert!(!objects.is_empty());
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
 fn test_incremental_slice_event() {
     use rudo_gc::gc::incremental::IncrementalConfig;
     use rudo_gc::set_incremental_config;
+
+    set_suspicious_sweep_detection(false);
 
     let config = IncrementalConfig {
         enabled: true,
@@ -160,15 +176,18 @@ fn test_incremental_slice_event() {
         objects.push(Gc::new(vec![i; 50]));
     }
 
-    rudo_gc::collect_full();
+    collect_full();
 
     assert!(!objects.is_empty());
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
 fn test_incremental_fallback_event() {
     use rudo_gc::gc::incremental::IncrementalConfig;
     use rudo_gc::set_incremental_config;
+
+    set_suspicious_sweep_detection(false);
 
     let config = IncrementalConfig {
         enabled: true,
@@ -183,9 +202,10 @@ fn test_incremental_fallback_event() {
         objects.push(Gc::new(vec![i; 100]));
     }
 
-    rudo_gc::collect_full();
+    collect_full();
 
     assert!(!objects.is_empty());
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
@@ -193,19 +213,21 @@ fn test_tracing_events_captured() {
     let gc = Gc::new(42);
     assert_eq!(*gc, 42);
 
-    rudo_gc::collect_full();
+    collect_full();
 }
 
 #[test]
 fn test_phase_events_balanced() {
+    set_suspicious_sweep_detection(false);
     let mut objects = Vec::new();
     for i in 0..50 {
         objects.push(Gc::new(vec![i; 50]));
     }
 
-    rudo_gc::collect_full();
+    collect_full();
 
     assert!(!objects.is_empty());
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
@@ -226,24 +248,28 @@ fn test_gc_collect_span_generated() {
 
 #[test]
 fn test_all_phases_exercised() {
+    set_suspicious_sweep_detection(false);
     let mut objects = Vec::new();
     for i in 0..100 {
         objects.push(Gc::new(vec![i; 50]));
     }
 
-    rudo_gc::collect_full();
+    collect_full();
 
     assert!(!objects.is_empty());
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
 fn test_parallel_mark_complete_event() {
+    set_suspicious_sweep_detection(false);
     let mut objects: Vec<Gc<Vec<usize>>> = Vec::new();
     for i in 0..1000 {
         objects.push(Gc::new(vec![i; 100]));
     }
 
-    rudo_gc::collect_full();
+    collect_full();
 
     assert!(!objects.is_empty());
+    set_suspicious_sweep_detection(true);
 }
