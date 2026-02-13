@@ -17,6 +17,8 @@ lazy-sweep = []
 test-util = []
 tokio = ["dep:tokio", "dep:tokio-util", "dep:rudo-gc-tokio-derive"]
 tracing = ["dep:tracing"]
+debug-suspicious-sweep = []
+paranoid-sweep = ["debug-suspicious-sweep"]
 
 [dependencies]
 rudo-gc-derive = { workspace = true, optional = true }

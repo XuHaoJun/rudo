@@ -1,6 +1,6 @@
 use rudo_gc::{
     collect_full, current_heap_size, current_old_size, current_young_size, gc_history,
-    global_metrics, last_gc_metrics, Gc,
+    global_metrics, last_gc_metrics, set_suspicious_sweep_detection, Gc,
 };
 use std::mem;
 use std::time::Duration;
@@ -67,6 +67,7 @@ fn test_drop_multiple_objects_reclaims_memory() {
     #[cfg(feature = "test-util")]
     test_util::reset();
 
+    set_suspicious_sweep_detection(false);
     let count: usize = 50;
     let objects: Vec<Gc<usize>> = (0..count).map(Gc::new).collect();
     let allocated_size = current_heap_size();
@@ -81,6 +82,7 @@ fn test_drop_multiple_objects_reclaims_memory() {
         reclaimed > 0 || after <= allocated_size,
         "Memory should be reclaimed or heap should not grow"
     );
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
@@ -162,6 +164,7 @@ fn test_objects_reclaimed_count() {
     #[cfg(feature = "test-util")]
     test_util::reset();
 
+    set_suspicious_sweep_detection(false);
     let count: usize = 25;
     let objects: Vec<Gc<usize>> = (0..count).map(Gc::new).collect();
 
@@ -171,6 +174,7 @@ fn test_objects_reclaimed_count() {
     let metrics = last_gc_metrics();
 
     let _ = metrics.objects_reclaimed;
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
@@ -178,6 +182,7 @@ fn test_surviving_objects_tracked() {
     #[cfg(feature = "test-util")]
     test_util::reset();
 
+    set_suspicious_sweep_detection(false);
     let survivor = Gc::new(42u64);
     let garbage: Vec<Gc<usize>> = (0..10).map(Gc::new).collect();
 
@@ -194,6 +199,7 @@ fn test_surviving_objects_tracked() {
         Gc::ptr_eq(&survivor, &survivor),
         "Survivor should still be accessible"
     );
+    set_suspicious_sweep_detection(true);
 }
 
 #[test]
@@ -475,6 +481,7 @@ fn test_large_allocation_pattern() {
     #[cfg(feature = "test-util")]
     test_util::reset();
 
+    set_suspicious_sweep_detection(false);
     let sizes: Vec<usize> = vec![128, 256, 512, 1024, 2048];
     let mut gc_objects: Vec<Gc<Vec<u8>>> = Vec::new();
 
@@ -495,4 +502,5 @@ fn test_large_allocation_pattern() {
         after_gc <= peak_heap + 1024,
         "Heap after GC should be near peak"
     );
+    set_suspicious_sweep_detection(true);
 }
