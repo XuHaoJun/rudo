@@ -302,6 +302,10 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
 
     /// Resolves to a `Gc<T>` if the object is still alive.
     ///
+    /// # Safety
+    ///
+    /// Must be called from the origin thread. `T` may be `!Send`.
+    ///
     /// # Panics
     ///
     /// Panics if called from a thread other than the origin thread,
@@ -344,6 +348,10 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     /// - The weak ref is null
     /// - The object has been collected
     /// - The memory location is obviously invalid (misaligned or too low address)
+    ///
+    /// # Safety
+    ///
+    /// Must be called from the origin thread. `T` may be `!Send`.
     ///
     /// # Panics
     ///
