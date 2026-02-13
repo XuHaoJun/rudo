@@ -147,22 +147,29 @@ fn test_weak_refs_in_vec() {
         value: i32,
     }
 
-    let items: Vec<Gc<Item>> = (0..5).map(|i| Gc::new(Item { value: i })).collect();
+    // Create items and register them as roots
+    let items: Vec<Gc<Item>> = (0..5)
+        .map(|i| {
+            let item = Gc::new(Item { value: i });
+            root!(item);
+            item
+        })
+        .collect();
 
-    // Create weak refs to all items
+    // Create weak refs to all items (while items are rooted)
     let weak_refs: Vec<Weak<Item>> = items.iter().map(Gc::downgrade).collect();
 
-    // Drop some strong refs
-    drop(items[1].clone());
-    drop(items[3].clone());
-
-    clear_roots!();
     collect_full();
 
-    // Check which weak refs still work - items[0], [2], [4] are still in items Vec
-    // Note: without explicit root registration, results may vary
-    // Just verify some weak refs still work
-    assert!(weak_refs[0].upgrade().is_some() || weak_refs[0].upgrade().is_none());
+    // All weak refs should still work since items are still roots
+    for (i, weak) in weak_refs.iter().enumerate() {
+        let upgraded = weak.upgrade();
+        assert!(
+            upgraded.is_some(),
+            "weak ref {i} should still be valid after collection"
+        );
+        assert_eq!(upgraded.unwrap().value, i as i32);
+    }
 
     clear_roots!();
 }
@@ -178,13 +185,18 @@ fn test_weak_vec_preserves_access() {
 
     // Use a simple Vec outside of Gc to hold weak refs
     let mut weak_refs: Vec<Weak<Item>> = Vec::new();
-    let mut _gc_refs: Vec<Gc<Item>> = Vec::new();
+    let mut gc_refs: Vec<Gc<Item>> = Vec::new();
 
     // Add items and weak refs
     for i in 0..5 {
         let item = Gc::new(Item { value: i });
         weak_refs.push(Gc::downgrade(&item));
-        _gc_refs.push(item);
+        gc_refs.push(item);
+    }
+
+    // Register gc_refs as root to ensure GC sees it
+    for gc in &gc_refs {
+        root!(gc);
     }
 
     // Verify all weak refs work
@@ -199,9 +211,11 @@ fn test_weak_vec_preserves_access() {
     // After collection, all should still work (gc_refs keeps them alive)
     for (i, weak) in weak_refs.iter().enumerate() {
         let upgraded = weak.upgrade();
-        if upgraded.is_some() {
-            assert_eq!(upgraded.unwrap().value, i as i32);
-        }
+        assert!(
+            upgraded.is_some(),
+            "weak ref {i} should still be valid after collection"
+        );
+        assert_eq!(upgraded.unwrap().value, i as i32);
     }
 
     clear_roots!();
