@@ -91,6 +91,27 @@ pub use gc::incremental::{
     is_incremental_marking_active, is_write_barrier_active, mark_new_object_black,
     IncrementalConfig, IncrementalMarkState, MarkPhase, MarkSliceResult, MarkStats,
 };
+
+#[cfg(feature = "debug-suspicious-sweep")]
+pub use gc::{
+    clear_history, is_detection_enabled, is_suspicious_sweep, record_young_object,
+    set_detection_enabled,
+};
+
+/// Enable or disable suspicious sweep detection at runtime.
+///
+/// This allows toggling the detection on/off in production for debugging.
+#[cfg(feature = "debug-suspicious-sweep")]
+pub fn set_suspicious_sweep_detection(enabled: bool) {
+    gc::set_detection_enabled(enabled);
+}
+
+/// Check if suspicious sweep detection is currently enabled.
+#[must_use]
+#[cfg(feature = "debug-suspicious-sweep")]
+pub fn is_suspicious_sweep_detection_enabled() -> bool {
+    gc::is_detection_enabled()
+}
 pub use sync::{GcMutex, GcRwLock};
 
 /// Configure incremental marking settings.

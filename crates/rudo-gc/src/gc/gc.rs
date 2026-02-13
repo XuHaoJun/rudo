@@ -2051,6 +2051,26 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                     // Object is unreachable but allocated - needs cleanup
                     let obj_ptr = page_ptr.as_ptr().cast::<u8>();
                     let obj_ptr = obj_ptr.add(header_size + i * block_size);
+
+                    // Suspicious sweep detection: young object being swept during major GC
+                    #[cfg(feature = "debug-suspicious-sweep")]
+                    {
+                        let is_suspicious = (*header).generation == 0
+                            && !only_young
+                            && crate::gc::is_suspicious_sweep(obj_ptr);
+                        assert!(
+                            !is_suspicious,
+                            "rudo-gc detected suspicious GC behavior:\n\n\
+                            A young generation object (ptr={obj_ptr:p}) was not marked but is being swept.\n\
+                            This typically indicates Vec<Gc<T>> was used without Gc<Vec<Gc<T>>>.\n\n\
+                            Solution:\n\
+                            Change: let items: RefCell<Vec<Gc<T>>> = ...\n\
+                            To:     let items: Gc<RefCell<Vec<Gc<T>>>> = Gc::new(RefCell::new(Vec::new()));\n\n\
+                            For more information, see: crates/rudo-gc/docs/vec-gc-usage.md\n\n\
+                            This check only runs in debug builds. Enable 'debug-suspicious-sweep' feature for release builds."
+                        );
+                    }
+
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 

@@ -17,6 +17,16 @@ pub mod marker;
 pub mod sync;
 pub mod worklist;
 
+#[cfg(feature = "debug-suspicious-sweep")]
+#[allow(missing_docs)]
+pub mod young_object_history;
+
+#[cfg(feature = "debug-suspicious-sweep")]
+pub use young_object_history::{
+    clear_history, is_detection_enabled, is_suspicious_sweep, record_young_object,
+    set_detection_enabled,
+};
+
 #[cfg(feature = "tracing")]
 pub mod tracing;
 
