@@ -469,7 +469,42 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             return None;
         }
 
-        self.upgrade()
+        unsafe {
+            let gc_box = &*ptr.as_ptr();
+
+            if gc_box.is_under_construction() {
+                return None;
+            }
+
+            if gc_box.is_dead_or_unrooted() {
+                return None;
+            }
+
+            if gc_box.dropping_state() != 0 {
+                return None;
+            }
+
+            // Try atomic transition from 0 to 1 (same as regular upgrade)
+            if gc_box.try_inc_ref_from_zero() {
+                crate::gc::notify_created_gc();
+                return Some(Gc {
+                    ptr: AtomicNullable::new(ptr),
+                    _marker: PhantomData,
+                });
+            }
+
+            // ref_count > 0, check again if still alive
+            if gc_box.is_dead_or_unrooted() {
+                return None;
+            }
+
+            // Object is alive and has strong refs - increment normally
+            gc_box.inc_ref();
+            Some(Gc {
+                ptr: AtomicNullable::new(ptr),
+                _marker: PhantomData,
+            })
+        }
     }
 }
 
