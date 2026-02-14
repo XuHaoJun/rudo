@@ -8,10 +8,11 @@ use crate::gc::incremental::IncrementalMarkState;
 use crate::heap::{ptr_to_page_header, PageHeader, MAGIC_GC_PAGE};
 use crate::ptr::GcBox;
 use crate::trace::Trace;
+use parking_lot::Mutex;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
-use std::sync::{Mutex, RwLock};
+use std::sync::RwLock;
 
 /// A memory location with interior mutability that triggers a write barrier.
 ///
@@ -850,7 +851,7 @@ impl<T> GcThreadSafeCell<T> {
 
     /// Consumes the `GcThreadSafeCell`, returning the wrapped value.
     pub fn into_inner(self) -> T {
-        self.inner.into_inner().unwrap()
+        self.inner.into_inner()
     }
 }
 
@@ -859,18 +860,18 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     ///
     /// The borrow lasts until the returned `MutexGuard` exits scope.
     #[inline]
-    pub fn borrow(&self) -> std::sync::MutexGuard<'_, T> {
-        self.inner.lock().unwrap()
+    pub fn borrow(&self) -> parking_lot::MutexGuard<'_, T> {
+        self.inner.lock()
     }
 
-    /// Mutably borrows the wrapped value with generational + incremental write barriers.
+    /// Mutably borrows the wrapped value with generational write barrier.
     ///
-    /// This method acquires the mutex lock and performs all necessary write barriers
+    /// This method acquires the mutex lock and performs the generational write barrier
     /// to ensure correct GC behavior when mutations occur from any thread.
     ///
     /// # Type Bounds
     ///
-    /// - `T: GcCapture` - Required for SATB barrier. Add `#[derive(GcCell)]` to your type.
+    /// - `T: GcCapture` - Required for SATB barrier. Add `#[derive(GcCapture)]` to your type.
     ///
     /// # Performance Note
     ///
@@ -883,8 +884,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     where
         T: GcCapture,
     {
+        self.trigger_write_barrier();
+
         GcThreadSafeRefMut {
-            inner: self.inner.lock().unwrap(),
+            inner: self.inner.lock(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -900,16 +903,100 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     /// Using this may cause incorrect collection during GC for types
     /// containing GC pointers. Use with caution.
     #[inline]
-    pub fn borrow_mut_gen_only(&self) -> std::sync::MutexGuard<'_, T> {
-        self.inner.lock().unwrap()
+    pub fn borrow_mut_gen_only(&self) -> parking_lot::MutexGuard<'_, T> {
+        self.inner.lock()
+    }
+
+    #[inline]
+    fn trigger_write_barrier(&self) {
+        let ptr = std::ptr::from_ref(self).cast::<u8>();
+
+        if crate::gc::incremental::is_generational_barrier_active() {
+            Self::generational_write_barrier(ptr);
+        }
+    }
+
+    #[inline]
+    fn generational_write_barrier(ptr: *const u8) {
+        if !Self::is_gc_heap_pointer(ptr) {
+            return;
+        }
+
+        unsafe {
+            crate::heap::with_heap(|heap| {
+                let page_addr = (ptr as usize) & crate::heap::page_mask();
+                let is_large = heap.large_object_map.contains_key(&page_addr);
+
+                if is_large {
+                    if let Some(&(head_addr, _, _)) = heap.large_object_map.get(&page_addr) {
+                        let header = head_addr as *mut crate::heap::PageHeader;
+                        if (*header).magic == MAGIC_GC_PAGE && (*header).generation > 0 {
+                            let block_size = (*header).block_size as usize;
+                            let header_size = (*header).header_size as usize;
+                            let header_page_addr = head_addr;
+                            let ptr_addr = ptr as usize;
+
+                            if ptr_addr >= header_page_addr + header_size {
+                                let offset = ptr_addr - (header_page_addr + header_size);
+                                let index = offset / block_size;
+
+                                if index < (*header).obj_count as usize {
+                                    (*header).set_dirty(index);
+                                    heap.add_to_dirty_pages(NonNull::new_unchecked(header));
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let header = ptr_to_page_header(ptr);
+                    if (*header.as_ptr()).magic == MAGIC_GC_PAGE
+                        && (*header.as_ptr()).generation > 0
+                    {
+                        let block_size = (*header.as_ptr()).block_size as usize;
+                        let header_size = (*header.as_ptr()).header_size as usize;
+                        let header_page_addr = header.as_ptr() as usize;
+                        let ptr_addr = ptr as usize;
+
+                        if ptr_addr >= header_page_addr + header_size {
+                            let offset = ptr_addr - (header_page_addr + header_size);
+                            let index = offset / block_size;
+
+                            if index < (*header.as_ptr()).obj_count as usize {
+                                (*header.as_ptr()).set_dirty(index);
+                                heap.add_to_dirty_pages(header);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    #[inline]
+    fn is_gc_heap_pointer(ptr: *const u8) -> bool {
+        let addr = ptr as usize;
+        if addr == 0 {
+            return false;
+        }
+
+        unsafe {
+            crate::heap::with_heap(|heap| {
+                let page_addr = addr & crate::heap::page_mask();
+
+                if heap.large_object_map.contains_key(&page_addr) {
+                    return true;
+                }
+
+                let header = ptr_to_page_header(ptr);
+                (*header.as_ptr()).magic == MAGIC_GC_PAGE
+            })
+        }
     }
 }
 
 /// A mutable borrow of a `GcThreadSafeCell`.
-///
-/// This guard ensures write barriers are executed when dropped.
 pub struct GcThreadSafeRefMut<'a, T: ?Sized> {
-    inner: std::sync::MutexGuard<'a, T>,
+    inner: parking_lot::MutexGuard<'a, T>,
     _marker: std::marker::PhantomData<*const ()>,
 }
 
@@ -927,15 +1014,15 @@ impl<T: ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
     }
 }
 
-// SAFETY: GcThreadSafeCell uses Mutex internally, which handles synchronization.
-// The Trace implementation acquires the lock during GC, ensuring no data races.
+// SAFETY: GcThreadSafeCell uses parking_lot::Mutex internally, which handles synchronization.
+// During STW pause, all mutator threads are suspended, making lock bypass safe.
+// Using data_ptr() returns a raw pointer to the inner data - no other thread can modify
+// the data during STW. This is the same pattern used in production GC implementations (Go, Java, .NET).
 unsafe impl<T: Trace + ?Sized> Trace for GcThreadSafeCell<T> {
     #[inline]
     fn trace(&self, visitor: &mut impl crate::trace::Visitor) {
-        // Lock is acquired during tracing to prevent concurrent mutations.
-        // This is safe because GC happens during STW pauses.
-        let guard = self.inner.lock().unwrap();
-        guard.trace(visitor);
+        let raw_ptr = self.inner.data_ptr();
+        unsafe { (*raw_ptr).trace(visitor) }
     }
 }
 
@@ -947,9 +1034,8 @@ impl<T: GcCapture + ?Sized> GcCapture for GcThreadSafeCell<T> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Ok(guard) = self.inner.try_lock() {
-            guard.capture_gc_ptrs_into(ptrs);
-        }
+        let raw_ptr = self.inner.data_ptr();
+        unsafe { (*raw_ptr).capture_gc_ptrs_into(ptrs) }
     }
 }
 
@@ -968,11 +1054,20 @@ impl<T: Clone> Clone for GcThreadSafeCell<T> {
 impl<T: std::fmt::Debug> std::fmt::Debug for GcThreadSafeCell<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.inner.try_lock() {
-            Ok(guard) => guard.fmt(f),
-            Err(_) => write!(f, "<GcThreadSafeCell: locked>"),
+            Some(guard) => guard.fmt(f),
+            None => write!(f, "<GcThreadSafeCell: locked>"),
         }
     }
 }
+
+// SAFETY: GcThreadSafeCell uses parking_lot::Mutex internally, which is Send + Sync.
+// The mutex ensures exclusive access, and the GC tracing uses data_ptr() during STW
+// when no other threads can access the data.
+unsafe impl<T: Trace + Send + Sync + ?Sized> Send for GcThreadSafeCell<T> {}
+
+// SAFETY: GcThreadSafeCell uses parking_lot::Mutex internally, which is Send + Sync.
+// Concurrent access is protected by the mutex, and GC tracing is safe during STW pauses.
+unsafe impl<T: Trace + Send + Sync + ?Sized> Sync for GcThreadSafeCell<T> {}
 
 #[cfg(test)]
 mod tests {
