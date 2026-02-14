@@ -21,9 +21,16 @@ use sys_alloc::{Mmap, MmapOptions};
 use crate::handles::{AsyncScopeData, AsyncScopeEntry, LocalHandles};
 use crate::ptr::GcBox;
 
+/// Global SATB buffer for cross-thread mutations.
+/// When a mutation occurs on a different thread than the allocating thread,
+/// the SATB old value is recorded here instead of the thread-local buffer.
+static CROSS_THREAD_SATB_BUFFER: parking_lot::Mutex<Vec<usize>> =
+    parking_lot::Mutex::new(Vec::new());
+
 // Thread-local storage for the current thread's stable ID.
 // Assigned once when the thread first accesses the heap.
-// This is used for thread safety checks in GcCell.
+// IDs start at 1; 0 is reserved as a sentinel for "no associated thread"
+// (e.g., objects outside the GC heap or deallocated objects).
 thread_local! {
     static THREAD_STABLE_ID: u64 = {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -38,6 +45,47 @@ thread_local! {
 #[allow(clippy::ptr_as_ptr, clippy::unnecessary_cast)]
 pub(crate) fn get_thread_id() -> u64 {
     THREAD_STABLE_ID.with(|id| *id)
+}
+
+/// Get the allocating thread's stable ID (u64) for a `GcBox` address.
+/// Uses the page header's `owner_thread` field instead of the global `HashMap`.
+/// Returns 0 if the address is not in the GC heap.
+///
+/// Note: 0 is a sentinel value meaning "no associated thread".
+/// This occurs for objects outside the GC heap or deallocated objects.
+///
+/// # Safety
+/// - `gc_box_addr` must point to a valid `GcBox` in the heap
+/// - The `GcBox` must not have been deallocated
+#[must_use]
+pub(crate) unsafe fn get_allocating_thread_id(gc_box_addr: usize) -> u64 {
+    let heap_start = heap_start();
+    let heap_end = heap_end();
+
+    debug_assert!(
+        gc_box_addr >= heap_start && gc_box_addr <= heap_end,
+        "Address {gc_box_addr:#x} outside heap range [{heap_start:#x}, {heap_end:#x}]"
+    );
+
+    if gc_box_addr < heap_start || gc_box_addr > heap_end {
+        return 0;
+    }
+
+    let header = unsafe { ptr_to_page_header(gc_box_addr as *const u8) };
+
+    if let Some(idx) = unsafe { ptr_to_object_index(gc_box_addr as *const u8) } {
+        debug_assert!(
+            unsafe { (*header.as_ptr()).is_allocated(idx) },
+            "Reading owner_thread from potentially free'd object at index {idx}"
+        );
+        debug_assert!(
+            idx < usize::from(unsafe { (*header.as_ptr()).obj_count }),
+            "Object index {idx} exceeds object count {}",
+            unsafe { (*header.as_ptr()).obj_count }
+        );
+    }
+
+    unsafe { (*header.as_ptr()).owner_thread }
 }
 
 // ============================================================================
@@ -1648,12 +1696,41 @@ impl LocalHeap {
     /// Returns `true` if the value was stored successfully, `false` if the buffer
     /// overflowed and fallback was requested.
     pub fn record_satb_old_value(&mut self, gc_box: NonNull<GcBox<()>>) -> bool {
+        let current_thread_id = get_thread_id();
+        let allocating_thread_id = unsafe { get_allocating_thread_id(gc_box.as_ptr() as usize) };
+
+        if current_thread_id != allocating_thread_id && allocating_thread_id != 0 {
+            CROSS_THREAD_SATB_BUFFER
+                .lock()
+                .push(gc_box.as_ptr() as usize);
+            return true;
+        }
+
         self.satb_old_values.push(gc_box);
         if self.satb_old_values.len() >= self.satb_buffer_capacity {
             self.satb_buffer_overflowed()
         } else {
             true
         }
+    }
+
+    /// Flush the cross-thread SATB buffer.
+    /// Called during GC to process cross-thread mutations.
+    #[must_use]
+    pub fn flush_cross_thread_satb_buffer() -> Vec<NonNull<GcBox<()>>> {
+        let addresses = std::mem::take(&mut *CROSS_THREAD_SATB_BUFFER.lock());
+        addresses
+            .into_iter()
+            .filter_map(|addr| NonNull::new(addr as *mut GcBox<()>))
+            .collect()
+    }
+
+    /// Push a GC pointer to the cross-thread SATB buffer.
+    /// Used when recording SATB old values from threads without a GC heap.
+    pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) {
+        CROSS_THREAD_SATB_BUFFER
+            .lock()
+            .push(gc_ptr.as_ptr() as usize);
     }
 
     fn satb_buffer_overflowed(&mut self) -> bool {
@@ -2538,6 +2615,17 @@ where
     F: FnOnce(&mut LocalHeap) -> R,
 {
     HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get()) })
+}
+
+/// Execute a function with mutable access to the thread-local heap.
+/// Returns None if called from a thread without an initialized GC heap.
+#[inline]
+pub fn try_with_heap<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut LocalHeap) -> R,
+{
+    HEAP.try_with(|local| unsafe { f(&mut *local.tcb.heap.get()) })
+        .ok()
 }
 
 /// Execute a function with mutable access to the thread-local heap and its control block.

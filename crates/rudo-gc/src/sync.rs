@@ -43,8 +43,10 @@ use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
+use crate::cell::GcCapture;
 use crate::gc::incremental::{is_generational_barrier_active, is_incremental_marking_active};
 use crate::heap::{ptr_to_page_header, MAGIC_GC_PAGE};
+use crate::ptr::GcBox;
 use crate::Trace;
 
 mod private {}
@@ -317,6 +319,10 @@ impl<T: ?Sized> GcRwLock<T> {
     /// Returns `Some` with a write guard if no readers or writers hold the lock,
     /// or `None` if the lock is currently held.
     ///
+    /// **Note**: The write barrier is only triggered when the lock is successfully
+    /// acquired (returns `Some`). This is correct because there is no old value
+    /// to record for SATB if no write occurs.
+    ///
     /// # Examples
     ///
     /// ```
@@ -333,9 +339,12 @@ impl<T: ?Sized> GcRwLock<T> {
     /// ```
     #[inline]
     pub fn try_write(&self) -> Option<GcRwLockWriteGuard<'_, T>> {
-        self.inner.try_write().map(|guard| GcRwLockWriteGuard {
-            guard,
-            _marker: PhantomData,
+        self.inner.try_write().map(|guard| {
+            self.trigger_write_barrier();
+            GcRwLockWriteGuard {
+                guard,
+                _marker: PhantomData,
+            }
         })
     }
 
@@ -762,6 +771,20 @@ unsafe impl<T: Trace + ?Sized> Trace for GcRwLock<T> {
         let raw_ptr = self.inner.data_ptr();
         // SAFETY: See above safety proof.
         unsafe { (*raw_ptr).trace(visitor) }
+    }
+}
+
+impl<T: GcCapture + ?Sized> GcCapture for GcRwLock<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        if let Some(value) = self.inner.try_read() {
+            value.capture_gc_ptrs_into(ptrs);
+        }
     }
 }
 

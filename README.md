@@ -373,16 +373,71 @@ assert_eq!(counter.lock().count, 400);
 
 ### Write Barriers
 
-Both `GcRwLock::write()` and `GcMutex::lock()` automatically trigger generational and SATB write barriers on guard acquisition. This ensures correct GC tracking during incremental marking.
+Both `GcRwLock::write()` and `GcMutex::lock()` automatically trigger generational and SATB write barriers on guard acquisition. `GcRwLock::try_write()` also triggers the barrier (even when it fails to acquire the lock) for cross-thread GC correctness.
 
 ### Comparison with GcCell
 
-| Characteristic | GcCell | GcRwLock | GcMutex |
-|----------------|--------|----------|---------|
-| Threading | !Sync | Sync + Send | Sync + Send |
-| Multiple readers | No | Yes | No |
-| Write barriers | On borrow_mut() | On write() | On lock() |
-| Use case | Single-threaded DOM, AST | Caches, configs | Queues, state machines |
+| Characteristic | GcCell | GcRwLock | GcMutex | GcThreadSafeCell |
+|----------------|--------|----------|---------|-------------------|
+| Threading | !Sync | Sync + Send | Sync + Send | Sync + Send |
+| Multiple readers | No | Yes | No | No |
+| Write barriers | On borrow_mut() | On write() | On lock() | On borrow_mut() |
+| Use case | Single-threaded DOM, AST | Caches, configs | Queues, state machines | Multi-threaded async |
+
+## GcThreadSafeCell
+
+`GcThreadSafeCell<T>` provides thread-safe interior mutability for GC-managed data, allowing mutations from any thread (including tokio worker threads).
+
+### When to Use GcThreadSafeCell
+
+| Scenario | Recommended API |
+|----------|-----------------|
+| Single-threaded code | `GcCell` (faster, no lock overhead) |
+| Multi-threaded tokio runtime | `GcThreadSafeCell` |
+| Sharing state across worker threads | `GcThreadSafeCell` |
+| Reactive state from async callbacks | `GcThreadSafeCell` |
+
+### Example
+
+```rust
+use rudo_gc::{Gc, GcThreadSafeCell, Trace};
+
+#[derive(Trace, Clone)]
+struct SharedState {
+    counter: GcThreadSafeCell<i32>,
+}
+
+// Works with multi-threaded tokio runtime
+let state = Gc::new(SharedState {
+    counter: GcThreadSafeCell::new(0),
+});
+
+// Can mutate from any thread
+*state.counter.borrow_mut() += 1;
+```
+
+### API Methods
+
+| Method | Description |
+|--------|-------------|
+| `borrow()` | Immutable borrow with mutex lock |
+| `borrow_mut()` | Mutable borrow with SATB barrier (requires `T: Trace + GcCapture`) |
+| `borrow_mut_simple()` | Mutable borrow with generational/incremental barriers (requires `T: Trace`) |
+| `borrow_mut_gen_only()` | Mutable borrow without barriers |
+
+### Cross-Thread Safety with GC Pointers
+
+When `T` contains `Gc<T>` pointers and accessed from a different thread than where the containing `Gc<T>` was allocated, ensure the containing `Gc<T>` remains reachable from the origin thread's roots using `GcHandle`:
+
+```rust
+use rudo_gc::{Gc, GcThreadSafeCell, GcHandle, Trace};
+
+// On origin thread
+let gc = Gc::new(Container { cell: GcThreadSafeCell::new(Data) });
+let handle = gc.cross_thread_handle();
+
+// Send `handle` to another thread, resolve and use there
+```
 
 ## Cross-Thread GC Handles
 

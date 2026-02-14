@@ -8,6 +8,7 @@ use crate::gc::incremental::IncrementalMarkState;
 use crate::heap::{ptr_to_page_header, PageHeader, MAGIC_GC_PAGE};
 use crate::ptr::GcBox;
 use crate::trace::Trace;
+use parking_lot::Mutex;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
@@ -88,7 +89,12 @@ use std::sync::RwLock;
 /// - Each thread has its own GC heap, and cross-thread access corrupts the heap
 /// - The write barrier operations require thread-local state
 ///
-/// For cross-thread communication, use `GcHandle` from the `handles::cross_thread` module:
+/// For cross-thread mutation, use [`GcThreadSafeCell`] instead:
+/// - Use `GcThreadSafeCell<T>` for interior mutability that can be accessed from any thread
+/// - Uses internal `Mutex` for synchronization
+/// - Works seamlessly with tokio multi-threaded runtime
+///
+/// For cross-thread communication without mutation, use `GcHandle`:
 /// - Create a handle: `let handle = gc.cross_thread_handle();`
 /// - Send the handle to any thread
 /// - Resolve back to `Gc<T>` on the origin thread: `let gc = handle.resolve();`
@@ -266,9 +272,10 @@ impl<T: ?Sized> GcCell<T> {
              they were allocated.\n\
              \n\
              Solutions:\n\
-             1. Use GcHandle for cross-thread communication (see cross_thread module)\n\
-             2. Dispatch mutations back to the main thread via channel\n\
-             3. Use single-threaded Tokio runtime"
+             1. Use GcThreadSafeCell instead of GcCell for thread-safe interior mutability\n\
+             2. Use GcHandle for cross-thread communication (see cross_thread module)\n\
+             3. Dispatch mutations back to the main thread via channel\n\
+             4. Use single-threaded Tokio runtime"
         );
     }
 
@@ -384,6 +391,8 @@ impl<T: ?Sized> GcCell<T> {
             return;
         }
 
+        // SAFETY: This fence synchronizes with the GC thread to ensure
+        // that all prior writes are visible before we check page metadata.
         std::sync::atomic::fence(Ordering::AcqRel);
 
         unsafe {
@@ -792,6 +801,404 @@ impl<T: std::fmt::Display + ?Sized> std::fmt::Display for GcCell<T> {
         self.borrow().fmt(f)
     }
 }
+
+/// A thread-safe interior mutability type for GC-managed data.
+///
+/// `GcThreadSafeCell<T>` is like `GcCell<T>` but uses a `Mutex` to allow
+/// safe mutation from any thread, including tokio worker threads.
+///
+/// # Use Cases
+///
+/// - Sharing GC-managed state between tokio tasks on different worker threads
+/// - Mutations to reactive state from async callbacks
+/// - Any case where GC-managed data needs to be updated from multiple threads
+///
+/// # Example
+///
+/// ```ignore
+/// use rudo_gc::{Gc, GcThreadSafeCell, Trace};
+///
+/// #[derive(Trace, Clone)]
+/// struct SharedState {
+///     counter: GcThreadSafeCell<i32>,
+/// }
+///
+/// // Works with multi-threaded tokio runtime
+/// let state = Gc::new(SharedState {
+///     counter: GcThreadSafeCell::new(0),
+/// });
+///
+/// // Can mutate from any thread
+/// *state.counter.borrow_mut() += 1;
+/// ```
+///
+/// # Thread Safety
+///
+/// Unlike `GcCell`, which requires all operations to occur on the allocating thread,
+/// `GcThreadSafeCell` uses internal synchronization to allow safe cross-thread access.
+/// This does introduce some overhead (lock acquisition), but ensures correctness.
+///
+/// For maximum performance when mutations are always on the same thread, use `GcCell`.
+pub struct GcThreadSafeCell<T: ?Sized> {
+    inner: Mutex<T>,
+}
+
+impl<T> GcThreadSafeCell<T> {
+    /// Creates a new `GcThreadSafeCell` containing `value`.
+    pub const fn new(value: T) -> Self {
+        Self {
+            inner: Mutex::new(value),
+        }
+    }
+
+    /// Consumes the `GcThreadSafeCell`, returning the wrapped value.
+    pub fn into_inner(self) -> T {
+        self.inner.into_inner()
+    }
+}
+
+impl<T: ?Sized> GcThreadSafeCell<T> {
+    /// Immutably borrows the wrapped value.
+    ///
+    /// The borrow lasts until the returned `MutexGuard` exits scope.
+    #[inline]
+    pub fn borrow(&self) -> parking_lot::MutexGuard<'_, T> {
+        self.inner.lock()
+    }
+
+    /// Mutably borrows the wrapped value with generational write barrier.
+    ///
+    /// This method acquires the mutex lock and performs the generational write barrier
+    /// to ensure correct GC behavior when mutations occur from any thread.
+    ///
+    /// # Type Bounds
+    ///
+    /// - `T: Trace + GcCapture` - Required for SATB barrier. Auto-implemented by `#[derive(Trace, GcCapture)]`.
+    ///
+    /// # Performance Note
+    ///
+    /// This method acquires a lock. For very high-frequency mutations, consider
+    /// whether `GcCell` on a single thread might be more appropriate.
+    ///
+    /// For types without GC pointers, use `borrow_mut_simple()` instead.
+    ///
+    /// # Cross-Thread Safety with GC Pointers
+    ///
+    /// When `T` contains `Gc<T>` pointers and this cell is accessed from a different
+    /// thread than where the containing `Gc<T>` was allocated, you must ensure the
+    /// containing `Gc<T>` remains reachable from the origin thread's roots. The
+    /// recommended pattern is to use [`GcHandle`] to explicitly root the object:
+    ///
+    /// ```ignore
+    /// use rudo_gc::{Gc, GcThreadSafeCell, GcHandle, Trace};
+    ///
+    /// // On origin thread
+    /// let gc = Gc::new(Container { cell: GcThreadSafeCell::new(Data) });
+    /// let handle = gc.cross_thread_handle(); // Keep alive across threads
+    ///
+    /// // Send `handle` to another thread, resolve and use there
+    /// ```
+    ///
+    /// Alternatively, ensure the `Gc<T>` is stored in a `GcHandle` or remains reachable
+    /// through other roots on the origin thread.
+    #[must_use]
+    #[inline]
+    pub fn borrow_mut(&self) -> GcThreadSafeRefMut<'_, T>
+    where
+        T: Trace + GcCapture,
+    {
+        let guard = self.inner.lock();
+
+        if crate::gc::incremental::is_incremental_marking_active() {
+            let value = &*guard;
+            let mut gc_ptrs = Vec::with_capacity(32);
+            value.capture_gc_ptrs_into(&mut gc_ptrs);
+            if !gc_ptrs.is_empty() {
+                if crate::heap::try_with_heap(|heap| {
+                    for gc_ptr in &gc_ptrs {
+                        let _ = heap.record_satb_old_value(*gc_ptr);
+                    }
+                })
+                .is_some()
+                {
+                    // Heap available, SATB recorded in thread-local buffer
+                } else {
+                    // No GC heap on this thread, use cross-thread buffer
+                    for gc_ptr in gc_ptrs {
+                        crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr);
+                    }
+                }
+            }
+        }
+
+        self.trigger_write_barrier();
+
+        GcThreadSafeRefMut {
+            inner: guard,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Mutably borrows the wrapped value with write barrier (except SATB).
+    ///
+    /// This method is like `borrow_mut()` but does not require `GcCapture`.
+    /// It's suitable for types that don't contain any `Gc<T>` pointers.
+    ///
+    /// Unlike `borrow_mut_gen_only()`, this method still performs the generational
+    /// and incremental write barriers.
+    ///
+    /// # When to use
+    ///
+    /// - Use this for primitive types (`i32`, `String`, etc.) that don't contain GC pointers
+    /// - Use `borrow_mut_gen_only()` if you want to skip ALL barriers for maximum performance
+    /// - Use `borrow_mut()` if your type contains `Gc<T>` pointers
+    #[inline]
+    pub fn borrow_mut_simple(&self) -> parking_lot::MutexGuard<'_, T>
+    where
+        T: Trace,
+    {
+        self.trigger_write_barrier();
+        self.inner.lock()
+    }
+
+    /// Mutably borrows the wrapped value without write barriers.
+    ///
+    /// This is an escape hatch for performance-critical code where
+    /// barrier overhead is measurable, or for types that don't contain
+    /// any GC pointers.
+    ///
+    /// # When to use
+    ///
+    /// - Use this for maximum performance when you know the type has no GC pointers
+    /// - Use `borrow_mut_simple()` if you want barriers but don't have `GcCapture`
+    /// - Use `borrow_mut()` if your type implements `GcCapture`
+    ///
+    /// # Safety
+    ///
+    /// Using this may cause incorrect collection during GC for types
+    /// containing GC pointers. Use with caution.
+    #[inline]
+    pub fn borrow_mut_gen_only(&self) -> parking_lot::MutexGuard<'_, T> {
+        self.inner.lock()
+    }
+
+    #[inline]
+    fn trigger_write_barrier(&self) {
+        let ptr = std::ptr::from_ref(self).cast::<u8>();
+
+        if crate::gc::incremental::is_generational_barrier_active() {
+            Self::generational_write_barrier(ptr);
+        }
+
+        if crate::gc::incremental::is_incremental_marking_active() {
+            Self::incremental_write_barrier(ptr);
+        }
+    }
+
+    #[inline]
+    fn incremental_write_barrier(ptr: *const u8) {
+        if !Self::is_gc_heap_pointer(ptr) {
+            return;
+        }
+
+        let state = IncrementalMarkState::global();
+
+        if !state.config().enabled || state.fallback_requested() {
+            return;
+        }
+
+        // SAFETY: This fence synchronizes with the GC thread to ensure
+        // that all prior writes are visible before we check page metadata.
+        std::sync::atomic::fence(Ordering::AcqRel);
+
+        unsafe {
+            if state.fallback_requested() {
+                return;
+            }
+
+            let header = ptr_to_page_header(ptr);
+            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+                return;
+            }
+
+            if (*header.as_ptr()).generation > 0 {
+                let _ = record_page_in_remembered_buffer(header);
+            }
+        }
+    }
+
+    #[inline]
+    fn generational_write_barrier(ptr: *const u8) {
+        if !Self::is_gc_heap_pointer(ptr) {
+            return;
+        }
+
+        unsafe {
+            crate::heap::with_heap(|heap| {
+                let page_addr = (ptr as usize) & crate::heap::page_mask();
+                let is_large = heap.large_object_map.contains_key(&page_addr);
+
+                if is_large {
+                    if let Some(&(head_addr, _, _)) = heap.large_object_map.get(&page_addr) {
+                        let header = head_addr as *mut crate::heap::PageHeader;
+                        if (*header).magic == MAGIC_GC_PAGE && (*header).generation > 0 {
+                            let block_size = (*header).block_size as usize;
+                            let header_size = (*header).header_size as usize;
+                            let header_page_addr = head_addr;
+                            let ptr_addr = ptr as usize;
+
+                            if ptr_addr >= header_page_addr + header_size {
+                                let offset = ptr_addr - (header_page_addr + header_size);
+                                let index = offset / block_size;
+
+                                if index < (*header).obj_count as usize {
+                                    (*header).set_dirty(index);
+                                    heap.add_to_dirty_pages(NonNull::new_unchecked(header));
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let header = ptr_to_page_header(ptr);
+                    if (*header.as_ptr()).magic == MAGIC_GC_PAGE
+                        && (*header.as_ptr()).generation > 0
+                    {
+                        let block_size = (*header.as_ptr()).block_size as usize;
+                        let header_size = (*header.as_ptr()).header_size as usize;
+                        let header_page_addr = header.as_ptr() as usize;
+                        let ptr_addr = ptr as usize;
+
+                        if ptr_addr >= header_page_addr + header_size {
+                            let offset = ptr_addr - (header_page_addr + header_size);
+                            let index = offset / block_size;
+
+                            if index < (*header.as_ptr()).obj_count as usize {
+                                (*header.as_ptr()).set_dirty(index);
+                                heap.add_to_dirty_pages(header);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    #[inline]
+    fn is_gc_heap_pointer(ptr: *const u8) -> bool {
+        let addr = ptr as usize;
+        if addr == 0 {
+            return false;
+        }
+
+        unsafe {
+            crate::heap::with_heap(|heap| {
+                let page_addr = addr & crate::heap::page_mask();
+
+                if heap.large_object_map.contains_key(&page_addr) {
+                    return true;
+                }
+
+                let header = ptr_to_page_header(ptr);
+                (*header.as_ptr()).magic == MAGIC_GC_PAGE
+            })
+        }
+    }
+}
+
+/// A mutable borrow of a `GcThreadSafeCell`.
+pub struct GcThreadSafeRefMut<'a, T: GcCapture + ?Sized> {
+    inner: parking_lot::MutexGuard<'a, T>,
+    _marker: std::marker::PhantomData<&'a mut T>,
+}
+
+impl<T: GcCapture + ?Sized> std::ops::Deref for GcThreadSafeRefMut<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<T: GcCapture + ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
+    fn drop(&mut self) {
+        if crate::gc::incremental::is_incremental_marking_active() {
+            let mut ptrs = Vec::with_capacity(32);
+            (*self.inner).capture_gc_ptrs_into(&mut ptrs);
+
+            for gc_ptr in ptrs {
+                let _ = unsafe {
+                    crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
+                };
+            }
+        }
+    }
+}
+
+// SAFETY: GcThreadSafeCell uses parking_lot::Mutex internally, which handles synchronization.
+// During STW pause, all mutator threads are suspended, making lock bypass safe.
+// Using data_ptr() returns a raw pointer to the inner data - no other thread can modify
+// the data during STW. This is the same pattern used in production GC implementations (Go, Java, .NET).
+unsafe impl<T: Trace + ?Sized> Trace for GcThreadSafeCell<T> {
+    #[inline]
+    fn trace(&self, visitor: &mut impl crate::trace::Visitor) {
+        let raw_ptr = self.inner.data_ptr();
+        unsafe { (*raw_ptr).trace(visitor) }
+    }
+}
+
+impl<T: GcCapture + ?Sized> GcCapture for GcThreadSafeCell<T> {
+    /// Returns empty slice because `GcThreadSafeCell` is a wrapper type.
+    ///
+    /// The cell itself doesn't directly contain `Gc` pointers—its inner `T` does.
+    /// Use `capture_gc_ptrs_into()` to capture pointers from the inner value.
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        let raw_ptr = self.inner.data_ptr();
+        unsafe { (*raw_ptr).capture_gc_ptrs_into(ptrs) }
+    }
+}
+
+impl<T: Default> Default for GcThreadSafeCell<T> {
+    fn default() -> Self {
+        Self::new(Default::default())
+    }
+}
+
+impl<T: Clone> Clone for GcThreadSafeCell<T> {
+    fn clone(&self) -> Self {
+        Self::new(self.borrow().clone())
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for GcThreadSafeCell<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.inner.try_lock() {
+            Some(guard) => guard.fmt(f),
+            None => write!(f, "<GcThreadSafeCell: locked>"),
+        }
+    }
+}
+
+// SAFETY: GcThreadSafeCell uses parking_lot::Mutex internally, which handles synchronization.
+// The mutex ensures exclusive access - only one thread can access the data at a time.
+// The GC tracing uses data_ptr() during STW pauses when no mutator threads are running.
+// parking_lot::Mutex<T> requires T: Send for Mutex<T>: Send.
+unsafe impl<T: Trace + Send + ?Sized> Send for GcThreadSafeCell<T> {}
+
+// SAFETY: GcThreadSafeCell uses parking_lot::Mutex internally, which is Send + Sync.
+// Concurrent access is protected by the mutex, and GC tracing is safe during STW pauses.
+unsafe impl<T: Trace + ?Sized> Sync for GcThreadSafeCell<T> {}
 
 #[cfg(test)]
 mod tests {

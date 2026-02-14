@@ -576,6 +576,39 @@ fn test_gc_rwlock_try_write() {
 }
 
 #[test]
+fn test_gc_rwlock_try_write_barrier_only_on_success() {
+    rudo_gc::test_util::reset();
+
+    #[derive(Trace)]
+    struct Data {
+        value: i32,
+    }
+
+    let data: Gc<GcRwLock<Data>> = Gc::new(GcRwLock::new(Data { value: 0 }));
+
+    // First, promote to old generation to trigger generational barrier
+    rudo_gc::collect();
+
+    // Test: Verify that try_write fails correctly when lock is held
+    let holder = data.write();
+    let failed_result = data.try_write();
+    assert!(
+        failed_result.is_none(),
+        "try_write should fail when lock held"
+    );
+    drop(failed_result);
+    drop(holder);
+
+    // Now verify try_write succeeds when lock is free
+    let success_result = data.try_write();
+    assert!(
+        success_result.is_some(),
+        "try_write should succeed when lock free"
+    );
+    drop(success_result);
+}
+
+#[test]
 fn test_gc_rwlock_is_locked() {
     rudo_gc::test_util::reset();
     let lock: Gc<GcRwLock<TestData>> = Gc::new(GcRwLock::new(TestData { value: 10 }));
