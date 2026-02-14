@@ -29,7 +29,8 @@ static CROSS_THREAD_SATB_BUFFER: parking_lot::Mutex<Vec<usize>> =
 
 // Thread-local storage for the current thread's stable ID.
 // Assigned once when the thread first accesses the heap.
-// This is used for thread safety checks in GcCell.
+// IDs start at 1; 0 is reserved as a sentinel for "no associated thread"
+// (e.g., objects outside the GC heap or deallocated objects).
 thread_local! {
     static THREAD_STABLE_ID: u64 = {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -49,6 +50,9 @@ pub(crate) fn get_thread_id() -> u64 {
 /// Get the allocating thread's stable ID (u64) for a `GcBox` address.
 /// Uses the page header's `owner_thread` field instead of the global `HashMap`.
 /// Returns 0 if the address is not in the GC heap.
+///
+/// Note: 0 is a sentinel value meaning "no associated thread".
+/// This occurs for objects outside the GC heap or deallocated objects.
 ///
 /// # Safety
 /// - `gc_box_addr` must point to a valid `GcBox` in the heap

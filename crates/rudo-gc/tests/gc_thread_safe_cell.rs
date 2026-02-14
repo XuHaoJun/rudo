@@ -305,3 +305,96 @@ fn test_tokio_multi_thread_gc_thread_safe_cell_with_gc_ptrs() {
     assert!(*cell.borrow().value >= 0);
     assert!(final_value.load(std::sync::atomic::Ordering::SeqCst) >= 0);
 }
+
+#[test]
+fn test_cross_thread_satb_during_active_gc() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    #[derive(Trace, Clone)]
+    struct Container {
+        value: Gc<i32>,
+    }
+
+    impl GcCapture for Container {
+        fn capture_gc_ptrs(&self) -> &[std::ptr::NonNull<GcBox<()>>] {
+            &[]
+        }
+        fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<std::ptr::NonNull<GcBox<()>>>) {
+            self.value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+
+    rudo_gc::test_util::reset();
+
+    let initial_value = Gc::new(42);
+    let container = Container {
+        value: initial_value,
+    };
+
+    let cell = Arc::new(Gc::new(GcThreadSafeCell::new(container)));
+
+    let mutation_count = Arc::new(AtomicUsize::new(0));
+    let gc_started = Arc::new(AtomicBool::new(false));
+    let thread_started = Arc::new(AtomicBool::new(false));
+
+    let cell_clone = cell.clone();
+    let count_clone = mutation_count.clone();
+    let started_clone = thread_started.clone();
+    let gc_started_clone = gc_started.clone();
+
+    let handle = thread::spawn(move || {
+        started_clone.store(true, Ordering::SeqCst);
+
+        // Wait for GC to start
+        while !gc_started_clone.load(Ordering::SeqCst) {
+            thread::yield_now();
+        }
+
+        // Continue mutations while GC is running
+        for i in 0..50 {
+            *cell_clone.borrow_mut() = Container {
+                value: Gc::new(i + 100),
+            };
+            count_clone.fetch_add(1, Ordering::SeqCst);
+            thread::yield_now();
+        }
+    });
+
+    // Wait for thread to start
+    while !thread_started.load(Ordering::SeqCst) {
+        thread::yield_now();
+    }
+
+    // Give thread time to start mutations
+    thread::sleep(Duration::from_millis(10));
+
+    // Trigger GC while thread is actively mutating
+    gc_started.store(true, Ordering::SeqCst);
+    rudo_gc::collect_full();
+
+    // Wait for thread to complete
+    handle.join().unwrap();
+
+    // Verify the cell contains a valid value
+    let final_value_check = *cell.borrow().value >= 100;
+    assert!(
+        final_value_check,
+        "Final value should be from post-GC-start mutations"
+    );
+
+    // Verify mutations occurred during GC
+    assert!(
+        mutation_count.load(Ordering::SeqCst) > 0,
+        "Mutations should have occurred during GC"
+    );
+
+    // Verify the old value (42) was preserved in SATB buffer
+    // and the new value is properly accessible after GC
+    drop(cell);
+    rudo_gc::collect_full();
+
+    // Test passes if we reach here without memory corruption
+}

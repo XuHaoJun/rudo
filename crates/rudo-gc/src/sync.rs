@@ -339,10 +339,12 @@ impl<T: ?Sized> GcRwLock<T> {
     /// ```
     #[inline]
     pub fn try_write(&self) -> Option<GcRwLockWriteGuard<'_, T>> {
-        self.trigger_write_barrier();
-        self.inner.try_write().map(|guard| GcRwLockWriteGuard {
-            guard,
-            _marker: PhantomData,
+        self.inner.try_write().map(|guard| {
+            self.trigger_write_barrier();
+            GcRwLockWriteGuard {
+                guard,
+                _marker: PhantomData,
+            }
         })
     }
 
