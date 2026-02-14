@@ -911,11 +911,20 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
             let mut gc_ptrs = Vec::with_capacity(32);
             value.capture_gc_ptrs_into(&mut gc_ptrs);
             if !gc_ptrs.is_empty() {
-                crate::heap::with_heap(|heap| {
-                    for gc_ptr in gc_ptrs {
-                        let _ = heap.record_satb_old_value(gc_ptr);
+                if crate::heap::try_with_heap(|heap| {
+                    for gc_ptr in &gc_ptrs {
+                        let _ = heap.record_satb_old_value(*gc_ptr);
                     }
-                });
+                })
+                .is_some()
+                {
+                    // Heap available, SATB recorded in thread-local buffer
+                } else {
+                    // No GC heap on this thread, use cross-thread buffer
+                    for gc_ptr in gc_ptrs {
+                        crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr);
+                    }
+                }
             }
         }
 

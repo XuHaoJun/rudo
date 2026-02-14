@@ -1699,6 +1699,14 @@ impl LocalHeap {
             .collect()
     }
 
+    /// Push a GC pointer to the cross-thread SATB buffer.
+    /// Used when recording SATB old values from threads without a GC heap.
+    pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) {
+        CROSS_THREAD_SATB_BUFFER
+            .lock()
+            .push(gc_ptr.as_ptr() as usize);
+    }
+
     fn satb_buffer_overflowed(&mut self) -> bool {
         self.satb_overflow_buffer.append(&mut self.satb_old_values);
         crate::gc::incremental::IncrementalMarkState::global()
@@ -2581,6 +2589,17 @@ where
     F: FnOnce(&mut LocalHeap) -> R,
 {
     HEAP.with(|local| unsafe { f(&mut *local.tcb.heap.get()) })
+}
+
+/// Execute a function with mutable access to the thread-local heap.
+/// Returns None if called from a thread without an initialized GC heap.
+#[inline]
+pub fn try_with_heap<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut LocalHeap) -> R,
+{
+    HEAP.try_with(|local| unsafe { f(&mut *local.tcb.heap.get()) })
+        .ok()
 }
 
 /// Execute a function with mutable access to the thread-local heap and its control block.

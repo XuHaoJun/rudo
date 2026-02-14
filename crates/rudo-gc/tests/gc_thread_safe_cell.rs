@@ -209,3 +209,36 @@ fn test_borrow_mut_with_gc_ptrs() {
 
     assert_eq!(*wrapper.cell.borrow().inner, 100);
 }
+
+#[test]
+fn test_cross_thread_borrow_mut_gc_correctness() {
+    #[derive(Trace, Clone)]
+    struct Container {
+        value: Gc<i32>,
+    }
+
+    impl GcCapture for Container {
+        fn capture_gc_ptrs(&self) -> &[std::ptr::NonNull<GcBox<()>>] {
+            &[]
+        }
+        fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<std::ptr::NonNull<GcBox<()>>>) {
+            self.value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+
+    let container = Container { value: Gc::new(42) };
+
+    let cell = Arc::new(Gc::new(GcThreadSafeCell::new(container)));
+
+    let cell_clone = cell.clone();
+
+    let handle = std::thread::spawn(move || {
+        for i in 0..10 {
+            *cell_clone.borrow_mut() = Container { value: Gc::new(i) };
+        }
+    });
+
+    handle.join().unwrap();
+
+    assert!(*cell.borrow().value >= 0);
+}
