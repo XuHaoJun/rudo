@@ -451,7 +451,10 @@ impl<T: ?Sized> DerefMut for GcRwLockWriteGuard<'_, T> {
 }
 
 impl<T: ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        // Guard is dropped automatically when it goes out of scope
+        // The parking_lot guard will release the write lock
+    }
 }
 
 /// Exclusive mutex wrapper for GC objects.
