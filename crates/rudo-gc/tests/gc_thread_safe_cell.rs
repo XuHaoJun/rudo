@@ -211,6 +211,11 @@ fn test_borrow_mut_with_gc_ptrs() {
     wrapper.cell.borrow_mut().inner = Gc::new(100);
 
     assert_eq!(*wrapper.cell.borrow().inner, 100);
+
+    let wrapper_clone = Gc::clone(&wrapper);
+    drop(wrapper);
+    collect_full();
+    assert_eq!(*wrapper_clone.cell.borrow().inner, 100);
 }
 
 #[test]
@@ -244,8 +249,12 @@ fn test_cross_thread_borrow_mut_gc_correctness() {
     handle.join().unwrap();
 
     assert!(*cell.borrow().value >= 0);
+
+    drop(cell);
+    collect_full();
 }
 
+#[cfg(feature = "tokio")]
 #[test]
 fn test_tokio_multi_thread_gc_thread_safe_cell_with_gc_ptrs() {
     #[derive(Trace, Clone)]

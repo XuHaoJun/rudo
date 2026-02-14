@@ -899,6 +899,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     ///
     /// Alternatively, ensure the `Gc<T>` is stored in a `GcHandle` or remains reachable
     /// through other roots on the origin thread.
+    #[must_use]
     #[inline]
     pub fn borrow_mut(&self) -> GcThreadSafeRefMut<'_, T>
     where
@@ -930,20 +931,6 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 
         self.trigger_write_barrier();
 
-        if crate::gc::incremental::is_incremental_marking_active() {
-            unsafe {
-                let new_value = &*guard;
-                let mut new_gc_ptrs = Vec::with_capacity(32);
-                new_value.capture_gc_ptrs_into(&mut new_gc_ptrs);
-                if !new_gc_ptrs.is_empty() {
-                    for gc_ptr in new_gc_ptrs {
-                        let _ =
-                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
-                    }
-                }
-            }
-        }
-
         GcThreadSafeRefMut {
             inner: guard,
             _marker: std::marker::PhantomData,
@@ -964,16 +951,12 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     /// - Use `borrow_mut_gen_only()` if you want to skip ALL barriers for maximum performance
     /// - Use `borrow_mut()` if your type contains `Gc<T>` pointers
     #[inline]
-    pub fn borrow_mut_simple(&self) -> GcThreadSafeRefMut<'_, T>
+    pub fn borrow_mut_simple(&self) -> parking_lot::MutexGuard<'_, T>
     where
         T: Trace,
     {
         self.trigger_write_barrier();
-
-        GcThreadSafeRefMut {
-            inner: self.inner.lock(),
-            _marker: std::marker::PhantomData,
-        }
+        self.inner.lock()
     }
 
     /// Mutably borrows the wrapped value without write barriers.
@@ -1119,12 +1102,12 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 }
 
 /// A mutable borrow of a `GcThreadSafeCell`.
-pub struct GcThreadSafeRefMut<'a, T: ?Sized> {
+pub struct GcThreadSafeRefMut<'a, T: GcCapture + ?Sized> {
     inner: parking_lot::MutexGuard<'a, T>,
     _marker: std::marker::PhantomData<&'a mut T>,
 }
 
-impl<T: ?Sized> std::ops::Deref for GcThreadSafeRefMut<'_, T> {
+impl<T: GcCapture + ?Sized> std::ops::Deref for GcThreadSafeRefMut<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -1132,9 +1115,28 @@ impl<T: ?Sized> std::ops::Deref for GcThreadSafeRefMut<'_, T> {
     }
 }
 
-impl<T: ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
+impl<T: GcCapture + ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
+    }
+}
+
+impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
+    fn drop(&mut self) {
+        if crate::gc::incremental::is_incremental_marking_active() {
+            let value = &*self.inner;
+            unsafe {
+                let mut new_gc_ptrs: Vec<std::ptr::NonNull<crate::GcBox<()>>> =
+                    Vec::with_capacity(32);
+                value.capture_gc_ptrs_into(&mut new_gc_ptrs);
+                if !new_gc_ptrs.is_empty() {
+                    for gc_ptr in new_gc_ptrs {
+                        let _ =
+                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
+                    }
+                }
+            }
+        }
     }
 }
 
