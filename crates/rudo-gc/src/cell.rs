@@ -914,6 +914,40 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         if crate::gc::incremental::is_generational_barrier_active() {
             Self::generational_write_barrier(ptr);
         }
+
+        if crate::gc::incremental::is_incremental_marking_active() {
+            Self::incremental_write_barrier(ptr);
+        }
+    }
+
+    #[inline]
+    fn incremental_write_barrier(ptr: *const u8) {
+        if !Self::is_gc_heap_pointer(ptr) {
+            return;
+        }
+
+        let state = IncrementalMarkState::global();
+
+        if !state.config().enabled || state.fallback_requested() {
+            return;
+        }
+
+        std::sync::atomic::fence(Ordering::AcqRel);
+
+        unsafe {
+            if state.fallback_requested() {
+                return;
+            }
+
+            let header = ptr_to_page_header(ptr);
+            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+                return;
+            }
+
+            if (*header.as_ptr()).generation > 0 {
+                let _ = record_page_in_remembered_buffer(header);
+            }
+        }
     }
 
     #[inline]
@@ -997,7 +1031,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 /// A mutable borrow of a `GcThreadSafeCell`.
 pub struct GcThreadSafeRefMut<'a, T: ?Sized> {
     inner: parking_lot::MutexGuard<'a, T>,
-    _marker: std::marker::PhantomData<*const ()>,
+    _marker: std::marker::PhantomData<*mut ()>,
 }
 
 impl<T: ?Sized> std::ops::Deref for GcThreadSafeRefMut<'_, T> {
