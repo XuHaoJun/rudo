@@ -176,8 +176,10 @@ impl<T: ?Sized> GcCell<T> {
             }
         }
 
-        self.generational_write_barrier(ptr);
-        self.incremental_write_barrier(ptr);
+        crate::heap::simple_write_barrier(ptr);
+        if crate::gc::incremental::is_incremental_marking_active() {
+            crate::heap::incremental_write_barrier(ptr);
+        }
 
         let result = self.inner.borrow_mut();
 
@@ -317,6 +319,7 @@ impl<T: ?Sized> GcCell<T> {
     /// **Important**: This barrier remains active through ALL phases of incremental
     /// marking (including `FinalMark`), not just during Marking. Mutations during
     /// `FinalMark` must still be recorded for correctness.
+    #[allow(dead_code)]
     #[allow(clippy::unused_self)]
     fn generational_write_barrier(&self, ptr: *const u8) {
         if !self.is_gc_heap_pointer(ptr) {
@@ -987,14 +990,15 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
         if crate::gc::incremental::is_generational_barrier_active() {
-            Self::generational_write_barrier(ptr);
+            crate::heap::simple_write_barrier(ptr);
         }
 
         if crate::gc::incremental::is_incremental_marking_active() {
-            Self::incremental_write_barrier(ptr);
+            crate::heap::incremental_write_barrier(ptr);
         }
     }
 
+    #[allow(dead_code)]
     #[inline]
     fn incremental_write_barrier(ptr: *const u8) {
         if !Self::is_gc_heap_pointer(ptr) {
@@ -1027,6 +1031,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         }
     }
 
+    #[allow(dead_code)]
     #[inline]
     fn generational_write_barrier(ptr: *const u8) {
         if !Self::is_gc_heap_pointer(ptr) {

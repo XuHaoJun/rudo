@@ -2384,6 +2384,103 @@ impl LocalHeap {
     }
 }
 
+/// Unified write barrier for generational GC.
+///
+/// This function handles both small and large objects, sets the per-object
+/// dirty bit, and adds the page to the dirty pages list.
+///
+/// # Arguments
+/// * `ptr` - Raw pointer to the field being mutated (not the containing object)
+#[allow(dead_code)]
+#[inline]
+pub fn simple_write_barrier(ptr: *const u8) {
+    if ptr.is_null() {
+        return;
+    }
+
+    let ptr_addr = ptr as usize;
+    let heap_start = heap_start();
+    let heap_end = heap_end();
+
+    if ptr_addr < heap_start || ptr_addr > heap_end {
+        return;
+    }
+
+    unsafe {
+        let header = ptr_to_page_header(ptr);
+
+        if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+            return;
+        }
+
+        if (*header.as_ptr()).generation == 0 {
+            return;
+        }
+
+        let block_size = (*header.as_ptr()).block_size as usize;
+        let header_size = (*header.as_ptr()).header_size as usize;
+        let header_page_addr = header.as_ptr() as usize;
+
+        if ptr_addr < header_page_addr + header_size {
+            return;
+        }
+
+        let offset = ptr_addr - (header_page_addr + header_size);
+        let index = offset / block_size;
+        let obj_count = (*header.as_ptr()).obj_count as usize;
+
+        if index >= obj_count {
+            return;
+        }
+
+        (*header.as_ptr()).set_dirty(index);
+
+        crate::heap::with_heap(|heap| {
+            heap.add_to_dirty_pages(header);
+        });
+    }
+}
+
+/// Unified incremental write barrier (SATB remembered set).
+///
+/// Records old-generation pages in the remembered buffer for incremental GC.
+#[allow(dead_code)]
+#[inline]
+pub fn incremental_write_barrier(ptr: *const u8) {
+    if ptr.is_null() {
+        return;
+    }
+
+    let ptr_addr = ptr as usize;
+    let heap_start = heap_start();
+    let heap_end = heap_end();
+
+    if ptr_addr < heap_start || ptr_addr > heap_end {
+        return;
+    }
+
+    // SAFETY: This fence synchronizes with the GC thread to ensure
+    // that all prior writes are visible before we record in the remembered set.
+    // Required for SATB correctness in incremental GC.
+    std::sync::atomic::fence(Ordering::AcqRel);
+
+    unsafe {
+        let header = ptr_to_page_header(ptr);
+
+        if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+            return;
+        }
+
+        if (*header.as_ptr()).generation == 0 {
+            return;
+        }
+
+        crate::heap::with_heap(|heap| {
+            heap.record_in_remembered_buffer(header);
+        });
+    }
+}
+
 impl Default for LocalHeap {
     fn default() -> Self {
         Self::new()
