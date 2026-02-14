@@ -71,7 +71,7 @@ fn test_gc_thread_safe_cell_with_gc_ptrs() {
     assert_eq!(*signal.value.borrow(), 0);
     assert_eq!(**signal.child, 42);
 
-    *signal.value.borrow_mut_gen_only() = 100;
+    *signal.value.borrow_mut_simple() = 100;
     assert_eq!(*signal.value.borrow(), 100);
 }
 

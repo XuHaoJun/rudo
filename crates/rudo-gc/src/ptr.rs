@@ -744,9 +744,6 @@ impl<T: Trace> Gc<T> {
 
         let gc_box_ptr = unsafe { NonNull::new_unchecked(gc_box) };
 
-        // Register the allocating thread for cross-thread SATB barrier
-        crate::heap::register_gc_box_allocating_thread(gc_box as usize);
-
         // Mark as black (live) during incremental marking
         // This is the SATB "black allocation" optimization
         #[allow(clippy::ptr_as_ptr)]
@@ -806,9 +803,6 @@ impl<T: Trace> Gc<T> {
                         value: (),
                     });
                 }
-
-                // Register the allocating thread for cross-thread SATB barrier
-                crate::heap::register_gc_box_allocating_thread(gc_box as usize);
 
                 // Try to CAS our allocation into the singleton slot
                 let null_ptr: *mut GcBox<()> = std::ptr::null_mut();
@@ -886,9 +880,6 @@ impl<T: Trace> Gc<T> {
         }
 
         let gc_box_ptr = unsafe { NonNull::new_unchecked(gc_box) };
-
-        // Register the allocating thread for cross-thread SATB barrier
-        crate::heap::register_gc_box_allocating_thread(gc_box as usize);
 
         let gc = Self {
             ptr: AtomicNullable::new(gc_box_ptr),

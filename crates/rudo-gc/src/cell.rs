@@ -879,6 +879,26 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     /// whether `GcCell` on a single thread might be more appropriate.
     ///
     /// For types without GC pointers, use `borrow_mut_simple()` instead.
+    ///
+    /// # Cross-Thread Safety with GC Pointers
+    ///
+    /// When `T` contains `Gc<T>` pointers and this cell is accessed from a different
+    /// thread than where the containing `Gc<T>` was allocated, you must ensure the
+    /// containing `Gc<T>` remains reachable from the origin thread's roots. The
+    /// recommended pattern is to use [`GcHandle`] to explicitly root the object:
+    ///
+    /// ```ignore
+    /// use rudo_gc::{Gc, GcThreadSafeCell, GcHandle, Trace};
+    ///
+    /// // On origin thread
+    /// let gc = Gc::new(Container { cell: GcThreadSafeCell::new(Data) });
+    /// let handle = gc.cross_thread_handle(); // Keep alive across threads
+    ///
+    /// // Send `handle` to another thread, resolve and use there
+    /// ```
+    ///
+    /// Alternatively, ensure the `Gc<T>` is stored in a `GcHandle` or remains reachable
+    /// through other roots on the origin thread.
     #[inline]
     pub fn borrow_mut(&self) -> GcThreadSafeRefMut<'_, T>
     where
