@@ -936,13 +936,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                 let mut new_gc_ptrs = Vec::with_capacity(32);
                 new_value.capture_gc_ptrs_into(&mut new_gc_ptrs);
                 if !new_gc_ptrs.is_empty() {
-                    crate::heap::with_heap(|_heap| {
-                        for gc_ptr in new_gc_ptrs {
-                            let _ = crate::gc::incremental::mark_object_black(
-                                gc_ptr.as_ptr() as *const u8
-                            );
-                        }
-                    });
+                    for gc_ptr in new_gc_ptrs {
+                        let _ =
+                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
+                    }
                 }
             }
         }

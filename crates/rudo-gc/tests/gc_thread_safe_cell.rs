@@ -1,5 +1,8 @@
 #![allow(clippy::await_holding_refcell_ref)]
 
+#[cfg(feature = "tokio")]
+use tokio as _;
+
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -241,4 +244,51 @@ fn test_cross_thread_borrow_mut_gc_correctness() {
     handle.join().unwrap();
 
     assert!(*cell.borrow().value >= 0);
+}
+
+#[test]
+fn test_tokio_multi_thread_gc_thread_safe_cell_with_gc_ptrs() {
+    #[derive(Trace, Clone)]
+    struct Container {
+        value: Gc<i32>,
+    }
+
+    impl GcCapture for Container {
+        fn capture_gc_ptrs(&self) -> &[std::ptr::NonNull<GcBox<()>>] {
+            &[]
+        }
+        fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<std::ptr::NonNull<GcBox<()>>>) {
+            self.value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+
+    let cell = Arc::new(Gc::new(GcThreadSafeCell::new(Container {
+        value: Gc::new(42),
+    })));
+
+    let cell_clone = cell.clone();
+    let final_value = Arc::new(std::sync::atomic::AtomicI32::new(0));
+
+    let final_value_clone = final_value.clone();
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(2)
+        .build()
+        .unwrap();
+
+    rt.block_on(async {
+        let handle = tokio::spawn(async move {
+            for i in 0..10 {
+                *cell_clone.borrow_mut() = Container { value: Gc::new(i) };
+            }
+            *cell_clone.borrow().value
+        });
+
+        let result = handle.await.unwrap();
+        final_value_clone.store(result, std::sync::atomic::Ordering::SeqCst);
+    });
+
+    assert!(*cell.borrow().value >= 0);
+    assert!(final_value.load(std::sync::atomic::Ordering::SeqCst) >= 0);
 }
