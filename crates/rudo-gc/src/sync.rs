@@ -319,6 +319,10 @@ impl<T: ?Sized> GcRwLock<T> {
     /// Returns `Some` with a write guard if no readers or writers hold the lock,
     /// or `None` if the lock is currently held.
     ///
+    /// **Note**: This method always triggers the write barrier (for SATB correctness)
+    /// even when it fails to acquire the lock and returns `None`. This ensures
+    /// cross-thread GC correctness regardless of whether the write succeeds.
+    ///
     /// # Examples
     ///
     /// ```

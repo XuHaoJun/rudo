@@ -156,6 +156,10 @@ fn test_concurrent_gc_ptr_mutation() {
         inner: Gc<i32>,
     }
 
+    // Note: Using borrow_mut_gen_only() here is safe because:
+    // 1. No GC collection runs during this test (no explicit collect_full())
+    // 2. The generational/incremental barriers are unnecessary when no GC runs
+    // In production code, always use borrow_mut() for types containing Gc<T>
     let cell = Arc::new(Gc::new(GcThreadSafeCell::new(Container {
         inner: Gc::new(0),
     })));

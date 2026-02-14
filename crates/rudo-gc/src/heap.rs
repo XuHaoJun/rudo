@@ -49,16 +49,33 @@ pub(crate) fn get_thread_id() -> u64 {
 /// Get the allocating thread's stable ID (u64) for a `GcBox` address.
 /// Uses the page header's `owner_thread` field instead of the global `HashMap`.
 /// Returns 0 if the address is not in the GC heap.
+///
+/// # Safety
+/// - `gc_box_addr` must point to a valid `GcBox` in the heap
+/// - The `GcBox` must not have been deallocated
 #[must_use]
-pub(crate) fn get_allocating_thread_id(gc_box_addr: usize) -> u64 {
+pub(crate) unsafe fn get_allocating_thread_id(gc_box_addr: usize) -> u64 {
     let heap_start = heap_start();
     let heap_end = heap_end();
+
+    debug_assert!(
+        gc_box_addr >= heap_start && gc_box_addr <= heap_end,
+        "Address {gc_box_addr:#x} outside heap range [{heap_start:#x}, {heap_end:#x}]"
+    );
 
     if gc_box_addr < heap_start || gc_box_addr > heap_end {
         return 0;
     }
 
     let header = unsafe { ptr_to_page_header(gc_box_addr as *const u8) };
+
+    if let Some(idx) = unsafe { ptr_to_object_index(gc_box_addr as *const u8) } {
+        debug_assert!(
+            unsafe { (*header.as_ptr()).is_allocated(idx) },
+            "Reading owner_thread from potentially free'd object at index {idx}"
+        );
+    }
+
     unsafe { (*header.as_ptr()).owner_thread }
 }
 
@@ -1671,7 +1688,7 @@ impl LocalHeap {
     /// overflowed and fallback was requested.
     pub fn record_satb_old_value(&mut self, gc_box: NonNull<GcBox<()>>) -> bool {
         let current_thread_id = get_thread_id();
-        let allocating_thread_id = get_allocating_thread_id(gc_box.as_ptr() as usize);
+        let allocating_thread_id = unsafe { get_allocating_thread_id(gc_box.as_ptr() as usize) };
 
         if current_thread_id != allocating_thread_id && allocating_thread_id != 0 {
             CROSS_THREAD_SATB_BUFFER
