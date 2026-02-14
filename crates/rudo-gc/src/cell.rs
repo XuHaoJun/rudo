@@ -76,6 +76,25 @@ use std::sync::RwLock;
 /// let cell = GcCell::new(Gc::new(Data));
 /// cell.borrow_mut_with_satb();  // Full barrier
 /// ```
+///
+/// # Thread Safety
+///
+/// `GcCell` is **not thread-safe**. It must only be accessed from the thread
+/// where the containing `Gc` object was allocated. Accessing from other threads
+/// (including tokio worker threads) will cause a panic with a clear error message.
+///
+/// This is because:
+/// - `GcCell` is based on `RefCell`, which is intentionally `!Sync`
+/// - Each thread has its own GC heap, and cross-thread access corrupts the heap
+/// - The write barrier operations require thread-local state
+///
+/// For cross-thread communication, use `GcHandle` from the `handles::cross_thread` module:
+/// - Create a handle: `let handle = gc.cross_thread_handle();`
+/// - Send the handle to any thread
+/// - Resolve back to `Gc<T>` on the origin thread: `let gc = handle.resolve();`
+///
+/// Alternatively, dispatch mutations back to the main thread via a channel,
+/// or use a single-threaded Tokio runtime.
 pub struct GcCell<T: ?Sized> {
     inner: RefCell<T>,
 }
@@ -105,6 +124,7 @@ impl<T: ?Sized> GcCell<T> {
     /// Panics if the value is currently mutably borrowed.
     #[inline]
     pub fn borrow(&self) -> Ref<'_, T> {
+        self.validate_thread_affinity("borrow");
         self.inner.borrow()
     }
 
@@ -129,6 +149,8 @@ impl<T: ?Sized> GcCell<T> {
     where
         T: GcCapture,
     {
+        self.validate_thread_affinity("borrow_mut");
+
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
         if crate::gc::incremental::is_incremental_marking_active() {
@@ -212,8 +234,42 @@ impl<T: ?Sized> GcCell<T> {
     /// Panics if the value is currently borrowed.
     #[inline]
     pub fn borrow_mut_gen_only(&self) -> RefMut<'_, T> {
-        // No barriers - fastest option
+        self.validate_thread_affinity("borrow_mut_gen_only");
         self.inner.borrow_mut()
+    }
+
+    #[inline]
+    fn validate_thread_affinity(&self, context: &str) {
+        let cell_ptr = std::ptr::from_ref(self).cast::<u8>();
+
+        let heap_start = crate::heap::heap_start();
+        let heap_end = crate::heap::heap_end();
+        let ptr_addr = cell_ptr as usize;
+
+        if ptr_addr < heap_start || ptr_addr > heap_end {
+            return;
+        }
+
+        let header = unsafe { crate::heap::ptr_to_page_header(cell_ptr) };
+        let owner = unsafe { (*header.as_ptr()).owner_thread };
+
+        let current = crate::heap::get_thread_id();
+
+        assert!(
+            owner == 0 || owner == current,
+            "Thread safety violation: {context} called on GcCell allocated by a different thread.\n\
+             - Current thread ID: {current}\n\
+             - Allocating thread ID: {owner}\n\
+             \n\
+             GcCell is not thread-safe. Gc objects and their fields must not be\n\
+             accessed from tokio worker threads or other threads different from where\n\
+             they were allocated.\n\
+             \n\
+             Solutions:\n\
+             1. Use GcHandle for cross-thread communication (see cross_thread module)\n\
+             2. Dispatch mutations back to the main thread via channel\n\
+             3. Use single-threaded Tokio runtime"
+        );
     }
 
     #[allow(dead_code)]
@@ -877,5 +933,17 @@ mod tests {
         let mut ptrs = Vec::new();
         cell.capture_gc_ptrs_into(&mut ptrs);
         assert_eq!(ptrs.len(), 2);
+    }
+
+    #[test]
+    fn test_same_thread_borrow_works() {
+        let cell = GcCell::new(42i32);
+        let _ = cell.borrow();
+
+        let mut borrow = cell.borrow_mut_gen_only();
+        *borrow = 100;
+        drop(borrow);
+
+        assert_eq!(*cell.borrow(), 100);
     }
 }

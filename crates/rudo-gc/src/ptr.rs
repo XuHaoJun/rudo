@@ -1705,12 +1705,30 @@ impl<T: Trace> Clone for Weak<T> {
     }
 }
 
+#[inline]
+fn is_gc_box_pointer_valid(ptr_addr: usize) -> bool {
+    let heap_start = crate::heap::heap_start();
+    let heap_end = crate::heap::heap_end();
+
+    if heap_start <= heap_end && ptr_addr >= heap_start && ptr_addr < heap_end {
+        return true;
+    }
+
+    false
+}
+
 impl<T: Trace> Drop for Weak<T> {
     fn drop(&mut self) {
         let ptr = self.ptr.load(Ordering::Relaxed);
         let Some(ptr) = ptr.as_option() else {
             return;
         };
+
+        let ptr_addr = ptr.as_ptr() as usize;
+        if !is_gc_box_pointer_valid(ptr_addr) {
+            self.ptr.set_null();
+            return;
+        }
 
         // SAFETY: Use raw pointer access to weak_count field directly.
         // This is critical for Stacked Borrows compliance: when Weak::drop is called

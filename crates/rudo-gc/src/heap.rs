@@ -21,14 +21,23 @@ use sys_alloc::{Mmap, MmapOptions};
 use crate::handles::{AsyncScopeData, AsyncScopeEntry, LocalHandles};
 use crate::ptr::GcBox;
 
+// Thread-local storage for the current thread's stable ID.
+// Assigned once when the thread first accesses the heap.
+// This is used for thread safety checks in GcCell.
+thread_local! {
+    static THREAD_STABLE_ID: u64 = {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    };
+}
+
 /// Get a unique identifier for the current thread.
-/// Uses the stack address which is unique per thread.
+/// Uses a stable ID assigned when the thread first accesses the heap.
+/// This is different from the stack-address-based ID used for page ownership.
 #[must_use]
 #[allow(clippy::ptr_as_ptr, clippy::unnecessary_cast)]
 pub(crate) fn get_thread_id() -> u64 {
-    let local_var = 0u64;
-    let ptr = &raw const local_var as *const u64 as *const u8;
-    ptr as usize as u64
+    THREAD_STABLE_ID.with(|id| *id)
 }
 
 // ============================================================================
