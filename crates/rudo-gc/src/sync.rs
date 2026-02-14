@@ -41,11 +41,9 @@ use parking_lot::{Mutex, RwLock};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
-use std::sync::atomic::Ordering;
 
 use crate::cell::GcCapture;
 use crate::gc::incremental::{is_generational_barrier_active, is_incremental_marking_active};
-use crate::heap::{ptr_to_page_header, MAGIC_GC_PAGE};
 use crate::ptr::GcBox;
 use crate::Trace;
 
@@ -108,99 +106,12 @@ impl<T: ?Sized> GcRwLock<T> {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
         if is_generational_barrier_active() {
-            Self::generational_write_barrier(ptr);
+            crate::heap::simple_write_barrier(ptr);
         }
 
         if is_incremental_marking_active() {
-            Self::incremental_write_barrier(ptr);
+            crate::heap::incremental_write_barrier(ptr);
         }
-    }
-
-    #[inline]
-    fn generational_write_barrier(ptr: *const u8) {
-        if !Self::is_gc_heap_pointer(ptr) {
-            return;
-        }
-
-        unsafe {
-            crate::heap::with_heap(|heap| {
-                let page_addr = (ptr as usize) & crate::heap::page_mask();
-                let is_large = heap.large_object_map.contains_key(&page_addr);
-
-                if is_large {
-                    if let Some(&(head_addr, _, _)) = heap.large_object_map.get(&page_addr) {
-                        let header = head_addr as *mut crate::heap::PageHeader;
-                        if (*header).magic == MAGIC_GC_PAGE && (*header).generation > 0 {
-                            let block_size = (*header).block_size as usize;
-                            let header_size = (*header).header_size as usize;
-                            let header_page_addr = head_addr;
-                            let ptr_addr = ptr as usize;
-
-                            if ptr_addr >= header_page_addr + header_size {
-                                let offset = ptr_addr - (header_page_addr + header_size);
-                                let index = offset / block_size;
-
-                                if index < (*header).obj_count as usize {
-                                    (*header).set_dirty(index);
-                                    heap.add_to_dirty_pages(NonNull::new_unchecked(header));
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    let header = ptr_to_page_header(ptr);
-                    if (*header.as_ptr()).magic == MAGIC_GC_PAGE
-                        && (*header.as_ptr()).generation > 0
-                    {
-                        let block_size = (*header.as_ptr()).block_size as usize;
-                        let header_size = (*header.as_ptr()).header_size as usize;
-                        let header_page_addr = header.as_ptr() as usize;
-                        let ptr_addr = ptr as usize;
-
-                        if ptr_addr >= header_page_addr + header_size {
-                            let offset = ptr_addr - (header_page_addr + header_size);
-                            let index = offset / block_size;
-
-                            if index < (*header.as_ptr()).obj_count as usize {
-                                (*header.as_ptr()).set_dirty(index);
-                                heap.add_to_dirty_pages(header);
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    #[inline]
-    fn incremental_write_barrier(ptr: *const u8) {
-        if !Self::is_gc_heap_pointer(ptr) {
-            return;
-        }
-
-        std::sync::atomic::fence(Ordering::AcqRel);
-
-        unsafe {
-            let header = ptr_to_page_header(ptr);
-            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
-                return;
-            }
-
-            if (*header.as_ptr()).generation > 0 {
-                crate::heap::with_heap(|heap| {
-                    heap.record_in_remembered_buffer(header);
-                });
-            }
-        }
-    }
-
-    #[inline]
-    fn is_gc_heap_pointer(ptr: *const u8) -> bool {
-        let ptr_addr = ptr as usize;
-        let heap_start = crate::heap::heap_start();
-        let heap_end = crate::heap::heap_end();
-
-        ptr_addr >= heap_start && ptr_addr <= heap_end
     }
 
     /// Creates a new `GcRwLock` wrapping the given value.
@@ -499,99 +410,12 @@ impl<T: ?Sized> GcMutex<T> {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
         if is_generational_barrier_active() {
-            Self::generational_write_barrier(ptr);
+            crate::heap::simple_write_barrier(ptr);
         }
 
         if is_incremental_marking_active() {
-            Self::incremental_write_barrier(ptr);
+            crate::heap::incremental_write_barrier(ptr);
         }
-    }
-
-    #[inline]
-    fn generational_write_barrier(ptr: *const u8) {
-        if !Self::is_gc_heap_pointer(ptr) {
-            return;
-        }
-
-        unsafe {
-            crate::heap::with_heap(|heap| {
-                let page_addr = (ptr as usize) & crate::heap::page_mask();
-                let is_large = heap.large_object_map.contains_key(&page_addr);
-
-                if is_large {
-                    if let Some(&(head_addr, _, _)) = heap.large_object_map.get(&page_addr) {
-                        let header = head_addr as *mut crate::heap::PageHeader;
-                        if (*header).magic == MAGIC_GC_PAGE && (*header).generation > 0 {
-                            let block_size = (*header).block_size as usize;
-                            let header_size = (*header).header_size as usize;
-                            let header_page_addr = head_addr;
-                            let ptr_addr = ptr as usize;
-
-                            if ptr_addr >= header_page_addr + header_size {
-                                let offset = ptr_addr - (header_page_addr + header_size);
-                                let index = offset / block_size;
-
-                                if index < (*header).obj_count as usize {
-                                    (*header).set_dirty(index);
-                                    heap.add_to_dirty_pages(NonNull::new_unchecked(header));
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    let header = ptr_to_page_header(ptr);
-                    if (*header.as_ptr()).magic == MAGIC_GC_PAGE
-                        && (*header.as_ptr()).generation > 0
-                    {
-                        let block_size = (*header.as_ptr()).block_size as usize;
-                        let header_size = (*header.as_ptr()).header_size as usize;
-                        let header_page_addr = header.as_ptr() as usize;
-                        let ptr_addr = ptr as usize;
-
-                        if ptr_addr >= header_page_addr + header_size {
-                            let offset = ptr_addr - (header_page_addr + header_size);
-                            let index = offset / block_size;
-
-                            if index < (*header.as_ptr()).obj_count as usize {
-                                (*header.as_ptr()).set_dirty(index);
-                                heap.add_to_dirty_pages(header);
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    #[inline]
-    fn incremental_write_barrier(ptr: *const u8) {
-        if !Self::is_gc_heap_pointer(ptr) {
-            return;
-        }
-
-        std::sync::atomic::fence(Ordering::AcqRel);
-
-        unsafe {
-            let header = ptr_to_page_header(ptr);
-            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
-                return;
-            }
-
-            if (*header.as_ptr()).generation > 0 {
-                crate::heap::with_heap(|heap| {
-                    heap.record_in_remembered_buffer(header);
-                });
-            }
-        }
-    }
-
-    #[inline]
-    fn is_gc_heap_pointer(ptr: *const u8) -> bool {
-        let ptr_addr = ptr as usize;
-        let heap_start = crate::heap::heap_start();
-        let heap_end = crate::heap::heap_end();
-
-        ptr_addr >= heap_start && ptr_addr <= heap_end
     }
 
     /// Creates a new `GcMutex` wrapping the given value.
