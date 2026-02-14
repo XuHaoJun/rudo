@@ -2459,6 +2459,11 @@ pub fn incremental_write_barrier(ptr: *const u8) {
         return;
     }
 
+    // SAFETY: This fence synchronizes with the GC thread to ensure
+    // that all prior writes are visible before we record in the remembered set.
+    // Required for SATB correctness in incremental GC.
+    std::sync::atomic::fence(Ordering::AcqRel);
+
     unsafe {
         let header = ptr_to_page_header(ptr);
 
