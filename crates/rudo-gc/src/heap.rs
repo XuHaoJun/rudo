@@ -78,6 +78,11 @@ pub(crate) unsafe fn get_allocating_thread_id(gc_box_addr: usize) -> u64 {
             unsafe { (*header.as_ptr()).is_allocated(idx) },
             "Reading owner_thread from potentially free'd object at index {idx}"
         );
+        debug_assert!(
+            idx < usize::from(unsafe { (*header.as_ptr()).obj_count }),
+            "Object index {idx} exceeds object count {}",
+            unsafe { (*header.as_ptr()).obj_count }
+        );
     }
 
     unsafe { (*header.as_ptr()).owner_thread }
