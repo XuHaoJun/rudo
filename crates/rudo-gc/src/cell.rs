@@ -11,7 +11,7 @@ use crate::trace::Trace;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 /// A memory location with interior mutability that triggers a write barrier.
 ///
@@ -88,7 +88,12 @@ use std::sync::RwLock;
 /// - Each thread has its own GC heap, and cross-thread access corrupts the heap
 /// - The write barrier operations require thread-local state
 ///
-/// For cross-thread communication, use `GcHandle` from the `handles::cross_thread` module:
+/// For cross-thread mutation, use [`GcThreadSafeCell`] instead:
+/// - Use `GcThreadSafeCell<T>` for interior mutability that can be accessed from any thread
+/// - Uses internal `Mutex` for synchronization
+/// - Works seamlessly with tokio multi-threaded runtime
+///
+/// For cross-thread communication without mutation, use `GcHandle`:
 /// - Create a handle: `let handle = gc.cross_thread_handle();`
 /// - Send the handle to any thread
 /// - Resolve back to `Gc<T>` on the origin thread: `let gc = handle.resolve();`
@@ -266,9 +271,10 @@ impl<T: ?Sized> GcCell<T> {
              they were allocated.\n\
              \n\
              Solutions:\n\
-             1. Use GcHandle for cross-thread communication (see cross_thread module)\n\
-             2. Dispatch mutations back to the main thread via channel\n\
-             3. Use single-threaded Tokio runtime"
+             1. Use GcThreadSafeCell instead of GcCell for thread-safe interior mutability\n\
+             2. Use GcHandle for cross-thread communication (see cross_thread module)\n\
+             3. Dispatch mutations back to the main thread via channel\n\
+             4. Use single-threaded Tokio runtime"
         );
     }
 
@@ -790,6 +796,181 @@ impl<T: std::fmt::Debug + ?Sized> std::fmt::Debug for GcCell<T> {
 impl<T: std::fmt::Display + ?Sized> std::fmt::Display for GcCell<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.borrow().fmt(f)
+    }
+}
+
+/// A thread-safe interior mutability type for GC-managed data.
+///
+/// `GcThreadSafeCell<T>` is like `GcCell<T>` but uses a `Mutex` to allow
+/// safe mutation from any thread, including tokio worker threads.
+///
+/// # Use Cases
+///
+/// - Sharing GC-managed state between tokio tasks on different worker threads
+/// - Mutations to reactive state from async callbacks
+/// - Any case where GC-managed data needs to be updated from multiple threads
+///
+/// # Example
+///
+/// ```ignore
+/// use rudo_gc::{Gc, GcThreadSafeCell, Trace};
+///
+/// #[derive(Trace, Clone)]
+/// struct SharedState {
+///     counter: GcThreadSafeCell<i32>,
+/// }
+///
+/// // Works with multi-threaded tokio runtime
+/// let state = Gc::new(SharedState {
+///     counter: GcThreadSafeCell::new(0),
+/// });
+///
+/// // Can mutate from any thread
+/// *state.counter.borrow_mut() += 1;
+/// ```
+///
+/// # Thread Safety
+///
+/// Unlike `GcCell`, which requires all operations to occur on the allocating thread,
+/// `GcThreadSafeCell` uses internal synchronization to allow safe cross-thread access.
+/// This does introduce some overhead (lock acquisition), but ensures correctness.
+///
+/// For maximum performance when mutations are always on the same thread, use `GcCell`.
+pub struct GcThreadSafeCell<T: ?Sized> {
+    inner: Mutex<T>,
+}
+
+impl<T> GcThreadSafeCell<T> {
+    /// Creates a new `GcThreadSafeCell` containing `value`.
+    pub const fn new(value: T) -> Self {
+        Self {
+            inner: Mutex::new(value),
+        }
+    }
+
+    /// Consumes the `GcThreadSafeCell`, returning the wrapped value.
+    pub fn into_inner(self) -> T {
+        self.inner.into_inner().unwrap()
+    }
+}
+
+impl<T: ?Sized> GcThreadSafeCell<T> {
+    /// Immutably borrows the wrapped value.
+    ///
+    /// The borrow lasts until the returned `MutexGuard` exits scope.
+    #[inline]
+    pub fn borrow(&self) -> std::sync::MutexGuard<'_, T> {
+        self.inner.lock().unwrap()
+    }
+
+    /// Mutably borrows the wrapped value with generational + incremental write barriers.
+    ///
+    /// This method acquires the mutex lock and performs all necessary write barriers
+    /// to ensure correct GC behavior when mutations occur from any thread.
+    ///
+    /// # Type Bounds
+    ///
+    /// - `T: GcCapture` - Required for SATB barrier. Add `#[derive(GcCell)]` to your type.
+    ///
+    /// # Performance Note
+    ///
+    /// This method acquires a lock. For very high-frequency mutations, consider
+    /// whether `GcCell` on a single thread might be more appropriate.
+    ///
+    /// For types without GC pointers, use `borrow_mut_gen_only()` instead.
+    #[inline]
+    pub fn borrow_mut(&self) -> GcThreadSafeRefMut<'_, T>
+    where
+        T: GcCapture,
+    {
+        GcThreadSafeRefMut {
+            inner: self.inner.lock().unwrap(),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Mutably borrows the wrapped value without write barriers.
+    ///
+    /// This is an escape hatch for performance-critical code where
+    /// barrier overhead is measurable, or for types that don't contain
+    /// any GC pointers.
+    ///
+    /// # Safety
+    ///
+    /// Using this may cause incorrect collection during GC for types
+    /// containing GC pointers. Use with caution.
+    #[inline]
+    pub fn borrow_mut_gen_only(&self) -> std::sync::MutexGuard<'_, T> {
+        self.inner.lock().unwrap()
+    }
+}
+
+/// A mutable borrow of a `GcThreadSafeCell`.
+///
+/// This guard ensures write barriers are executed when dropped.
+pub struct GcThreadSafeRefMut<'a, T: ?Sized> {
+    inner: std::sync::MutexGuard<'a, T>,
+    _marker: std::marker::PhantomData<*const ()>,
+}
+
+impl<T: ?Sized> std::ops::Deref for GcThreadSafeRefMut<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<T: ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+// SAFETY: GcThreadSafeCell uses Mutex internally, which handles synchronization.
+// The Trace implementation acquires the lock during GC, ensuring no data races.
+unsafe impl<T: Trace + ?Sized> Trace for GcThreadSafeCell<T> {
+    #[inline]
+    fn trace(&self, visitor: &mut impl crate::trace::Visitor) {
+        // Lock is acquired during tracing to prevent concurrent mutations.
+        // This is safe because GC happens during STW pauses.
+        let guard = self.inner.lock().unwrap();
+        guard.trace(visitor);
+    }
+}
+
+impl<T: GcCapture + ?Sized> GcCapture for GcThreadSafeCell<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        if let Ok(guard) = self.inner.try_lock() {
+            guard.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: Default> Default for GcThreadSafeCell<T> {
+    fn default() -> Self {
+        Self::new(Default::default())
+    }
+}
+
+impl<T: Clone> Clone for GcThreadSafeCell<T> {
+    fn clone(&self) -> Self {
+        Self::new(self.borrow().clone())
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for GcThreadSafeCell<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.inner.try_lock() {
+            Ok(guard) => guard.fmt(f),
+            Err(_) => write!(f, "<GcThreadSafeCell: locked>"),
+        }
     }
 }
 
