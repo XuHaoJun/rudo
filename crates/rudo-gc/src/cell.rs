@@ -871,7 +871,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     ///
     /// # Type Bounds
     ///
-    /// - `T: Trace + GcCapture` - Required for SATB barrier. Auto-implemented by `#[derive(Trace)]`.
+    /// - `T: Trace + GcCapture` - Required for SATB barrier. Auto-implemented by `#[derive(Trace, GcCapture)]`.
     ///
     /// # Performance Note
     ///
@@ -926,11 +926,43 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         }
     }
 
+    /// Mutably borrows the wrapped value with write barrier (except SATB).
+    ///
+    /// This method is like `borrow_mut()` but does not require `GcCapture`.
+    /// It's suitable for types that don't contain any `Gc<T>` pointers.
+    ///
+    /// Unlike `borrow_mut_gen_only()`, this method still performs the generational
+    /// and incremental write barriers.
+    ///
+    /// # When to use
+    ///
+    /// - Use this for primitive types (`i32`, `String`, etc.) that don't contain GC pointers
+    /// - Use `borrow_mut_gen_only()` if you want to skip ALL barriers for maximum performance
+    /// - Use `borrow_mut()` if your type contains `Gc<T>` pointers
+    #[inline]
+    pub fn borrow_mut_simple(&self) -> GcThreadSafeRefMut<'_, T>
+    where
+        T: Trace,
+    {
+        self.trigger_write_barrier();
+
+        GcThreadSafeRefMut {
+            inner: self.inner.lock(),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
     /// Mutably borrows the wrapped value without write barriers.
     ///
     /// This is an escape hatch for performance-critical code where
     /// barrier overhead is measurable, or for types that don't contain
     /// any GC pointers.
+    ///
+    /// # When to use
+    ///
+    /// - Use this for maximum performance when you know the type has no GC pointers
+    /// - Use `borrow_mut_simple()` if you want barriers but don't have `GcCapture`
+    /// - Use `borrow_mut()` if your type implements `GcCapture`
     ///
     /// # Safety
     ///

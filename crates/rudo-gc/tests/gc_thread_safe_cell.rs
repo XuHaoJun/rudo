@@ -80,7 +80,7 @@ fn test_borrow_mut_primitive_types() {
 
     assert_eq!(*cell.borrow(), 42);
 
-    *cell.borrow_mut_gen_only() = 100;
+    *cell.borrow_mut_simple() = 100;
 
     assert_eq!(*cell.borrow(), 100);
 }

@@ -810,6 +810,15 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
     let mut total_marked = 0;
     let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
 
+    // Process cross-thread SATB buffer once (it's global)
+    let cross_thread_values = crate::heap::LocalHeap::flush_cross_thread_satb_buffer();
+    for gc_box in cross_thread_values {
+        unsafe {
+            crate::gc::gc::mark_object(gc_box, &mut visitor);
+        }
+        total_marked += 1;
+    }
+
     for h in heaps {
         let heap = h;
         let overflow_values = heap.flush_satb_overflow_buffer();

@@ -20,6 +20,19 @@ use sys_alloc::{Mmap, MmapOptions};
 
 use crate::handles::{AsyncScopeData, AsyncScopeEntry, LocalHandles};
 use crate::ptr::GcBox;
+use std::sync::LazyLock;
+use std::sync::RwLock;
+use std::thread::ThreadId;
+
+/// Global map from `GcBox` address to allocating thread ID.
+/// Used for cross-thread SATB barrier correctness.
+static GC_BOX_THREAD_MAP: LazyLock<RwLock<HashMap<usize, ThreadId>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Global SATB buffer for cross-thread mutations.
+/// When a mutation occurs on a different thread than the allocating thread,
+/// the SATB old value is recorded here instead of the thread-local buffer.
+static CROSS_THREAD_SATB_BUFFER: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 // Thread-local storage for the current thread's stable ID.
 // Assigned once when the thread first accesses the heap.
@@ -38,6 +51,26 @@ thread_local! {
 #[allow(clippy::ptr_as_ptr, clippy::unnecessary_cast)]
 pub(crate) fn get_thread_id() -> u64 {
     THREAD_STABLE_ID.with(|id| *id)
+}
+
+/// Register a `GcBox` as allocated by the current thread.
+/// Called during `GcBox` allocation.
+pub(crate) fn register_gc_box_allocating_thread(gc_box_addr: usize) {
+    GC_BOX_THREAD_MAP
+        .write()
+        .unwrap()
+        .insert(gc_box_addr, std::thread::current().id());
+}
+
+/// Get the allocating thread for a `GcBox`.
+/// Returns the thread ID of the allocator, or the current thread if not found.
+pub(crate) fn get_allocating_thread(gc_box_addr: usize) -> std::thread::ThreadId {
+    GC_BOX_THREAD_MAP
+        .read()
+        .unwrap()
+        .get(&gc_box_addr)
+        .copied()
+        .unwrap_or_else(|| std::thread::current().id())
 }
 
 // ============================================================================
@@ -1648,12 +1681,34 @@ impl LocalHeap {
     /// Returns `true` if the value was stored successfully, `false` if the buffer
     /// overflowed and fallback was requested.
     pub fn record_satb_old_value(&mut self, gc_box: NonNull<GcBox<()>>) -> bool {
+        let current_thread = std::thread::current().id();
+        let allocating_thread = get_allocating_thread(gc_box.as_ptr() as usize);
+
+        if current_thread != allocating_thread {
+            CROSS_THREAD_SATB_BUFFER
+                .lock()
+                .unwrap()
+                .push(gc_box.as_ptr() as usize);
+            return true;
+        }
+
         self.satb_old_values.push(gc_box);
         if self.satb_old_values.len() >= self.satb_buffer_capacity {
             self.satb_buffer_overflowed()
         } else {
             true
         }
+    }
+
+    /// Flush the cross-thread SATB buffer.
+    /// Called during GC to process cross-thread mutations.
+    #[must_use]
+    pub fn flush_cross_thread_satb_buffer() -> Vec<NonNull<GcBox<()>>> {
+        let addresses = std::mem::take(&mut *CROSS_THREAD_SATB_BUFFER.lock().unwrap());
+        addresses
+            .into_iter()
+            .filter_map(|addr| NonNull::new(addr as *mut GcBox<()>))
+            .collect()
     }
 
     fn satb_buffer_overflowed(&mut self) -> bool {
