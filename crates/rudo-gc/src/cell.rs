@@ -871,7 +871,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     ///
     /// # Type Bounds
     ///
-    /// - `T: GcCapture` - Required for SATB barrier. Add `#[derive(GcCapture)]` to your type.
+    /// - `T: Trace + GcCapture` - Required for SATB barrier. Auto-implemented by `#[derive(Trace)]`.
     ///
     /// # Performance Note
     ///
@@ -882,12 +882,46 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     #[inline]
     pub fn borrow_mut(&self) -> GcThreadSafeRefMut<'_, T>
     where
-        T: GcCapture,
+        T: Trace + GcCapture,
     {
+        if crate::gc::incremental::is_incremental_marking_active() {
+            unsafe {
+                let value = &*self.inner.data_ptr();
+                let mut gc_ptrs = Vec::with_capacity(32);
+                value.capture_gc_ptrs_into(&mut gc_ptrs);
+                if !gc_ptrs.is_empty() {
+                    crate::heap::with_heap(|heap| {
+                        for gc_ptr in gc_ptrs {
+                            let _ = heap.record_satb_old_value(gc_ptr);
+                        }
+                    });
+                }
+            }
+        }
+
         self.trigger_write_barrier();
 
+        let guard = self.inner.lock();
+
+        if crate::gc::incremental::is_incremental_marking_active() {
+            unsafe {
+                let new_value = &*guard;
+                let mut new_gc_ptrs = Vec::with_capacity(32);
+                new_value.capture_gc_ptrs_into(&mut new_gc_ptrs);
+                if !new_gc_ptrs.is_empty() {
+                    crate::heap::with_heap(|_heap| {
+                        for gc_ptr in new_gc_ptrs {
+                            let _ = crate::gc::incremental::mark_object_black(
+                                gc_ptr.as_ptr() as *const u8
+                            );
+                        }
+                    });
+                }
+            }
+        }
+
         GcThreadSafeRefMut {
-            inner: self.inner.lock(),
+            inner: guard,
             _marker: std::marker::PhantomData,
         }
     }
@@ -1031,7 +1065,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 /// A mutable borrow of a `GcThreadSafeCell`.
 pub struct GcThreadSafeRefMut<'a, T: ?Sized> {
     inner: parking_lot::MutexGuard<'a, T>,
-    _marker: std::marker::PhantomData<*mut ()>,
+    _marker: std::marker::PhantomData<&'a mut T>,
 }
 
 impl<T: ?Sized> std::ops::Deref for GcThreadSafeRefMut<'_, T> {
