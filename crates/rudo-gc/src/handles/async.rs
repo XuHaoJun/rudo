@@ -105,6 +105,27 @@ use super::local_handles::{HandleBlock, HandleSlot, HANDLE_BLOCK_SIZE};
 
 static ASYNC_SCOPE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+#[inline]
+fn validate_gc_in_current_heap(gc_ptr: *const u8) {
+    let heap_start = crate::heap::heap_start();
+    let heap_end = crate::heap::heap_end();
+    let ptr_addr = gc_ptr as usize;
+
+    if heap_start > heap_end {
+        return;
+    }
+
+    if ptr_addr < heap_start || ptr_addr > heap_end {
+        panic!(
+            "AsyncHandleScope cannot track Gc from a different thread. \
+             The Gc was allocated on another thread's heap (address: {gc_ptr:p}). \
+             AsyncHandleScope can only track Gc objects allocated on the same thread.\n\
+             Consider using Gc::clone() + root_guard() for cross-thread sharing, \
+             or keep Gc allocations on the same thread."
+        );
+    }
+}
+
 /// Shared data for async scope, owned by both `AsyncHandleScope` and the TCB registry.
 ///
 /// Uses `Arc` to ensure data remains valid as long as EITHER party holds a reference.
@@ -151,6 +172,19 @@ unsafe impl Sync for AsyncScopeEntry {}
 /// When a handle is created via `handle()`, it's registered with the
 /// thread control block. During GC, these handles are visited as roots.
 ///
+/// # Thread Safety
+///
+/// **IMPORTANT**: `AsyncHandleScope` can only track `Gc` objects that were
+/// allocated on the **same thread** where the scope is created. Attempting
+/// to track a `Gc` from a different thread will panic.
+///
+/// This is because each thread has its own `LocalHeap`, and the GC only
+/// scans the heap of the thread where the async scope is registered.
+/// Tracking a cross-thread `Gc` would cause the object to be incorrectly
+/// garbage collected.
+///
+/// For cross-thread sharing, use `Gc::clone()` + `root_guard()` instead.
+///
 /// # Example
 ///
 /// ```
@@ -176,12 +210,6 @@ unsafe impl Sync for AsyncScopeEntry {}
 ///     println!("{} + {} = {}", h1.get().value, h2.get().value, h1.get().value + h2.get().value);
 /// }
 /// ```
-///
-/// # Thread Safety
-///
-/// `AsyncHandleScope` implements `Send + Sync` and can be used from
-/// any thread, but handles should only be accessed from the thread
-/// that created the scope.
 pub struct AsyncHandleScope {
     id: u64,
     tcb: Arc<ThreadControlBlock>,
@@ -285,12 +313,15 @@ impl AsyncHandleScope {
             panic!("AsyncHandleScope: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})");
         }
 
+        let gc_ptr = Gc::internal_ptr(gc);
+        validate_gc_in_current_heap(gc_ptr);
+
         let slot_ptr = unsafe {
             let slots_ptr = self.data.block.slots.get() as *mut HandleSlot;
             slots_ptr.add(idx)
         };
 
-        let gc_box_ptr = Gc::internal_ptr(gc) as *const GcBox<()>;
+        let gc_box_ptr = gc_ptr as *const GcBox<()>;
         unsafe {
             (*slot_ptr).set(gc_box_ptr);
         }
@@ -1022,6 +1053,8 @@ impl GcScope {
             .iter()
             .map(|tracked| {
                 let used = unsafe { &*scope.data.used.get() }.fetch_add(1, Ordering::Relaxed);
+
+                validate_gc_in_current_heap(tracked.ptr as *const u8);
 
                 let slot_ptr = unsafe {
                     let slots_ptr = scope.data.block.slots.get() as *mut HandleSlot;
