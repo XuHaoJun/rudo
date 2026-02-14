@@ -5,7 +5,8 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 
-use rudo_gc::{collect_full, Gc, GcThreadSafeCell, Trace};
+use rudo_gc::cell::GcCapture;
+use rudo_gc::{collect_full, Gc, GcBox, GcThreadSafeCell, Trace};
 
 #[derive(Trace, Clone)]
 struct ThreadSafeSignal {
@@ -175,4 +176,36 @@ fn test_concurrent_gc_ptr_mutation() {
     for h in handles {
         h.join().unwrap();
     }
+}
+
+#[test]
+fn test_borrow_mut_with_gc_ptrs() {
+    #[derive(Trace, Clone)]
+    struct Container {
+        inner: Gc<i32>,
+    }
+
+    impl GcCapture for Container {
+        fn capture_gc_ptrs(&self) -> &[std::ptr::NonNull<GcBox<()>>] {
+            &[]
+        }
+        fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<std::ptr::NonNull<GcBox<()>>>) {
+            self.inner.capture_gc_ptrs_into(ptrs);
+        }
+    }
+
+    #[derive(Trace, Clone)]
+    struct Wrapper {
+        cell: GcThreadSafeCell<Container>,
+    }
+
+    let wrapper = Gc::new(Wrapper {
+        cell: GcThreadSafeCell::new(Container { inner: Gc::new(42) }),
+    });
+
+    assert_eq!(*wrapper.cell.borrow().inner, 42);
+
+    wrapper.cell.borrow_mut().inner = Gc::new(100);
+
+    assert_eq!(*wrapper.cell.borrow().inner, 100);
 }

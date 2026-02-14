@@ -878,30 +878,28 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     /// This method acquires a lock. For very high-frequency mutations, consider
     /// whether `GcCell` on a single thread might be more appropriate.
     ///
-    /// For types without GC pointers, use `borrow_mut_gen_only()` instead.
+    /// For types without GC pointers, use `borrow_mut_simple()` instead.
     #[inline]
     pub fn borrow_mut(&self) -> GcThreadSafeRefMut<'_, T>
     where
         T: Trace + GcCapture,
     {
+        let guard = self.inner.lock();
+
         if crate::gc::incremental::is_incremental_marking_active() {
-            unsafe {
-                let value = &*self.inner.data_ptr();
-                let mut gc_ptrs = Vec::with_capacity(32);
-                value.capture_gc_ptrs_into(&mut gc_ptrs);
-                if !gc_ptrs.is_empty() {
-                    crate::heap::with_heap(|heap| {
-                        for gc_ptr in gc_ptrs {
-                            let _ = heap.record_satb_old_value(gc_ptr);
-                        }
-                    });
-                }
+            let value = &*guard;
+            let mut gc_ptrs = Vec::with_capacity(32);
+            value.capture_gc_ptrs_into(&mut gc_ptrs);
+            if !gc_ptrs.is_empty() {
+                crate::heap::with_heap(|heap| {
+                    for gc_ptr in gc_ptrs {
+                        let _ = heap.record_satb_old_value(gc_ptr);
+                    }
+                });
             }
         }
 
         self.trigger_write_barrier();
-
-        let guard = self.inner.lock();
 
         if crate::gc::incremental::is_incremental_marking_active() {
             unsafe {
@@ -1127,6 +1125,10 @@ unsafe impl<T: Trace + ?Sized> Trace for GcThreadSafeCell<T> {
 }
 
 impl<T: GcCapture + ?Sized> GcCapture for GcThreadSafeCell<T> {
+    /// Returns empty slice because `GcThreadSafeCell` is a wrapper type.
+    ///
+    /// The cell itself doesn't directly contain `Gc` pointers—its inner `T` does.
+    /// Use `capture_gc_ptrs_into()` to capture pointers from the inner value.
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
