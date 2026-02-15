@@ -5,6 +5,9 @@
 
 use rudo_gc::{collect_full, Gc, Trace, Weak};
 
+#[cfg(feature = "debug-suspicious-sweep")]
+use rudo_gc::clear_history;
+
 #[cfg(feature = "test-util")]
 use rudo_gc::test_util::{clear_test_roots, internal_ptr, register_test_root};
 
@@ -526,6 +529,10 @@ fn test_weak_no_memory_leak_repeated_alloc() {
     }
 
     clear_roots!();
+
+    #[cfg(feature = "debug-suspicious-sweep")]
+    clear_history();
+
     collect_full();
 
     // Create one more to verify system still works
