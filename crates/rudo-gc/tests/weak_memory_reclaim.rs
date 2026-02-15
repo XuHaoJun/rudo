@@ -413,6 +413,10 @@ fn test_weak_in_hashmap_reclaimed() {
     drop(gc_map);
 
     clear_roots!();
+
+    #[cfg(feature = "debug-suspicious-sweep")]
+    clear_history();
+
     collect_full();
 
     // All weak refs should be dead
