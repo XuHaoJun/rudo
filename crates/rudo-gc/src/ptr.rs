@@ -1531,16 +1531,13 @@ impl<T: Trace> Weak<T> {
 
         let alignment = std::mem::align_of::<GcBox<T>>();
         if addr % alignment != 0 {
-            eprintln!("Weak::try_upgrade failed: misaligned addr={:#x}", addr);
             return None;
         }
 
         if addr < MIN_VALID_HEAP_ADDRESS {
-            eprintln!("Weak::try_upgrade failed: low addr={:#x}", addr);
             return None;
         }
         if !is_gc_box_pointer_valid(addr) {
-            eprintln!("Weak::try_upgrade failed: invalid heap ptr addr={:#x}", addr);
             return None;
         }
 
@@ -1549,23 +1546,16 @@ impl<T: Trace> Weak<T> {
             let gc_box = &*ptr.as_ptr();
 
             if gc_box.is_under_construction() {
-                eprintln!("Weak::try_upgrade failed: under construction addr={:#x}", addr);
                 return None;
             }
 
             loop {
                 if gc_box.has_dead_flag() {
-                    eprintln!("Weak::try_upgrade failed: dead flag addr={:#x}", addr);
                     return None;
                 }
 
                 let current_count = gc_box.ref_count.load(Ordering::Relaxed);
                 if current_count == 0 || current_count == usize::MAX {
-                    eprintln!(
-                        "Weak::try_upgrade failed: bad ref_count={} addr={:#x}",
-                        current_count,
-                        addr
-                    );
                     return None;
                 }
 
@@ -1652,15 +1642,11 @@ impl<T: Trace> Weak<T> {
     pub fn cast<U: Trace + 'static>(self) -> Weak<U> {
         let ptr = self.ptr.load(Ordering::Acquire);
         std::mem::forget(self);
-        let atomic_ptr = if let Some(p) = ptr.as_option() {
+        let atomic_ptr = ptr.as_option().map_or_else(AtomicNullable::null, |p| {
             let cast_p: NonNull<GcBox<U>> = unsafe { std::mem::transmute(p) };
             AtomicNullable::new(cast_p)
-        } else {
-            AtomicNullable::null()
-        };
-        Weak {
-            ptr: atomic_ptr,
-        }
+        });
+        Weak { ptr: atomic_ptr }
     }
     /// Gets the number of strong `Gc<T>` pointers pointing to this allocation.
     ///
@@ -1713,8 +1699,7 @@ impl<T: Trace> Weak<T> {
         self.ptr
             .load(Ordering::Acquire)
             .as_option()
-            .map(|p| p.as_ptr() as usize)
-            .unwrap_or(0)
+            .map_or(0, |p| p.as_ptr() as usize)
     }
 }
 

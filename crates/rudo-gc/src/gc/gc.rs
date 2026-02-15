@@ -7,8 +7,8 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::Arc;
 use std::sync::PoisonError;
 
 use crate::gc::incremental::FallbackReason;
@@ -1121,7 +1121,7 @@ fn mark_minor_roots_multi(
     #[allow(clippy::explicit_iter_loop)]
     {
         use crate::tokio::GcRootSet;
-        for &ptr in GcRootSet::global().snapshot(heap).iter() {
+        for ptr in GcRootSet::global().snapshot(heap) {
             unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                     mark_object_minor(gc_box, &mut visitor);
@@ -1265,7 +1265,7 @@ fn mark_minor_roots_parallel(
     #[allow(clippy::explicit_iter_loop)]
     {
         use crate::tokio::GcRootSet;
-        for &ptr in GcRootSet::global().snapshot(heap).iter() {
+        for ptr in GcRootSet::global().snapshot(heap) {
             unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                     mark_and_push_to_worker_queue(
@@ -1418,7 +1418,7 @@ fn mark_major_roots_multi(
     #[allow(clippy::explicit_iter_loop)]
     {
         use crate::tokio::GcRootSet;
-        for &ptr in GcRootSet::global().snapshot(heap).iter() {
+        for ptr in GcRootSet::global().snapshot(heap) {
             unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                     mark_object(gc_box, &mut visitor);
@@ -1886,7 +1886,7 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
     #[cfg(feature = "tokio")]
     {
         use crate::tokio::GcRootSet;
-        for &ptr in GcRootSet::global().snapshot(heap).iter() {
+        for ptr in GcRootSet::global().snapshot(heap) {
             unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                     mark_object_minor(gc_box, &mut visitor);
@@ -1984,7 +1984,7 @@ fn mark_major_roots(heap: &LocalHeap) -> usize {
     #[cfg(feature = "tokio")]
     {
         use crate::tokio::GcRootSet;
-        for &ptr in GcRootSet::global().snapshot(heap).iter() {
+        for ptr in GcRootSet::global().snapshot(heap) {
             unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                     mark_object(gc_box, &mut visitor);
