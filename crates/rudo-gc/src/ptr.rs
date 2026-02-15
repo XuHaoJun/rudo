@@ -1537,6 +1537,9 @@ impl<T: Trace> Weak<T> {
         if addr < MIN_VALID_HEAP_ADDRESS {
             return None;
         }
+        if !is_gc_box_pointer_valid(addr) {
+            return None;
+        }
 
         unsafe {
             // SAFETY: Pointer passed validation checks above (alignment, addr >= 4096)
@@ -1548,10 +1551,6 @@ impl<T: Trace> Weak<T> {
 
             loop {
                 if gc_box.has_dead_flag() {
-                    return None;
-                }
-
-                if gc_box.dropping_state() != 0 {
                     return None;
                 }
 
@@ -1635,6 +1634,21 @@ impl<T: Trace> Weak<T> {
         unsafe { !(*ptr.as_ptr()).has_dead_flag() }
     }
 
+    /// Casts this `Weak<T>` to a `Weak<U>`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `T` and `U` have the same layout and that
+    /// the cast is valid for the lifetime of the pointer.
+    pub fn cast<U: Trace + 'static>(self) -> Weak<U> {
+        let ptr = self.ptr.load(Ordering::Acquire);
+        std::mem::forget(self);
+        let atomic_ptr = ptr.as_option().map_or_else(AtomicNullable::null, |p| {
+            let cast_p: NonNull<GcBox<U>> = unsafe { std::mem::transmute(p) };
+            AtomicNullable::new(cast_p)
+        });
+        Weak { ptr: atomic_ptr }
+    }
     /// Gets the number of strong `Gc<T>` pointers pointing to this allocation.
     ///
     /// Returns 0 if the value has been dropped.
@@ -1643,6 +1657,11 @@ impl<T: Trace> Weak<T> {
         let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
             return 0;
         };
+        let ptr_addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if ptr_addr % alignment != 0 {
+            return 0;
+        }
 
         unsafe {
             if (*ptr.as_ptr()).has_dead_flag() {
@@ -1674,12 +1693,28 @@ impl<T: Trace> Weak<T> {
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
         this.ptr.load(Ordering::Acquire) == other.ptr.load(Ordering::Acquire)
     }
+
+    /// Returns the raw gc-box address stored by this weak pointer.
+    #[must_use]
+    pub fn raw_addr(&self) -> usize {
+        self.ptr
+            .load(Ordering::Acquire)
+            .as_option()
+            .map_or(0, |p| p.as_ptr() as usize)
+    }
 }
 
 impl<T: Trace> Clone for Weak<T> {
     fn clone(&self) -> Self {
         let ptr = self.ptr.load(Ordering::Relaxed);
         if ptr.is_null() {
+            return Self {
+                ptr: AtomicNullable::null(),
+            };
+        }
+        let ptr_addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if ptr_addr % alignment != 0 {
             return Self {
                 ptr: AtomicNullable::null(),
             };
@@ -1696,11 +1731,24 @@ impl<T: Trace> Clone for Weak<T> {
 
 #[inline]
 fn is_gc_box_pointer_valid(ptr_addr: usize) -> bool {
-    let heap_start = crate::heap::heap_start();
-    let heap_end = crate::heap::heap_end();
+    let ptr = ptr_addr as *const u8;
 
-    if heap_start <= heap_end && ptr_addr >= heap_start && ptr_addr < heap_end {
+    // Fast path: current thread heap.
+    if crate::heap::try_with_heap(|heap| unsafe {
+        crate::heap::find_gc_box_from_ptr(heap, ptr).is_some()
+    })
+    .unwrap_or(false)
+    {
         return true;
+    }
+
+    // Cross-thread path: scan all registered heaps.
+    for tcb in crate::heap::get_all_thread_control_blocks() {
+        // SAFETY: We only do read-only heap metadata checks here.
+        let heap = unsafe { &*tcb.heap.get() };
+        if unsafe { crate::heap::find_gc_box_from_ptr(heap, ptr).is_some() } {
+            return true;
+        }
     }
 
     false

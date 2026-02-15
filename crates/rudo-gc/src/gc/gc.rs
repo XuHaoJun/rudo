@@ -7,6 +7,7 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::sync::PoisonError;
 
@@ -156,6 +157,9 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// Global switch for enabling/disabling automatic GC collections across threads.
+static GC_ENABLED: AtomicBool = AtomicBool::new(true);
+
 /// Register a root for GC marking. This is useful for tests where Miri cannot find
 /// roots via conservative stack scanning.
 pub fn register_test_root(ptr: *const u8) {
@@ -196,6 +200,10 @@ pub fn notify_dropped_gc() {
 }
 
 fn maybe_collect() {
+    if !GC_ENABLED.load(AtomicOrdering::Relaxed) {
+        return;
+    }
+
     if IN_COLLECT.with(Cell::get) {
         return;
     }
@@ -237,6 +245,13 @@ pub fn is_collecting() -> bool {
 /// Set the function which determines whether the garbage collector should be run.
 pub fn set_collect_condition(f: CollectCondition) {
     COLLECT_CONDITION.with(|c| c.set(f));
+}
+
+/// Enable or disable automatic garbage collection globally.
+///
+/// This affects all threads because collection is coordinated globally.
+pub fn set_gc_enabled(enabled: bool) {
+    GC_ENABLED.store(enabled, AtomicOrdering::Relaxed);
 }
 
 /// Manually check for a pending GC request and block until it's processed.
@@ -293,6 +308,10 @@ fn log_fallback_reason(reason: FallbackReason) {
 /// Decides between Minor and Major collection based on heuristics.
 /// Implements cooperative rendezvous for multi-threaded safety.
 pub fn collect() {
+    if !GC_ENABLED.load(AtomicOrdering::Relaxed) {
+        return;
+    }
+
     // Reentrancy guard
     if IN_COLLECT.with(Cell::get) {
         return;
@@ -578,6 +597,10 @@ fn perform_multi_threaded_collect() {
 /// This will collect all unreachable objects in both Young and Old generations.
 /// Implements cooperative rendezvous for multi-threaded safety.
 pub fn collect_full() {
+    if !GC_ENABLED.load(AtomicOrdering::Relaxed) {
+        return;
+    }
+
     #[cfg(feature = "debug-suspicious-sweep")]
     let _ = crate::gc::young_object_history::get_gc_cycle_id();
 
@@ -1098,7 +1121,7 @@ fn mark_minor_roots_multi(
     #[allow(clippy::explicit_iter_loop)]
     {
         use crate::tokio::GcRootSet;
-        for &ptr in GcRootSet::global().snapshot(heap).iter() {
+        for ptr in GcRootSet::global().snapshot(heap) {
             unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                     mark_object_minor(gc_box, &mut visitor);
@@ -1242,7 +1265,7 @@ fn mark_minor_roots_parallel(
     #[allow(clippy::explicit_iter_loop)]
     {
         use crate::tokio::GcRootSet;
-        for &ptr in GcRootSet::global().snapshot(heap).iter() {
+        for ptr in GcRootSet::global().snapshot(heap) {
             unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                     mark_and_push_to_worker_queue(
@@ -1395,7 +1418,7 @@ fn mark_major_roots_multi(
     #[allow(clippy::explicit_iter_loop)]
     {
         use crate::tokio::GcRootSet;
-        for &ptr in GcRootSet::global().snapshot(heap).iter() {
+        for ptr in GcRootSet::global().snapshot(heap) {
             unsafe {
                 if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
                     mark_object(gc_box, &mut visitor);
@@ -1860,6 +1883,18 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
         }
     }
 
+    #[cfg(feature = "tokio")]
+    {
+        use crate::tokio::GcRootSet;
+        for ptr in GcRootSet::global().snapshot(heap) {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                    mark_object_minor(gc_box, &mut visitor);
+                }
+            }
+        }
+    }
+
     // Take snapshot of dirty pages for lock-free scanning
     let _dirty_count = heap.take_dirty_pages_snapshot();
 
@@ -1942,6 +1977,18 @@ fn mark_major_roots(heap: &LocalHeap) -> usize {
         unsafe {
             if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr.cast::<u8>()) {
                 mark_object(gc_box, &mut visitor);
+            }
+        }
+    }
+
+    #[cfg(feature = "tokio")]
+    {
+        use crate::tokio::GcRootSet;
+        for ptr in GcRootSet::global().snapshot(heap) {
+            unsafe {
+                if let Some(gc_box) = crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) {
+                    mark_object(gc_box, &mut visitor);
+                }
             }
         }
     }
