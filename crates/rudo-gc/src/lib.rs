@@ -167,6 +167,7 @@ pub fn yield_now() {
 }
 pub use gc::{
     collect, collect_full, default_collect_condition, safepoint, set_collect_condition,
+    set_gc_enabled,
     CollectInfo, PerThreadMarkQueue, StealQueue,
 };
 pub use handles::{
