@@ -399,30 +399,19 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
         unsafe {
             let gc_box = &*ptr.as_ptr();
 
-            // Check if object is dead first (fast path for collected objects)
-            if gc_box.is_dead_or_unrooted() {
+            // If DEAD_FLAG is set, value has been dropped - cannot resurrect
+            if gc_box.has_dead_flag() {
                 return None;
             }
 
-            // Try atomic transition from 0 to 1.
-            // This fails if: (a) another thread already incremented (`ref_count` > 0),
-            // or (b) object became dead between checks.
+            // Try atomic transition from 0 to 1 (resurrection)
             if gc_box.try_inc_ref_from_zero() {
-                // Successfully transitioned from 0 to 1
                 return Some(Gc {
                     ptr: AtomicNullable::new(ptr),
                     _marker: PhantomData,
                 });
             }
 
-            // `ref_count` > 0, so another strong reference exists.
-            // Check again if object is still alive (might have been collected
-            // between our first check and the CAS failure).
-            if gc_box.is_dead_or_unrooted() {
-                return None;
-            }
-
-            // Object is alive and has strong refs - increment normally
             gc_box.inc_ref();
             Some(Gc {
                 ptr: AtomicNullable::new(ptr),
