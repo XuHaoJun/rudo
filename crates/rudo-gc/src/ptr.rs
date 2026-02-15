@@ -1061,8 +1061,8 @@ impl<T: Trace> Gc<T> {
     /// # Panics
     ///
     /// Panics if the Gc is dead.
-    pub fn as_ptr(gc: &Self) -> *const T {
-        let ptr = gc.ptr.load(Ordering::Acquire);
+    pub fn as_ptr(&self) -> *const T {
+        let ptr = self.ptr.load(Ordering::Acquire);
         let gc_box_ptr = ptr.as_ptr();
         // SAFETY: ptr is not null (checked in callers), and ptr is valid
         unsafe { std::ptr::addr_of!((*gc_box_ptr).value) }
