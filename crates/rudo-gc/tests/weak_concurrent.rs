@@ -101,17 +101,12 @@ fn test_concurrent_weak_clone_and_upgrade() {
     let handles: Vec<_> = (0..10)
         .map(|_| {
             let weak = weak.clone();
-            thread::spawn(move || {
-                // Clone and upgrade
-                let cloned = weak.clone();
-                let upgraded = cloned.upgrade();
-                (cloned, upgraded)
-            })
+            thread::spawn(move || weak.upgrade())
         })
         .collect();
 
     for handle in handles {
-        let (_cloned, upgraded) = handle.join().unwrap();
+        let upgraded = handle.join().unwrap();
         assert!(upgraded.is_some());
     }
 }
@@ -233,7 +228,7 @@ fn test_concurrent_weak_ptr_eq() {
     let gc2 = Arc::new(Gc::new(TestData { value: 2 }));
 
     let weak1a = Arc::new(Gc::downgrade(&gc1));
-    let weak1b = Arc::new(Gc::downgrade(&gc1));
+    let weak1_alt = Arc::new(Gc::downgrade(&gc1));
     let weak2 = Arc::new(Gc::downgrade(&gc2));
 
     let handles: Vec<_> = (0..20)
@@ -241,7 +236,7 @@ fn test_concurrent_weak_ptr_eq() {
             let w1 = if i % 2 == 0 {
                 weak1a.clone()
             } else {
-                weak1b.clone()
+                weak1_alt.clone()
             };
             let w2 = weak2.clone();
             thread::spawn(move || {
@@ -313,7 +308,6 @@ fn test_weak_concurrent_gc_access() {
     }));
     let weak = Arc::new(Gc::downgrade(&gc));
 
-    let _inner_clone = inner.clone();
     let writer = thread::spawn(move || {
         for i in 0..1000 {
             let new_inner = Gc::new(Inner { value: i });
@@ -322,10 +316,9 @@ fn test_weak_concurrent_gc_access() {
         }
     });
 
-    let weak_clone = weak.clone();
     let reader = thread::spawn(move || {
         for _ in 0..1000 {
-            if let Some(node) = weak_clone.upgrade() {
+            if let Some(node) = weak.upgrade() {
                 let _ = node.inner.value;
             }
         }
@@ -349,10 +342,9 @@ fn test_weak_upgrade_during_incremental_marking() {
     let state = IncrementalMarkState::global();
     state.set_phase(MarkPhase::Marking);
 
-    let weak_clone = weak.clone();
     let marker_thread = thread::spawn(move || {
         for _ in 0..100 {
-            let _ = weak_clone.upgrade();
+            let _ = weak.upgrade();
         }
     });
 
@@ -494,7 +486,9 @@ fn test_weak_clone_during_concurrent_upgrade() {
     let weak = Arc::new(Gc::downgrade(&gc));
 
     let weak_for_upgrade = weak.clone();
+    #[allow(clippy::redundant_clone)]
     let weak_for_clone = weak.clone();
+    #[allow(clippy::redundant_clone)]
     let gc_clone = gc.clone();
 
     let upgrade_thread = thread::spawn(move || {

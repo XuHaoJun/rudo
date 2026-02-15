@@ -167,12 +167,12 @@ fn test_weak_partial_refs_keep_memory() {
 fn test_weak_gccell_content_reclaimed() {
     use rudo_gc::cell::GcCell;
 
-    clear_roots!();
-
     #[derive(Trace)]
     struct Node {
         value: GcCell<i32>,
     }
+
+    clear_roots!();
 
     let weak: Weak<Node>;
 
@@ -199,12 +199,12 @@ fn test_weak_gccell_content_reclaimed() {
 
 #[test]
 fn test_weak_in_vec_reclaimed() {
-    clear_roots!();
-
     #[derive(Trace)]
     struct Item {
         value: i32,
     }
+
+    clear_roots!();
 
     let weak_vec: Vec<Weak<Item>>;
     let gc_items: Vec<Gc<Item>>;
@@ -214,7 +214,7 @@ fn test_weak_in_vec_reclaimed() {
         for gc in &gc_items {
             root!(gc);
         }
-        weak_vec = gc_items.iter().map(|gc| Gc::downgrade(gc)).collect();
+        weak_vec = gc_items.iter().map(Gc::downgrade).collect();
     }
 
     // All Gc items dropped, weak refs remain
@@ -240,13 +240,13 @@ fn test_weak_in_vec_reclaimed() {
 fn test_weak_nested_structure_reclaimed() {
     use rudo_gc::cell::GcCell;
 
-    clear_roots!();
-
     #[derive(Trace)]
     struct Outer {
         inner: GcCell<Option<Weak<Inner>>>,
         value: i32,
     }
+
+    clear_roots!();
 
     let weak: Weak<Outer>;
 
@@ -309,12 +309,12 @@ fn test_weak_with_rc_inside_gc() {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    clear_roots!();
-
     #[derive(Trace)]
     struct WithRc {
         rc: Rc<RefCell<i32>>,
     }
+
+    clear_roots!();
 
     let weak: Weak<WithRc>;
     let rc_clone: Rc<RefCell<i32>>;
@@ -386,12 +386,12 @@ fn test_weak_count_reaches_zero() {
 fn test_weak_in_hashmap_reclaimed() {
     use std::collections::HashMap;
 
-    clear_roots!();
-
     #[derive(Trace)]
     struct Value {
         data: i32,
     }
+
+    clear_roots!();
 
     let weak_map: HashMap<i32, Weak<Value>>;
     let gc_map: HashMap<i32, Gc<Value>>;
@@ -414,7 +414,7 @@ fn test_weak_in_hashmap_reclaimed() {
 
     // All weak refs should be dead
     for (k, weak) in &weak_map {
-        assert!(!weak.is_alive(), "Key {} should be dead", k);
+        assert!(!weak.is_alive(), "Key {k} should be dead");
     }
 
     clear_roots!();

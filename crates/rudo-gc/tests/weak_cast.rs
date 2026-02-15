@@ -1,6 +1,6 @@
-//! Tests for Weak<T>::cast() pointer casting functionality.
+//! Tests for Weak<T>`::cast()` pointer casting functionality.
 //!
-//! These tests verify that Weak::cast() works correctly for casting
+//! These tests verify that `Weak::cast()` works correctly for casting
 //! weak pointers between compatible types.
 
 use rudo_gc::{collect_full, Gc, Trace, Weak};
@@ -166,10 +166,10 @@ fn test_weak_cast_multiple_times() {
     let weak_u8: Weak<u8> = weak.cast::<u8>();
     let weak_u16: Weak<u16> = weak_u8.cast::<u16>();
     let weak_u32: Weak<u32> = weak_u16.cast::<u32>();
-    let weak_i32: Weak<i32> = weak_u32.cast::<i32>();
+    let weak_converted: Weak<i32> = weak_u32.cast::<i32>();
 
-    assert!(weak_i32.is_alive());
-    assert!(weak_i32.upgrade().is_some());
+    assert!(weak_converted.is_alive());
+    assert!(weak_converted.upgrade().is_some());
 }
 
 // ============================================================================
@@ -221,7 +221,7 @@ fn test_weak_cast_with_gccell() {
 
     #[derive(Trace)]
     struct Node {
-        weak_ref: GcCell<Option<Weak<Node>>>,
+        weak_ref: GcCell<Option<Weak<Self>>>,
         value: i32,
     }
 

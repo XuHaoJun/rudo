@@ -1,8 +1,8 @@
 //! Tests for Weak<T> behavior during incremental marking phases.
 //!
-//! These tests verify that Weak::upgrade(), is_alive(), and may_be_valid()
+//! These tests verify that `Weak::upgrade()`, `is_alive()`, and `may_be_valid()`
 //! work correctly throughout the different phases of incremental marking:
-//! Idle, Snapshot, Marking, FinalMark, and Sweeping.
+//! Idle, Snapshot, Marking, `FinalMark`, and Sweeping.
 
 #![allow(clippy::redundant_closure)]
 
@@ -171,7 +171,7 @@ fn test_weak_is_alive_across_all_phases() {
 
     for phase in phases {
         state.set_phase(phase);
-        assert!(weak.is_alive(), "Weak should be alive in {:?} phase", phase);
+        assert!(weak.is_alive(), "Weak should be alive in {phase:?} phase");
     }
 
     reset_to_idle();
@@ -196,11 +196,7 @@ fn test_weak_may_be_valid_across_all_phases() {
 
     for phase in phases {
         state.set_phase(phase);
-        assert!(
-            weak.may_be_valid(),
-            "Weak may_be_valid in {:?} phase",
-            phase
-        );
+        assert!(weak.may_be_valid(), "Weak may_be_valid in {phase:?} phase");
     }
 
     reset_to_idle();
@@ -366,8 +362,7 @@ fn test_weak_ptr_eq_during_marking() {
         state.set_phase(phase);
         assert!(
             Weak::ptr_eq(&weak1, &weak2),
-            "ptr_eq should work in {:?} phase",
-            phase
+            "ptr_eq should work in {phase:?} phase"
         );
     }
 
@@ -434,15 +429,15 @@ fn test_weak_counts_during_marking() {
 fn test_weak_in_gccell_during_marking() {
     use rudo_gc::cell::GcCell;
 
+    #[derive(Trace)]
+    struct Node {
+        self_ref: GcCell<Option<Weak<Self>>>,
+        value: i32,
+    }
+
     enable_incremental();
     let state = IncrementalMarkState::global();
     state.set_phase(MarkPhase::Marking);
-
-    #[derive(Trace)]
-    struct Node {
-        self_ref: GcCell<Option<Weak<Node>>>,
-        value: i32,
-    }
 
     let node = Gc::new_cyclic_weak(|weak| Node {
         self_ref: GcCell::new(Some(weak)),
@@ -508,8 +503,7 @@ fn test_many_weaks_across_phases() {
         for weak in &weak_refs {
             assert!(
                 weak.upgrade().is_some(),
-                "All weaks should upgrade in {:?} phase",
-                phase
+                "All weaks should upgrade in {phase:?} phase"
             );
         }
     }
