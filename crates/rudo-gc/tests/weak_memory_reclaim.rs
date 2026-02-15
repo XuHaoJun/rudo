@@ -224,6 +224,10 @@ fn test_weak_in_vec_reclaimed() {
     drop(gc_items);
 
     clear_roots!();
+
+    #[cfg(feature = "debug-suspicious-sweep")]
+    clear_history();
+
     collect_full();
 
     // All weak refs should be dead
