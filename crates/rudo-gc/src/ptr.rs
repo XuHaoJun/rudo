@@ -1061,8 +1061,8 @@ impl<T: Trace> Gc<T> {
     /// # Panics
     ///
     /// Panics if the Gc is dead.
-    pub fn as_ptr(&self) -> *const T {
-        let ptr = self.ptr.load(Ordering::Acquire);
+    pub fn as_ptr(gc: &Self) -> *const T {
+        let ptr = gc.ptr.load(Ordering::Acquire);
         let gc_box_ptr = ptr.as_ptr();
         // SAFETY: ptr is not null (checked in callers), and ptr is valid
         unsafe { std::ptr::addr_of!((*gc_box_ptr).value) }
@@ -1083,8 +1083,8 @@ impl<T: Trace> Gc<T> {
     /// # Panics
     ///
     /// Panics if the Gc is dead.
-    pub fn ref_count(&self) -> NonZeroUsize {
-        let ptr = self.ptr.load(Ordering::Acquire);
+    pub fn ref_count(gc: &Self) -> NonZeroUsize {
+        let ptr = gc.ptr.load(Ordering::Acquire);
         let gc_box_ptr = ptr.as_ptr();
         // SAFETY: ptr is not null (checked in callers)
         unsafe { (*gc_box_ptr).ref_count() }
@@ -1095,8 +1095,8 @@ impl<T: Trace> Gc<T> {
     /// # Panics
     ///
     /// Panics if the Gc is dead.
-    pub fn weak_count(&self) -> usize {
-        let ptr = self.ptr.load(Ordering::Acquire);
+    pub fn weak_count(gc: &Self) -> usize {
+        let ptr = gc.ptr.load(Ordering::Acquire);
         let gc_box_ptr = ptr.as_ptr();
         // SAFETY: ptr is not null (checked in callers)
         unsafe { (*gc_box_ptr).weak_count() }
@@ -1638,7 +1638,8 @@ impl<T: Trace> Weak<T> {
     ///
     /// # Safety
     ///
-    /// See `Gc::cast` for safety requirements.
+    /// The caller must ensure that `T` and `U` have the same layout and that
+    /// the cast is valid for the lifetime of the pointer.
     pub fn cast<U: Trace + 'static>(self) -> Weak<U> {
         let ptr = self.ptr.load(Ordering::Acquire);
         std::mem::forget(self);
