@@ -1513,6 +1513,10 @@ pub struct LocalHeap {
     /// When the main SATB buffer overflows, values are preserved here
     /// until they can be processed during fallback/final mark.
     satb_overflow_buffer: Vec<NonNull<GcBox<()>>>,
+
+    /// Per-size-class cache: last page with free slots for O(1) allocation.
+    /// Invalidated when page is exhausted; repopulated from O(N) scan fallback.
+    free_list_preferred: [Option<NonNull<PageHeader>>; 8],
 }
 
 impl LocalHeap {
@@ -1544,6 +1548,7 @@ impl LocalHeap {
             satb_old_values: Vec::with_capacity(32),
             satb_buffer_capacity: 32,
             satb_overflow_buffer: Vec::with_capacity(64),
+            free_list_preferred: [None; 8],
         }
     }
 
@@ -1864,78 +1869,106 @@ impl LocalHeap {
     }
 
     /// Try to allocate from the free list of an existing page.
-    fn alloc_from_free_list(&self, class_index: usize) -> Option<NonNull<u8>> {
+    ///
+    /// Uses a per-size-class preferred page cache for O(1) allocation when the
+    /// cached page has free slots. Falls back to O(N) scan when cache misses.
+    fn alloc_from_free_list(&mut self, class_index: usize) -> Option<NonNull<u8>> {
         let block_size = SIZE_CLASSES[class_index];
-        for page_ptr in &self.pages {
-            unsafe {
-                let header = page_ptr.as_ptr();
-                if !(*header).is_large_object()
-                    && (*header).block_size as usize == block_size
-                    && (*header).free_list_head().is_some()
+
+        // Fast path: try preferred page first if cached and valid
+        if let Some(page_ptr) = self.free_list_preferred[class_index] {
+            if self.small_pages.contains(&(page_ptr.as_ptr() as usize)) {
+                if let Some((ptr, exhausted)) =
+                    unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size) }
                 {
-                    let Some(idx) = (*header).free_list_head() else {
-                        continue;
-                    };
-                    // Sanity check: ensure slot is not already allocated
-                    // This can happen if free list and allocated_bitmap are out of sync
-                    // due to concurrent sweep/allocate operations.
-                    if (*header).is_allocated(idx as usize) {
-                        // Skip this slot - pop from free list and continue
-                        let obj_ptr = page_ptr
-                            .as_ptr()
-                            .cast::<u8>()
-                            .add((*header).header_size as usize + (idx as usize * block_size));
-                        let next_head = obj_ptr.cast::<Option<u16>>().read_unaligned();
-                        // Pop from free list atomically using CAS
-                        if (*header)
-                            .compare_exchange_free_list(Some(idx), next_head)
-                            .is_err()
-                        {
-                            // CAS failed, another thread modified the free list
-                            // Retry with new head value
-                            continue;
-                        }
-                        continue;
+                    if exhausted {
+                        self.free_list_preferred[class_index] = None;
                     }
-                    let h_size = (*header).header_size as usize;
-                    let obj_ptr = page_ptr
-                        .as_ptr()
-                        .cast::<u8>()
-                        .add(h_size + (idx as usize * block_size));
-
-                    // Popping from free list: read the next pointer stored in the slot.
-                    // SAFETY: sweep_page (copy_sweep_logic) ensures this is a valid Option<u16>.
-                    // We use read_unaligned to avoid potential alignment issues with the cast.
-                    let next_head = obj_ptr.cast::<Option<u16>>().read_unaligned();
-                    // Pop from free list atomically using CAS
-                    loop {
-                        if (*header)
-                            .compare_exchange_free_list(Some(idx), next_head)
-                            .is_ok()
-                        {
-                            break;
-                        }
-                        // CAS failed - head changed, retry with new value
-                        // The loop naturally retries
-                    }
-
-                    // Mark as allocated so it's tracked during sweep
-                    (*header).set_allocated(idx as usize);
-
-                    // Clear ALL_DEAD flag since we're allocating a new live object
-                    // This prevents lazy_sweep_page_all_dead from incorrectly reclaiming it
-                    if (*header).all_dead() {
-                        (*header).clear_all_dead();
-                        // Reset dead_count since we just made an object live.
-                        // The page is no longer "all dead".
-                        (*header).set_dead_count(0);
-                    }
-
-                    return Some(NonNull::new_unchecked(obj_ptr));
+                    return Some(ptr);
                 }
+            }
+            self.free_list_preferred[class_index] = None;
+        }
+
+        // Slow path: O(N) scan
+        for page_ptr in &self.pages {
+            if let Some((ptr, exhausted)) =
+                unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size) }
+            {
+                if !exhausted {
+                    self.free_list_preferred[class_index] = Some(*page_ptr);
+                }
+                return Some(ptr);
             }
         }
         None
+    }
+
+    /// Try to pop one object from a page's free list.
+    ///
+    /// Returns `Some((ptr, exhausted))` on success, where `exhausted` is true
+    /// if the page has no more free slots after this pop. Returns `None` if
+    /// the page has no free slots or slot is stale (`allocated_bitmap` out of sync).
+    #[allow(clippy::cognitive_complexity)]
+    /// # Safety
+    /// `header` must point to a valid `PageHeader` for a page owned by this heap.
+    unsafe fn try_pop_from_page(
+        header: *mut PageHeader,
+        block_size: usize,
+    ) -> Option<(NonNull<u8>, bool)> {
+        // SAFETY: Caller guarantees header is valid.
+        if unsafe { (*header).is_large_object() }
+            || unsafe { (*header).block_size as usize } != block_size
+        {
+            return None;
+        }
+        // SAFETY: Caller guarantees header is valid.
+        let idx = (unsafe { (*header).free_list_head() })?;
+        // Sanity check: ensure slot is not already allocated
+        // This can happen if free list and allocated_bitmap are out of sync
+        // due to concurrent sweep/allocate operations.
+        // SAFETY: Caller guarantees header is valid.
+        if unsafe { (*header).is_allocated(idx as usize) } {
+            // Slot is allocated but in free list - corrupt. Pop it and give up on this page.
+            // Do NOT read next_head from slot memory (it contains user data, not a list ptr).
+            // Clear the free list head to avoid leaving corrupt state; sweep will rebuild.
+            // SAFETY: Caller guarantees header is valid.
+            let _ = unsafe { (*header).compare_exchange_free_list(Some(idx), None) };
+            return None;
+        }
+        // SAFETY: Caller guarantees header is valid.
+        let h_size = unsafe { (*header).header_size as usize };
+        let page_addr = header.cast::<u8>();
+        // SAFETY: Header is valid, offsets are within page bounds.
+        let obj_ptr = unsafe { page_addr.add(h_size + (idx as usize * block_size)) };
+
+        // Popping from free list: read the next pointer stored in the slot.
+        // SAFETY: sweep_page (copy_sweep_logic) ensures this is a valid Option<u16>.
+        let next_head = unsafe { obj_ptr.cast::<Option<u16>>().read_unaligned() };
+        let exhausted = next_head.is_none();
+
+        // Pop from free list atomically using CAS
+        loop {
+            // SAFETY: Caller guarantees header is valid.
+            if unsafe { (*header).compare_exchange_free_list(Some(idx), next_head) }.is_ok() {
+                break;
+            }
+        }
+
+        // Mark as allocated so it's tracked during sweep
+        // SAFETY: Caller guarantees header is valid.
+        unsafe { (*header).set_allocated(idx as usize) };
+
+        // Clear ALL_DEAD flag since we're allocating a new live object
+        // SAFETY: Caller guarantees header is valid.
+        if unsafe { (*header).all_dead() } {
+            unsafe {
+                (*header).clear_all_dead();
+                (*header).set_dead_count(0);
+            }
+        }
+
+        Some((unsafe { NonNull::new_unchecked(obj_ptr) }, exhausted))
     }
 
     #[inline(never)]
