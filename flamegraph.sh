@@ -28,7 +28,7 @@ echo ""
 # Run cargo flamegraph
 # Using RUST_TEST_THREADS=1 to avoid GC issues between threads
 # Using release build for realistic performance
-RUST_TEST_THREADS=1 cargo flamegraph \
+CARGO_PROFILE_RELEASE_DEBUG=true RUST_TEST_THREADS=1 cargo flamegraph \
     --example gui_benchmark \
     -o "$OUTPUT_DIR/gui_benchmark.svg" \
     2>&1 | tail -15
