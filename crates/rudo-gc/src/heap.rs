@@ -1517,6 +1517,11 @@ pub struct LocalHeap {
     /// Per-size-class cache: last page with free slots for O(1) allocation.
     /// Invalidated when page is exhausted; repopulated from O(N) scan fallback.
     free_list_preferred: [Option<NonNull<PageHeader>>; 8],
+
+    /// Per-size-class cursor: index into `pages` for next pending-sweep scan.
+    /// Resets to 0 when a full cycle finds nothing.
+    #[cfg(feature = "lazy-sweep")]
+    pending_sweep_cursor: [usize; 8],
 }
 
 impl LocalHeap {
@@ -1549,6 +1554,8 @@ impl LocalHeap {
             satb_buffer_capacity: 32,
             satb_overflow_buffer: Vec::with_capacity(64),
             free_list_preferred: [None; 8],
+            #[cfg(feature = "lazy-sweep")]
+            pending_sweep_cursor: [0; 8],
         }
     }
 
@@ -1833,11 +1840,18 @@ impl LocalHeap {
         }
 
         let block_size = SIZE_CLASSES[class_index];
+        let len = self.pages.len();
+        if len == 0 {
+            return None;
+        }
 
-        let page_ptrs: Vec<NonNull<PageHeader>> = self
-            .pages
-            .iter()
-            .filter(|&&page_ptr| unsafe {
+        let start = self.pending_sweep_cursor[class_index] % len;
+
+        for i in 0..len {
+            let idx = (start + i) % len;
+            let page_ptr = self.pages[idx];
+
+            let matches = unsafe {
                 let header = page_ptr.as_ptr();
                 let hdr = header.read();
                 !hdr.is_large_object()
@@ -1845,14 +1859,16 @@ impl LocalHeap {
                     && hdr.needs_sweep()
                     && hdr.dead_count() > 0
                     && !hdr.all_dead()
-            })
-            .copied()
-            .collect();
+            };
 
-        for page_ptr in page_ptrs {
+            if !matches {
+                continue;
+            }
+
             let reclaimed = unsafe { crate::gc::sweep_specific_page(self, page_ptr, 1) };
             if reclaimed > 0 {
                 if let Some(ptr) = self.alloc_from_free_list(class_index) {
+                    self.pending_sweep_cursor[class_index] = (idx + 1) % len;
                     return Some(ptr);
                 }
             }
@@ -1865,6 +1881,7 @@ impl LocalHeap {
             }
         }
 
+        self.pending_sweep_cursor[class_index] = 0;
         None
     }
 
