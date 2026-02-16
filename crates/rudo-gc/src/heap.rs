@@ -1518,6 +1518,10 @@ pub struct LocalHeap {
     /// Invalidated when page is exhausted; repopulated from O(N) scan fallback.
     free_list_preferred: [Option<NonNull<PageHeader>>; 8],
 
+    /// Per-size-class page index for O(K) `alloc_from_free_list` slow path.
+    /// Only small-object pages; large-object pages are omitted.
+    pages_by_class: [Vec<NonNull<PageHeader>>; 8],
+
     /// Per-size-class cursor: index into `pages` for next pending-sweep scan.
     /// Resets to 0 when a full cycle finds nothing.
     #[cfg(feature = "lazy-sweep")]
@@ -1554,6 +1558,7 @@ impl LocalHeap {
             satb_buffer_capacity: 32,
             satb_overflow_buffer: Vec::with_capacity(64),
             free_list_preferred: [None; 8],
+            pages_by_class: std::array::from_fn(|_| Vec::new()),
             #[cfg(feature = "lazy-sweep")]
             pending_sweep_cursor: [0; 8],
         }
@@ -1907,8 +1912,8 @@ impl LocalHeap {
             self.free_list_preferred[class_index] = None;
         }
 
-        // Slow path: O(N) scan
-        for page_ptr in &self.pages {
+        // Slow path: O(K) scan over pages of this size class
+        for page_ptr in &self.pages_by_class[class_index] {
             if let Some((ptr, exhausted)) =
                 unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size) }
             {
@@ -2090,6 +2095,7 @@ impl LocalHeap {
         // See docs/reentrant-alloc-rules.md.
         self.pages.push(header);
         self.small_pages.insert(ptr.as_ptr() as usize);
+        self.pages_by_class[class_index].push(header);
 
         // 4. Update Tlab
         let tlab = match class_index {
@@ -3175,6 +3181,9 @@ fn clear_local_heap() {
         heap.pages.clear();
         heap.small_pages.clear();
         heap.large_object_map.clear();
+        for vec in &mut heap.pages_by_class {
+            vec.clear();
+        }
         heap.young_allocated = 0;
         heap.old_allocated = 0;
         heap.min_addr = usize::MAX;
