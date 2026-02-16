@@ -1273,6 +1273,13 @@ const fn compute_class_index(size: usize) -> usize {
     }
 }
 
+/// Map `block_size` (16, 32, ..., 2048) to class index 0..7.
+#[cfg(feature = "lazy-sweep")]
+#[must_use]
+pub(crate) const fn block_size_to_class_index(block_size: usize) -> usize {
+    (block_size.trailing_zeros().saturating_sub(4)) as usize
+}
+
 // ============================================================================
 // GlobalSegmentManager - Shared memory manager
 // ============================================================================
@@ -1524,8 +1531,15 @@ pub struct LocalHeap {
 
     /// Per-size-class cursor: index into `pages` for next pending-sweep scan.
     /// Resets to 0 when a full cycle finds nothing.
+    /// Reserved for future round-robin optimization; currently unused with `pending_sweep_by_class`.
     #[cfg(feature = "lazy-sweep")]
+    #[allow(dead_code)]
     pending_sweep_cursor: [usize; 8],
+
+    /// Per-size-class index of pages needing sweep for O(K) `alloc_from_pending_sweep`.
+    /// Populated when `set_needs_sweep` is called; pruned lazily during iteration.
+    #[cfg(feature = "lazy-sweep")]
+    pub(crate) pending_sweep_by_class: [Vec<NonNull<PageHeader>>; 8],
 }
 
 impl LocalHeap {
@@ -1561,6 +1575,8 @@ impl LocalHeap {
             pages_by_class: std::array::from_fn(|_| Vec::new()),
             #[cfg(feature = "lazy-sweep")]
             pending_sweep_cursor: [0; 8],
+            #[cfg(feature = "lazy-sweep")]
+            pending_sweep_by_class: std::array::from_fn(|_| Vec::new()),
         }
     }
 
@@ -1845,17 +1861,9 @@ impl LocalHeap {
         }
 
         let block_size = SIZE_CLASSES[class_index];
-        let len = self.pages.len();
-        if len == 0 {
-            return None;
-        }
-
-        let start = self.pending_sweep_cursor[class_index] % len;
-
-        for i in 0..len {
-            let idx = (start + i) % len;
-            let page_ptr = self.pages[idx];
-
+        let mut i = 0;
+        while i < self.pending_sweep_by_class[class_index].len() {
+            let page_ptr = self.pending_sweep_by_class[class_index][i];
             let matches = unsafe {
                 let header = page_ptr.as_ptr();
                 let hdr = header.read();
@@ -1865,28 +1873,25 @@ impl LocalHeap {
                     && hdr.dead_count() > 0
                     && !hdr.all_dead()
             };
-
             if !matches {
+                self.pending_sweep_by_class[class_index].swap_remove(i);
                 continue;
             }
-
             let reclaimed = unsafe { crate::gc::sweep_specific_page(self, page_ptr, 1) };
             if reclaimed > 0 {
                 if let Some(ptr) = self.alloc_from_free_list(class_index) {
-                    self.pending_sweep_cursor[class_index] = (idx + 1) % len;
                     return Some(ptr);
                 }
             }
-
             unsafe {
                 let header = page_ptr.as_ptr();
                 if header.read().dead_count() == 0 {
-                    break;
+                    self.pending_sweep_by_class[class_index].swap_remove(i);
+                    continue;
                 }
             }
+            i += 1;
         }
-
-        self.pending_sweep_cursor[class_index] = 0;
         None
     }
 
@@ -3182,6 +3187,10 @@ fn clear_local_heap() {
         heap.small_pages.clear();
         heap.large_object_map.clear();
         for vec in &mut heap.pages_by_class {
+            vec.clear();
+        }
+        #[cfg(feature = "lazy-sweep")]
+        for vec in &mut heap.pending_sweep_by_class {
             vec.clear();
         }
         heap.young_allocated = 0;

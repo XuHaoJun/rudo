@@ -451,8 +451,9 @@ fn perform_multi_threaded_collect() {
             unsafe {
                 #[cfg(feature = "lazy-sweep")]
                 {
-                    let heap = &*tcb.heap.get();
-                    for page_ptr in heap.all_pages() {
+                    let heap = unsafe { &mut *tcb.heap.get() };
+                    let pages: Vec<_> = heap.all_pages().collect();
+                    for page_ptr in pages {
                         let header = page_ptr.as_ptr();
                         if !header.read().is_large_object() {
                             let block_size = (*header).block_size as usize;
@@ -480,6 +481,9 @@ fn perform_multi_threaded_collect() {
                                 (*header).set_needs_sweep();
                                 (*header).set_dead_count(total_dead);
                                 (*header).clear_all_marks();
+                                let class_index =
+                                    crate::heap::block_size_to_class_index(block_size);
+                                heap.pending_sweep_by_class[class_index].push(page_ptr);
                             }
                         } else {
                             (*header).clear_needs_sweep();
