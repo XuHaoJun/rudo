@@ -13,17 +13,12 @@ pub struct StackBounds {
     pub top: usize,
 }
 
-/// Retrieve the stack bounds for the current thread.
-#[cfg(miri)]
-pub fn get_stack_bounds() -> StackBounds {
-    // Miri does not support stack scanning or direct access to the stack bounds.
-    // Return a dummy range that results in no scanning.
-    StackBounds { bottom: 0, top: 0 }
-}
+// -----------------------------------------------------------------------------
+// Platform-specific slow path (invokes OS APIs). Cached via get_stack_bounds().
+// -----------------------------------------------------------------------------
 
-/// Retrieve the stack bounds for the current thread.
 #[cfg(all(target_os = "linux", not(miri)))]
-pub fn get_stack_bounds() -> StackBounds {
+fn get_stack_bounds_slow() -> StackBounds {
     use libc::{
         pthread_attr_destroy, pthread_attr_getstack, pthread_attr_t, pthread_getattr_np,
         pthread_self,
@@ -50,9 +45,8 @@ pub fn get_stack_bounds() -> StackBounds {
     }
 }
 
-/// Retrieve the stack bounds for the current thread (macOS implementation).
 #[cfg(all(target_os = "macos", not(miri)))]
-pub fn get_stack_bounds() -> StackBounds {
+fn get_stack_bounds_slow() -> StackBounds {
     use libc::{pthread_get_stackaddr_np, pthread_get_stacksize_np, pthread_self};
 
     unsafe {
@@ -66,13 +60,13 @@ pub fn get_stack_bounds() -> StackBounds {
     }
 }
 
-/// Retrieve the stack bounds for the current thread (Windows implementation).
+/// Windows implementation using VirtualQuery.
 ///
 /// Uses `VirtualQuery` to find the stack's allocation base. This is robust
 /// but not the fastest approach. For hot paths, could use NtCurrentTeb()->StackBase
 /// which is ~10x faster but requires more fragile code.
 #[cfg(all(target_os = "windows", not(miri)))]
-pub fn get_stack_bounds() -> StackBounds {
+fn get_stack_bounds_slow() -> StackBounds {
     use windows_sys::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION};
 
     let local_var = 0;
@@ -117,12 +111,44 @@ pub fn get_stack_bounds() -> StackBounds {
     }
 }
 
-/// Retrieve the stack bounds for the current thread (Stub for unsupported platforms).
+// -----------------------------------------------------------------------------
+// Thread-local cache. Stack bounds are invariant for a thread's lifetime.
+// -----------------------------------------------------------------------------
+
 #[cfg(all(
-    not(target_os = "linux"),
-    not(target_os = "macos"),
-    not(target_os = "windows"),
-    not(miri)
+    not(miri),
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+thread_local! {
+    static CACHED_STACK_BOUNDS: std::cell::OnceCell<StackBounds> =
+        const { std::cell::OnceCell::new() };
+}
+
+// -----------------------------------------------------------------------------
+// Public API
+// -----------------------------------------------------------------------------
+
+/// Retrieve the stack bounds for the current thread.
+#[cfg(miri)]
+pub fn get_stack_bounds() -> StackBounds {
+    // Miri does not support stack scanning or direct access to the stack bounds.
+    // Return a dummy range that results in no scanning.
+    StackBounds { bottom: 0, top: 0 }
+}
+
+/// Retrieve the stack bounds for the current thread (cached).
+#[cfg(all(
+    not(miri),
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+pub fn get_stack_bounds() -> StackBounds {
+    CACHED_STACK_BOUNDS.with(|c| *c.get_or_init(get_stack_bounds_slow))
+}
+
+/// Retrieve the stack bounds for the current thread (stub for unsupported platforms).
+#[cfg(all(
+    not(miri),
+    not(any(target_os = "linux", target_os = "macos", target_os = "windows"))
 ))]
 pub fn get_stack_bounds() -> StackBounds {
     unimplemented!("Stack bounds retrieval only implemented for Linux, macOS, and Windows")
