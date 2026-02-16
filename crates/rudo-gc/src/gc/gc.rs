@@ -919,7 +919,7 @@ fn perform_multi_threaded_collect_full() {
     // and those marks would otherwise persist and prevent sweeping of dead orphan pages
     {
         let manager = crate::heap::segment_manager().lock().unwrap();
-        for orphan in &manager.orphan_pages {
+        for orphan in manager.orphan_by_addr.values() {
             unsafe {
                 let header = orphan.addr as *mut crate::heap::PageHeader;
                 (*header).clear_all_marks();

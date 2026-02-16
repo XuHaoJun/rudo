@@ -1312,8 +1312,8 @@ pub struct GlobalSegmentManager {
     /// Map from page address to its corresponding large object head, size, and `header_size`.
     pub large_object_map: HashMap<usize, (usize, usize, usize)>,
 
-    /// Orphan pages: pages from terminated threads that may contain live objects.
-    pub orphan_pages: Vec<OrphanPage>,
+    /// Orphan pages keyed by page address for O(1) lookup in `find_gc_box_from_orphan`.
+    pub orphan_by_addr: HashMap<usize, OrphanPage>,
 }
 
 /// Global singleton for the segment manager.
@@ -1332,7 +1332,7 @@ impl GlobalSegmentManager {
             free_pages: Vec::new(),
             quarantined: Vec::new(),
             large_object_map: HashMap::new(),
-            orphan_pages: Vec::new(),
+            orphan_by_addr: HashMap::new(),
         }
     }
 
@@ -2004,7 +2004,7 @@ impl LocalHeap {
     /// - Has the requested `block_size`
     /// - Has sufficient free slots (at least 25% of capacity)
     ///
-    /// Returns `Some(page_addr)` if a suitable page is found and removed from `orphan_pages`.
+    /// Returns `Some(page_addr)` if a suitable page is found and removed from `orphan_by_addr`.
     /// Returns `None` if no suitable page is available.
     ///
     /// # Note
@@ -2575,12 +2575,16 @@ impl Drop for LocalHeap {
 
                 (*header).set_orphan();
 
-                manager.orphan_pages.push(OrphanPage {
-                    addr: page_ptr.as_ptr() as usize,
-                    size,
-                    is_large,
-                    original_owner: current_thread,
-                });
+                let addr = page_ptr.as_ptr() as usize;
+                manager.orphan_by_addr.insert(
+                    addr,
+                    OrphanPage {
+                        addr,
+                        size,
+                        is_large,
+                        original_owner: current_thread,
+                    },
+                );
             }
         }
         drop(manager);
@@ -2602,7 +2606,7 @@ pub fn sweep_orphan_pages() {
 
     let mut to_reclaim = Vec::new();
 
-    manager.orphan_pages.retain(|orphan| unsafe {
+    manager.orphan_by_addr.retain(|_addr, orphan| unsafe {
         let header = orphan.addr as *mut PageHeader;
         let is_large = (*header).is_large_object();
 
@@ -3072,7 +3076,7 @@ pub unsafe fn find_gc_box_from_ptr(
 /// This is the fallback path for `find_gc_box_from_ptr` when no live
 /// `LocalHeap` contains the target address. It handles:
 /// - Large objects: via `segment_manager().large_object_map`
-/// - Small objects: via `segment_manager().orphan_pages`
+/// - Small objects: via `segment_manager().orphan_by_addr`
 ///
 /// # Safety
 ///
@@ -3108,43 +3112,38 @@ pub unsafe fn find_gc_box_from_orphan(ptr: *const u8) -> Option<NonNull<crate::p
         return Some(unsafe { NonNull::new_unchecked(obj_ptr.cast::<crate::ptr::GcBox<()>>()) });
     }
 
-    // 2. Try orphan small pages
-    for orphan in &manager.orphan_pages {
-        if orphan.is_large {
-            continue; // already handled via large_object_map
-        }
-        if orphan.addr != page_addr {
-            continue;
-        }
-        // Found matching orphan small page; copy values before dropping manager
-        let orphan_addr = orphan.addr;
-        let header = orphan_addr as *mut PageHeader;
-        let maybe_slot = unsafe {
-            if (*header).magic == MAGIC_GC_PAGE {
-                let b_size = (*header).block_size as usize;
-                let h = PageHeader::header_size(b_size);
-                if addr < orphan_addr + h {
-                    None // points into header
-                } else {
-                    let offset = addr - (orphan_addr + h);
-                    let idx = offset / b_size;
-                    if idx >= (*header).obj_count as usize || !(*header).is_allocated(idx) {
-                        None
+    // 2. Try orphan small pages (O(1) lookup)
+    if let Some(orphan) = manager.orphan_by_addr.get(&page_addr) {
+        if !orphan.is_large {
+            let orphan_addr = orphan.addr;
+            let header = orphan_addr as *mut PageHeader;
+            let maybe_slot = unsafe {
+                if (*header).magic == MAGIC_GC_PAGE {
+                    let b_size = (*header).block_size as usize;
+                    let h = PageHeader::header_size(b_size);
+                    if addr < orphan_addr + h {
+                        None // points into header
                     } else {
-                        Some((b_size, h, idx))
+                        let offset = addr - (orphan_addr + h);
+                        let idx = offset / b_size;
+                        if idx >= (*header).obj_count as usize || !(*header).is_allocated(idx) {
+                            None
+                        } else {
+                            Some((b_size, h, idx))
+                        }
                     }
+                } else {
+                    None
                 }
-            } else {
-                None
+            };
+            if let Some((block_size, h_size, index)) = maybe_slot {
+                drop(manager);
+                let obj_ptr = (orphan_addr as *mut u8).wrapping_add(h_size + index * block_size);
+                #[allow(clippy::cast_ptr_alignment)]
+                return Some(unsafe {
+                    NonNull::new_unchecked(obj_ptr.cast::<crate::ptr::GcBox<()>>())
+                });
             }
-        };
-        if let Some((block_size, h_size, index)) = maybe_slot {
-            drop(manager);
-            let obj_ptr = (orphan_addr as *mut u8).wrapping_add(h_size + index * block_size);
-            #[allow(clippy::cast_ptr_alignment)]
-            return Some(unsafe {
-                NonNull::new_unchecked(obj_ptr.cast::<crate::ptr::GcBox<()>>())
-            });
         }
     }
 
@@ -3249,7 +3248,7 @@ pub unsafe fn reset_for_testing() {
             guard.free_pages.clear();
             guard.quarantined.clear();
             guard.large_object_map.clear();
-            guard.orphan_pages.clear();
+            guard.orphan_by_addr.clear();
         }
     }
 

@@ -80,10 +80,10 @@ fn test_large_object_global_map_cleanup_on_thread_exit() {
 
     for addr in &page_addrs {
         let in_map = manager.large_object_map.contains_key(addr);
-        let in_orphan = manager.orphan_pages.iter().any(|p| p.addr == *addr);
+        let in_orphan = manager.orphan_by_addr.contains_key(addr);
         assert!(
             !in_map && !in_orphan,
-            "Addr {addr:x} should be removed from both map and orphan_pages after GC (in_map={in_map}, in_orphan={in_orphan})"
+            "Addr {addr:x} should be removed from both map and orphan_by_addr after GC (in_map={in_map}, in_orphan={in_orphan})"
         );
     }
     drop(manager);
