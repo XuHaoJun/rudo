@@ -1274,7 +1274,6 @@ const fn compute_class_index(size: usize) -> usize {
 }
 
 /// Map `block_size` (16, 32, ..., 2048) to class index 0..7.
-#[cfg(feature = "lazy-sweep")]
 #[must_use]
 pub(crate) const fn block_size_to_class_index(block_size: usize) -> usize {
     (block_size.trailing_zeros().saturating_sub(4)) as usize
@@ -1529,6 +1528,11 @@ pub struct LocalHeap {
     /// Only small-object pages; large-object pages are omitted.
     pages_by_class: [Vec<NonNull<PageHeader>>; 8],
 
+    /// Per-size-class list of pages that currently have free slots.
+    /// Used for O(P) `alloc_from_free_list` scan instead of O(K) over `pages_by_class`,
+    /// where P << K (pages with space vs all pages).
+    pub(crate) pages_with_free_slots: [Vec<NonNull<PageHeader>>; 8],
+
     /// Per-size-class cursor: index into `pages` for next pending-sweep scan.
     /// Resets to 0 when a full cycle finds nothing.
     /// Reserved for future round-robin optimization; currently unused with `pending_sweep_by_class`.
@@ -1573,6 +1577,7 @@ impl LocalHeap {
             satb_overflow_buffer: Vec::with_capacity(64),
             free_list_preferred: [None; 8],
             pages_by_class: std::array::from_fn(|_| Vec::new()),
+            pages_with_free_slots: std::array::from_fn(|_| Vec::new()),
             #[cfg(feature = "lazy-sweep")]
             pending_sweep_cursor: [0; 8],
             #[cfg(feature = "lazy-sweep")]
@@ -1898,7 +1903,8 @@ impl LocalHeap {
     /// Try to allocate from the free list of an existing page.
     ///
     /// Uses a per-size-class preferred page cache for O(1) allocation when the
-    /// cached page has free slots. Falls back to O(N) scan when cache misses.
+    /// cached page has free slots. Falls back to O(P) scan over `pages_with_free_slots`
+    /// (P = pages with space), or O(K) over `pages_by_class` if the free-slots list is empty.
     fn alloc_from_free_list(&mut self, class_index: usize) -> Option<NonNull<u8>> {
         let block_size = SIZE_CLASSES[class_index];
 
@@ -1909,19 +1915,44 @@ impl LocalHeap {
             {
                 if exhausted {
                     self.free_list_preferred[class_index] = None;
+                    if let Some(pos) = self.pages_with_free_slots[class_index]
+                        .iter()
+                        .position(|&p| p == page_ptr)
+                    {
+                        self.pages_with_free_slots[class_index].swap_remove(pos);
+                    }
                 }
                 return Some(ptr);
             }
             self.free_list_preferred[class_index] = None;
         }
 
-        // Slow path: O(K) scan over pages of this size class
+        // O(P) scan over pages that have free slots
+        let i = 0;
+        while i < self.pages_with_free_slots[class_index].len() {
+            let page_ptr = self.pages_with_free_slots[class_index][i];
+            if let Some((ptr, exhausted)) =
+                unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size) }
+            {
+                if exhausted {
+                    self.pages_with_free_slots[class_index].swap_remove(i);
+                } else {
+                    self.free_list_preferred[class_index] = Some(page_ptr);
+                }
+                return Some(ptr);
+            }
+            // Page in list but try_pop failed (corrupt/stale) - remove and continue
+            self.pages_with_free_slots[class_index].swap_remove(i);
+        }
+
+        // Fallback: O(K) scan over all pages (preserves correctness for edge cases)
         for page_ptr in &self.pages_by_class[class_index] {
             if let Some((ptr, exhausted)) =
                 unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size) }
             {
                 if !exhausted {
                     self.free_list_preferred[class_index] = Some(*page_ptr);
+                    self.pages_with_free_slots[class_index].push(*page_ptr);
                 }
                 return Some(ptr);
             }
@@ -3184,6 +3215,9 @@ fn clear_local_heap() {
         heap.small_pages.clear();
         heap.large_object_map.clear();
         for vec in &mut heap.pages_by_class {
+            vec.clear();
+        }
+        for vec in &mut heap.pages_with_free_slots {
             vec.clear();
         }
         #[cfg(feature = "lazy-sweep")]

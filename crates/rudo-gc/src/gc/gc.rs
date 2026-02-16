@@ -501,7 +501,7 @@ fn perform_multi_threaded_collect() {
                 }
                 #[cfg(not(feature = "lazy-sweep"))]
                 {
-                    let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
+                    let reclaimed = sweep_segment_pages(&mut *tcb.heap.get(), false);
                     let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
                     objects_reclaimed += reclaimed + reclaimed_large;
                     promote_all_pages(&*tcb.heap.get());
@@ -968,7 +968,7 @@ fn perform_multi_threaded_collect_full() {
     let sweep_start = Instant::now();
     for tcb in &tcbs {
         unsafe {
-            let reclaimed = sweep_segment_pages(&*tcb.heap.get(), false);
+            let reclaimed = sweep_segment_pages(&mut *tcb.heap.get(), false);
             let reclaimed_large = sweep_large_objects(&mut *tcb.heap.get(), false);
             objects_reclaimed += reclaimed + reclaimed_large;
             promote_all_pages(&*tcb.heap.get());
@@ -2044,7 +2044,7 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
 /// Two-phase sweep to prevent Use-After-Free during Drop:
 /// - Phase 1: Execute all Drop functions (objects still accessible)
 /// - Phase 2: Reclaim memory and rebuild free lists
-fn sweep_segment_pages(heap: &LocalHeap, only_young: bool) -> usize {
+fn sweep_segment_pages(heap: &mut LocalHeap, only_young: bool) -> usize {
     #[cfg(feature = "tracing")]
     tracing::debug!(heap_bytes = heap.total_allocated(), "sweep_start");
 
@@ -2181,11 +2181,16 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
     clippy::if_not_else,
     clippy::doc_markdown
 )]
-fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young: bool) -> usize {
+fn sweep_phase2_reclaim(
+    heap: &mut LocalHeap,
+    _pending: Vec<PendingDrop>,
+    only_young: bool,
+) -> usize {
     let mut reclaimed = 0;
 
-    // Process each page: rebuild free list from scratch
-    for page_ptr in heap.all_pages() {
+    let pages_snapshot: Vec<_> = heap.all_pages().collect();
+
+    for page_ptr in pages_snapshot {
         unsafe {
             let header = page_ptr.as_ptr();
 
@@ -2249,6 +2254,11 @@ fn sweep_phase2_reclaim(heap: &LocalHeap, _pending: Vec<PendingDrop>, only_young
                 }
             }
             (*header).set_free_list_head(free_head);
+
+            if free_head.is_some() {
+                let class_index = crate::heap::block_size_to_class_index(block_size);
+                heap.pages_with_free_slots[class_index].push(page_ptr);
+            }
         }
     }
 
@@ -2793,6 +2803,12 @@ pub unsafe fn sweep_specific_page(
                 (*header).set_dead_count(0);
             }
         }
+    }
+
+    if reclaimed > 0 {
+        let block_size = unsafe { (*page_ptr.as_ptr()).block_size as usize };
+        let class_index = crate::heap::block_size_to_class_index(block_size);
+        heap.pages_with_free_slots[class_index].push(page_ptr);
     }
 
     reclaimed
