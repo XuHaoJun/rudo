@@ -1904,15 +1904,13 @@ impl LocalHeap {
 
         // Fast path: try preferred page first if cached and valid
         if let Some(page_ptr) = self.free_list_preferred[class_index] {
-            if self.small_pages.contains(&(page_ptr.as_ptr() as usize)) {
-                if let Some((ptr, exhausted)) =
-                    unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size) }
-                {
-                    if exhausted {
-                        self.free_list_preferred[class_index] = None;
-                    }
-                    return Some(ptr);
+            if let Some((ptr, exhausted)) =
+                unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size) }
+            {
+                if exhausted {
+                    self.free_list_preferred[class_index] = None;
                 }
+                return Some(ptr);
             }
             self.free_list_preferred[class_index] = None;
         }
