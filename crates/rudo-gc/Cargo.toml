@@ -49,3 +49,7 @@ workspace = true
 [[bench]]
 name = "sweep_benchmark"
 harness = false
+
+[[bench]]
+name = "gui_overall"
+harness = false
