@@ -155,8 +155,6 @@ impl<T: ?Sized> GcCell<T> {
     where
         T: GcCapture,
     {
-        self.validate_thread_affinity("borrow_mut");
-
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
         if crate::gc::incremental::is_incremental_marking_active() {
@@ -176,10 +174,11 @@ impl<T: ?Sized> GcCell<T> {
             }
         }
 
-        crate::heap::simple_write_barrier(ptr);
-        if crate::gc::incremental::is_incremental_marking_active() {
-            crate::heap::incremental_write_barrier(ptr);
-        }
+        crate::heap::gc_cell_validate_and_barrier(
+            ptr,
+            "borrow_mut",
+            crate::gc::incremental::is_incremental_marking_active(),
+        );
 
         let result = self.inner.borrow_mut();
 
@@ -329,49 +328,49 @@ impl<T: ?Sized> GcCell<T> {
         unsafe {
             crate::heap::with_heap(|heap| {
                 let ptr_addr = ptr as usize;
-                let page_addr = ptr_addr & crate::heap::page_mask();
-                let is_large = heap.large_object_map.contains_key(&page_addr);
+                let header = crate::heap::ptr_to_page_header(ptr);
 
-                if is_large {
-                    if let Some(&(head_addr, _obj_size, _h_size)) =
-                        heap.large_object_map.get(&page_addr)
-                    {
-                        let header = head_addr as *mut crate::heap::PageHeader;
-                        if (*header).magic == crate::heap::MAGIC_GC_PAGE && (*header).generation > 0
-                        {
-                            let block_size = (*header).block_size as usize;
-                            let header_size = (*header).header_size as usize;
-                            let header_page_addr = head_addr;
-
-                            if ptr_addr >= header_page_addr + header_size {
-                                let offset = ptr_addr - (header_page_addr + header_size);
-                                let index = offset / block_size;
-                                let obj_count = (*header).obj_count as usize;
-
-                                if index < obj_count {
-                                    (*header).set_dirty(index);
-                                    heap.add_to_dirty_pages(NonNull::new_unchecked(header));
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    let header = crate::heap::ptr_to_page_header(ptr);
-                    if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE
-                        && (*header.as_ptr()).generation > 0
-                    {
-                        let block_size = (*header.as_ptr()).block_size as usize;
-                        let header_size = (*header.as_ptr()).header_size as usize;
+                if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
+                    let h = header.as_ptr();
+                    if (*h).generation > 0 {
+                        let block_size = (*h).block_size as usize;
+                        let header_size = (*h).header_size as usize;
                         let header_page_addr = header.as_ptr() as usize;
-                        let obj_count = (*header.as_ptr()).obj_count as usize;
+                        let obj_count = (*h).obj_count as usize;
 
                         if ptr_addr >= header_page_addr + header_size {
                             let offset = ptr_addr - (header_page_addr + header_size);
                             let index = offset / block_size;
 
                             if index < obj_count {
-                                (*header.as_ptr()).set_dirty(index);
+                                (*h).set_dirty(index);
                                 heap.add_to_dirty_pages(header);
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                let page_addr = ptr_addr & crate::heap::page_mask();
+                if let Some(&(head_addr, _obj_size, _h_size)) =
+                    heap.large_object_map.get(&page_addr)
+                {
+                    let h = head_addr as *mut crate::heap::PageHeader;
+                    if (*h).magic == crate::heap::MAGIC_GC_PAGE && (*h).generation > 0 {
+                        let block_size = (*h).block_size as usize;
+                        let header_size = (*h).header_size as usize;
+                        let header_page_addr = head_addr;
+
+                        if ptr_addr >= header_page_addr + header_size {
+                            let offset = ptr_addr - (header_page_addr + header_size);
+                            let index = offset / block_size;
+                            let obj_count = (*h).obj_count as usize;
+
+                            if index < obj_count {
+                                (*h).set_dirty(index);
+                                heap.add_to_dirty_pages(NonNull::new_unchecked(
+                                    head_addr as *mut crate::heap::PageHeader,
+                                ));
                             }
                         }
                     }
@@ -989,12 +988,13 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     fn trigger_write_barrier(&self) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        if crate::gc::incremental::is_generational_barrier_active() {
-            crate::heap::simple_write_barrier(ptr);
-        }
-
-        if crate::gc::incremental::is_incremental_marking_active() {
-            crate::heap::incremental_write_barrier(ptr);
+        if crate::gc::incremental::is_generational_barrier_active()
+            || crate::gc::incremental::is_incremental_marking_active()
+        {
+            crate::heap::unified_write_barrier(
+                ptr,
+                crate::gc::incremental::is_incremental_marking_active(),
+            );
         }
     }
 

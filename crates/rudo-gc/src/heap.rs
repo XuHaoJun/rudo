@@ -750,6 +750,14 @@ pub const MAX_SMALL_OBJECT_SIZE: usize = 2048;
 ///
 /// This header enables O(1) lookup of object information from any pointer
 /// within the page using simple alignment operations.
+///
+/// # Barrier hot path layout
+///
+/// The write barrier touch path uses (in order): `magic`, `generation`,
+/// `block_size`, `header_size`, `obj_count`, and `dirty_bitmap`. These
+/// fields are placed in the first 24 bytes so a single cache line (64 bytes)
+/// covers the hot metadata. `generation` in the first 8 bytes enables fast
+/// early-exit for young objects (generational hypothesis).
 #[repr(C)]
 pub struct PageHeader {
     /// Magic number to validate this is a GC page.
@@ -1638,7 +1646,14 @@ impl LocalHeap {
             return;
         }
 
-        // Slow path: acquire lock and double-check
+        self.add_to_dirty_pages_slow(header);
+    }
+
+    /// Slow path: acquire lock and add page to dirty list.
+    /// Marked cold to improve I-cache locality of the hot path.
+    #[cold]
+    #[allow(clippy::significant_drop_tightening)]
+    fn add_to_dirty_pages_slow(&self, header: NonNull<PageHeader>) {
         let mut dirty_pages = self.dirty_pages.lock();
         // SAFETY: Caller guarantees header is valid
         if unsafe { !(*header.as_ptr()).is_dirty_listed() } {
@@ -2713,6 +2728,9 @@ impl LocalHeap {
 /// This function handles both small and large objects, sets the per-object
 /// dirty bit, and adds the page to the dirty pages list.
 ///
+/// Optimized to use a single TLS access (`with_heap`) instead of 2-3, reducing
+/// instruction count and improving cache locality on the hot path.
+///
 /// # Arguments
 /// * `ptr` - Raw pointer to the field being mutated (not the containing object)
 #[allow(dead_code)]
@@ -2723,51 +2741,185 @@ pub fn simple_write_barrier(ptr: *const u8) {
     }
 
     let ptr_addr = ptr as usize;
-    let heap_start = heap_start();
-    let heap_end = heap_end();
+    with_heap(|heap| {
+        if ptr_addr < heap.min_addr || ptr_addr > heap.max_addr {
+            return;
+        }
 
-    if ptr_addr < heap_start || ptr_addr > heap_end {
+        unsafe {
+            let header = ptr_to_page_header(ptr);
+
+            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+                return;
+            }
+
+            if (*header.as_ptr()).generation == 0 {
+                return;
+            }
+
+            let block_size = (*header.as_ptr()).block_size as usize;
+            let header_size = (*header.as_ptr()).header_size as usize;
+            let header_page_addr = header.as_ptr() as usize;
+
+            if ptr_addr < header_page_addr + header_size {
+                return;
+            }
+
+            let offset = ptr_addr - (header_page_addr + header_size);
+            let index = offset / block_size;
+            let obj_count = (*header.as_ptr()).obj_count as usize;
+
+            if index >= obj_count {
+                return;
+            }
+
+            (*header.as_ptr()).set_dirty(index);
+            heap.add_to_dirty_pages(header);
+        }
+    });
+}
+
+/// `GcCell` barrier with thread affinity validation.
+///
+/// Combines `validate_thread_affinity` and `unified_write_barrier` in a single
+/// `with_heap` call, eliminating duplicate TLS accesses and page header lookups.
+///
+/// # Arguments
+/// * `ptr` - Raw pointer to the `GcCell` (field being mutated)
+/// * `context` - Context string for panic message (e.g., `"borrow_mut"`)
+/// * `incremental_active` - Whether incremental marking is active
+#[allow(dead_code)]
+#[inline]
+pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_active: bool) {
+    if ptr.is_null() {
         return;
     }
 
-    unsafe {
-        let header = ptr_to_page_header(ptr);
+    let ptr_addr = ptr as usize;
+    let current = get_thread_id();
 
-        if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+    with_heap(|heap| {
+        if ptr_addr < heap.min_addr || ptr_addr > heap.max_addr {
             return;
         }
 
-        if (*header.as_ptr()).generation == 0 {
-            return;
+        unsafe {
+            let header = ptr_to_page_header(ptr);
+            let h = header.as_ptr();
+
+            if (*h).magic != MAGIC_GC_PAGE {
+                return;
+            }
+
+            let owner = (*h).owner_thread;
+            assert!(
+                owner == 0 || owner == current,
+                "Thread safety violation: {context} called on GcCell allocated by a different \
+                 thread.\n\
+                 - Current thread ID: {current}\n\
+                 - Allocating thread ID: {owner}\n\
+                 \n\
+                 GcCell is not thread-safe. Gc objects and their fields must not be\n\
+                 accessed from tokio worker threads or other threads different from where\n\
+                 they were allocated.\n\
+                 \n\
+                 Solutions:\n\
+                 1. Use GcThreadSafeCell instead of GcCell for thread-safe interior mutability\n\
+                 2. Use GcHandle for cross-thread communication (see cross_thread module)\n\
+                 3. Dispatch mutations back to the main thread via channel\n\
+                 4. Use single-threaded Tokio runtime"
+            );
+
+            if (*h).generation == 0 {
+                return;
+            }
+
+            let block_size = (*h).block_size as usize;
+            let header_size = (*h).header_size as usize;
+            let header_page_addr = header.as_ptr() as usize;
+
+            if ptr_addr >= header_page_addr + header_size {
+                let offset = ptr_addr - (header_page_addr + header_size);
+                let index = offset / block_size;
+                let obj_count = (*h).obj_count as usize;
+
+                if index < obj_count {
+                    (*h).set_dirty(index);
+                    heap.add_to_dirty_pages(header);
+                }
+            }
+
+            if incremental_active {
+                std::sync::atomic::fence(Ordering::AcqRel);
+                heap.record_in_remembered_buffer(header);
+            }
         }
+    });
+}
 
-        let block_size = (*header.as_ptr()).block_size as usize;
-        let header_size = (*header.as_ptr()).header_size as usize;
-        let header_page_addr = header.as_ptr() as usize;
-
-        if ptr_addr < header_page_addr + header_size {
-            return;
-        }
-
-        let offset = ptr_addr - (header_page_addr + header_size);
-        let index = offset / block_size;
-        let obj_count = (*header.as_ptr()).obj_count as usize;
-
-        if index >= obj_count {
-            return;
-        }
-
-        (*header.as_ptr()).set_dirty(index);
-
-        crate::heap::with_heap(|heap| {
-            heap.add_to_dirty_pages(header);
-        });
+/// Unified write barrier combining generational and incremental logic.
+///
+/// Performs both generational (dirty bit + dirty pages list) and incremental
+/// (remembered buffer) tracking in a single `with_heap` call, eliminating
+/// duplicate TLS accesses and page header lookups.
+///
+/// # Arguments
+/// * `ptr` - Raw pointer to the field being mutated (not the containing object)
+/// * `incremental_active` - Whether incremental marking is active (do remembered buffer)
+#[allow(dead_code)]
+#[inline]
+pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
+    if ptr.is_null() {
+        return;
     }
+
+    let ptr_addr = ptr as usize;
+    with_heap(|heap| {
+        if ptr_addr < heap.min_addr || ptr_addr > heap.max_addr {
+            return;
+        }
+
+        unsafe {
+            let header = ptr_to_page_header(ptr);
+
+            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+                return;
+            }
+
+            if (*header.as_ptr()).generation == 0 {
+                return;
+            }
+
+            let block_size = (*header.as_ptr()).block_size as usize;
+            let header_size = (*header.as_ptr()).header_size as usize;
+            let header_page_addr = header.as_ptr() as usize;
+
+            if ptr_addr >= header_page_addr + header_size {
+                let offset = ptr_addr - (header_page_addr + header_size);
+                let index = offset / block_size;
+                let obj_count = (*header.as_ptr()).obj_count as usize;
+
+                if index < obj_count {
+                    (*header.as_ptr()).set_dirty(index);
+                    heap.add_to_dirty_pages(header);
+                }
+            }
+
+            if incremental_active {
+                std::sync::atomic::fence(Ordering::AcqRel);
+                heap.record_in_remembered_buffer(header);
+            }
+        }
+    });
 }
 
 /// Unified incremental write barrier (SATB remembered set).
 ///
 /// Records old-generation pages in the remembered buffer for incremental GC.
+/// Uses a single TLS access (`with_heap`) for the full barrier sequence.
+///
+/// Prefer [`unified_write_barrier`] when both generational and incremental barriers
+/// are needed, to avoid duplicate work.
 #[allow(dead_code)]
 #[inline]
 pub fn incremental_write_barrier(ptr: *const u8) {
@@ -2776,33 +2928,30 @@ pub fn incremental_write_barrier(ptr: *const u8) {
     }
 
     let ptr_addr = ptr as usize;
-    let heap_start = heap_start();
-    let heap_end = heap_end();
-
-    if ptr_addr < heap_start || ptr_addr > heap_end {
-        return;
-    }
-
-    // SAFETY: This fence synchronizes with the GC thread to ensure
-    // that all prior writes are visible before we record in the remembered set.
-    // Required for SATB correctness in incremental GC.
-    std::sync::atomic::fence(Ordering::AcqRel);
-
-    unsafe {
-        let header = ptr_to_page_header(ptr);
-
-        if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+    with_heap(|heap| {
+        if ptr_addr < heap.min_addr || ptr_addr > heap.max_addr {
             return;
         }
 
-        if (*header.as_ptr()).generation == 0 {
-            return;
-        }
+        // SAFETY: This fence synchronizes with the GC thread to ensure
+        // that all prior writes are visible before we record in the remembered set.
+        // Required for SATB correctness in incremental GC.
+        std::sync::atomic::fence(Ordering::AcqRel);
 
-        crate::heap::with_heap(|heap| {
+        unsafe {
+            let header = ptr_to_page_header(ptr);
+
+            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+                return;
+            }
+
+            if (*header.as_ptr()).generation == 0 {
+                return;
+            }
+
             heap.record_in_remembered_buffer(header);
-        });
-    }
+        }
+    });
 }
 
 impl Default for LocalHeap {

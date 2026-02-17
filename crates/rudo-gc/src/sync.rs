@@ -105,12 +105,8 @@ impl<T: ?Sized> GcRwLock<T> {
     fn trigger_write_barrier(&self) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        if is_generational_barrier_active() {
-            crate::heap::simple_write_barrier(ptr);
-        }
-
-        if is_incremental_marking_active() {
-            crate::heap::incremental_write_barrier(ptr);
+        if is_generational_barrier_active() || is_incremental_marking_active() {
+            crate::heap::unified_write_barrier(ptr, is_incremental_marking_active());
         }
     }
 
@@ -409,12 +405,8 @@ impl<T: ?Sized> GcMutex<T> {
     fn trigger_write_barrier(&self) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        if is_generational_barrier_active() {
-            crate::heap::simple_write_barrier(ptr);
-        }
-
-        if is_incremental_marking_active() {
-            crate::heap::incremental_write_barrier(ptr);
+        if is_generational_barrier_active() || is_incremental_marking_active() {
+            crate::heap::unified_write_barrier(ptr, is_incremental_marking_active());
         }
     }
 
