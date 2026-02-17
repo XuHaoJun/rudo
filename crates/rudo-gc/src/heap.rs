@@ -746,18 +746,13 @@ pub const MAX_SMALL_OBJECT_SIZE: usize = 2048;
 // PageHeader - Metadata at the start of each page
 // ============================================================================
 
-/// Metadata stored at the beginning of each page.
-///
-/// This header enables O(1) lookup of object information from any pointer
-/// within the page using simple alignment operations.
+/// Metadata at page start. O(1) object lookup from any page pointer.
 ///
 /// # Barrier hot path layout
 ///
-/// The write barrier touch path uses (in order): `magic`, `generation`,
-/// `block_size`, `header_size`, `obj_count`, and `dirty_bitmap`. These
-/// fields are placed in the first 24 bytes so a single cache line (64 bytes)
-/// covers the hot metadata. `generation` in the first 8 bytes enables fast
-/// early-exit for young objects (generational hypothesis).
+/// The write barrier touch path uses: `magic`, `generation`, `block_size`,
+/// `header_size`, `obj_count`, `dirty_bitmap`. Philosophy: first 24 bytes fit
+/// one cache line for barrier; `generation` early enables young-object exit.
 #[repr(C)]
 pub struct PageHeader {
     /// Magic number to validate this is a GC page.
@@ -1629,14 +1624,12 @@ impl LocalHeap {
         addr >= self.min_addr && addr < self.max_addr
     }
 
-    /// Add a page to the dirty pages list if not already present.
+    /// Add page to dirty list if not present. Philosophy: mutex only on slow path.
+    ///
+    /// Fast path when already listed (flag check, no lock).
     ///
     /// # Safety
     /// Caller must ensure header points to a valid `PageHeader`.
-    ///
-    /// # Performance
-    /// - O(1) if page already listed (early exit via flag check)
-    /// - O(1) + mutex if adding new page
     #[allow(clippy::significant_drop_tightening)]
     #[inline]
     pub unsafe fn add_to_dirty_pages(&self, header: NonNull<PageHeader>) {
@@ -1990,6 +1983,14 @@ impl LocalHeap {
 
         // Fast path: try preferred page first if cached and valid
         if let Some(page_ptr) = self.free_list_preferred[class_index] {
+            if let Some(mut ptrs) =
+                unsafe { Self::try_pop_all_from_all_dead_page(page_ptr.as_ptr(), block_size, true) }
+            {
+                let ptr = ptrs.remove(0);
+                self.free_list_buffer[class_index].extend(ptrs);
+                self.free_list_preferred[class_index] = None;
+                return Some(ptr);
+            }
             if let Some((ptr, exhausted)) =
                 unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size, true) }
             {
@@ -2011,6 +2012,14 @@ impl LocalHeap {
         let i = 0;
         while i < self.pages_with_free_slots[class_index].len() {
             let page_ptr = self.pages_with_free_slots[class_index][i];
+            if let Some(mut ptrs) =
+                unsafe { Self::try_pop_all_from_all_dead_page(page_ptr.as_ptr(), block_size, true) }
+            {
+                let ptr = ptrs.remove(0);
+                self.free_list_buffer[class_index].extend(ptrs);
+                self.pages_with_free_slots[class_index].swap_remove(i);
+                return Some(ptr);
+            }
             if let Some((ptr, exhausted)) =
                 unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size, true) }
             {
@@ -2027,8 +2036,15 @@ impl LocalHeap {
 
         // Fallback: O(K) scan over all pages (preserves correctness for edge cases)
         for page_ptr in &self.pages_by_class[class_index] {
+            if let Some(mut ptrs) =
+                unsafe { Self::try_pop_all_from_all_dead_page(page_ptr.as_ptr(), block_size, true) }
+            {
+                let ptr = ptrs.remove(0);
+                self.free_list_buffer[class_index].extend(ptrs);
+                return Some(ptr);
+            }
             if let Some((ptr, exhausted)) =
-                unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size, false) }
+                unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size, true) }
             {
                 if !exhausted {
                     self.free_list_preferred[class_index] = Some(*page_ptr);
@@ -2096,7 +2112,7 @@ impl LocalHeap {
         // Fallback: O(K) scan over pages_by_class (mirrors single-pop fallback)
         for page_ptr in &self.pages_by_class[class_index] {
             if let Some((ptrs, exhausted)) =
-                unsafe { Self::try_pop_batch_from_page(page_ptr.as_ptr(), block_size, max, false) }
+                unsafe { Self::try_pop_batch_from_page(page_ptr.as_ptr(), block_size, max, true) }
             {
                 if !ptrs.is_empty() {
                     out.extend(ptrs);
@@ -2112,14 +2128,93 @@ impl LocalHeap {
         false
     }
 
-    /// Try to pop one object from a page's free list.
+    /// Bulk-grab all slots from an all-dead page in one CAS. Philosophy: avoid per-slot CAS
+    /// when page is fully reclaimed; caller stashes surplus in `free_list_buffer`.
     ///
-    /// Returns `Some((ptr, exhausted))` on success, where `exhausted` is true
-    /// if the page has no more free slots after this pop. Returns `None` if
-    /// the page has no free slots or slot is stale (`allocated_bitmap` out of sync).
+    /// Returns `Some(ptrs)` when page is `all_dead` and has free slots; `None` otherwise.
     ///
-    /// When `known_small` is true, skips the `is_large_object` check. Only use when
-    /// the page is from `free_list_preferred` or `pages_with_free_slots`.
+    /// # Safety
+    /// `header` must point to a valid `PageHeader` for a page owned by this heap.
+    unsafe fn try_pop_all_from_all_dead_page(
+        header: *mut PageHeader,
+        block_size: usize,
+        known_small: bool,
+    ) -> Option<Vec<NonNull<u8>>> {
+        // SAFETY: Caller guarantees header is valid.
+        if !known_small && unsafe { (*header).is_large_object() } {
+            return None;
+        }
+        if unsafe { (*header).block_size as usize } != block_size {
+            return None;
+        }
+        if !unsafe { (*header).all_dead() } {
+            return None;
+        }
+        let first_idx = unsafe { (*header).free_list_head_raw() };
+        if first_idx == PageHeader::FREE_LIST_NONE {
+            return None;
+        }
+        if unsafe { (*header).is_allocated(first_idx as usize) } {
+            let _ = unsafe { (*header).compare_exchange_free_list(Some(first_idx), None) };
+            return None;
+        }
+
+        let h_size = unsafe { (*header).header_size as usize };
+        let obj_count = unsafe { (*header).obj_count as usize };
+        let page_addr = header.cast::<u8>();
+
+        let mut ptrs = Vec::with_capacity(obj_count);
+        let mut idx = first_idx;
+        let mut next_head: Option<u16> = None;
+
+        for _ in 0..obj_count {
+            if unsafe { (*header).is_allocated(idx as usize) } {
+                break;
+            }
+            let obj_ptr = unsafe { page_addr.add(h_size + (idx as usize * block_size)) };
+            let next = unsafe { obj_ptr.cast::<Option<u16>>().read_unaligned() };
+            ptrs.push(unsafe { NonNull::new_unchecked(obj_ptr) });
+            next_head = next;
+            match next {
+                Some(n) => idx = n,
+                None => break,
+            }
+        }
+
+        if ptrs.is_empty() {
+            return None;
+        }
+
+        loop {
+            if unsafe { (*header).compare_exchange_free_list(Some(first_idx), next_head) }.is_ok() {
+                break;
+            }
+        }
+
+        for ptr in &ptrs {
+            let offset = ptr
+                .as_ptr()
+                .addr()
+                .saturating_sub(page_addr.addr())
+                .saturating_sub(h_size);
+            let slot_idx = offset / block_size;
+            unsafe { (*header).set_allocated(slot_idx) };
+        }
+
+        unsafe {
+            (*header).clear_all_dead();
+            (*header).set_dead_count(0);
+        }
+
+        Some(ptrs)
+    }
+
+    /// Pop one slot from free list. `known_small`: skip `is_large_object` when page came from
+    /// small-only lists. Philosophy: `pages_by_class` only holds small pages; avoid atomic load
+    /// on allocation hot path.
+    ///
+    /// Returns `Some((ptr, exhausted))` on success. `exhausted` if no more free slots.
+    /// Returns `None` if no free slots or slot is stale.
     #[allow(clippy::cognitive_complexity)]
     /// # Safety
     /// `header` must point to a valid `PageHeader` for a page owned by this heap.
@@ -2188,13 +2283,10 @@ impl LocalHeap {
     }
 
     #[cfg(feature = "lazy-sweep")]
-    /// Try to pop up to `batch_size` objects from a page's free list.
+    /// Pop up to `batch_size` slots. `known_small`: skip `is_large_object`.
+    /// Philosophy: `pages_by_class` only holds small pages; avoid atomic load on alloc hot path.
     ///
-    /// Returns `Some((ptrs, exhausted))` where `exhausted` means no slots remain.
-    /// Uses one CAS for the entire batch instead of N.
-    ///
-    /// When `known_small` is true, skips the `is_large_object` check. Only use when
-    /// the page is from `free_list_preferred` or `pages_with_free_slots`.
+    /// Returns `Some((ptrs, exhausted))`. Uses one CAS for batch instead of N.
     ///
     /// # Safety
     /// `header` must point to a valid `PageHeader` for a page owned by this heap.
@@ -2224,13 +2316,22 @@ impl LocalHeap {
         }
 
         let h_size = unsafe { (*header).header_size as usize };
+        let obj_count = unsafe { (*header).obj_count as usize };
         let page_addr = header.cast::<u8>();
 
-        let mut ptrs = Vec::with_capacity(batch_size);
+        // All-dead page: bulk grab all slots in one CAS. Philosophy: avoid per-slot CAS when
+        // page is fully reclaimed; subsequent allocs served from thread-local buffer.
+        let effective_batch = if unsafe { (*header).all_dead() } {
+            obj_count
+        } else {
+            batch_size
+        };
+
+        let mut ptrs = Vec::with_capacity(effective_batch);
         let mut idx = first_idx;
         let mut next_head: Option<u16> = None;
 
-        for _ in 0..batch_size {
+        for _ in 0..effective_batch {
             // SAFETY: Caller guarantees header is valid.
             if unsafe { (*header).is_allocated(idx as usize) } {
                 next_head = None;
@@ -2753,10 +2854,6 @@ pub fn simple_write_barrier(ptr: *const u8) {
                 return;
             }
 
-            if (*header.as_ptr()).generation == 0 {
-                return;
-            }
-
             let block_size = (*header.as_ptr()).block_size as usize;
             let header_size = (*header.as_ptr()).header_size as usize;
             let header_page_addr = header.as_ptr() as usize;
@@ -2770,6 +2867,14 @@ pub fn simple_write_barrier(ptr: *const u8) {
             let obj_count = (*header.as_ptr()).obj_count as usize;
 
             if index >= obj_count {
+                return;
+            }
+
+            // GEN_OLD early-exit
+            let gc_box_addr =
+                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+            let wc = (*gc_box_addr).weak_count_raw();
+            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
                 return;
             }
 
@@ -2830,24 +2935,31 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                  4. Use single-threaded Tokio runtime"
             );
 
-            if (*h).generation == 0 {
-                return;
-            }
-
             let block_size = (*h).block_size as usize;
             let header_size = (*h).header_size as usize;
             let header_page_addr = header.as_ptr() as usize;
 
-            if ptr_addr >= header_page_addr + header_size {
-                let offset = ptr_addr - (header_page_addr + header_size);
-                let index = offset / block_size;
-                let obj_count = (*h).obj_count as usize;
-
-                if index < obj_count {
-                    (*h).set_dirty(index);
-                    heap.add_to_dirty_pages(header);
-                }
+            if ptr_addr < header_page_addr + header_size {
+                return;
             }
+
+            let offset = ptr_addr - (header_page_addr + header_size);
+            let index = offset / block_size;
+            let obj_count = (*h).obj_count as usize;
+            if index >= obj_count {
+                return;
+            }
+
+            // GEN_OLD early-exit: parent young → skip barrier
+            let gc_box_addr =
+                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+            let wc = (*gc_box_addr).weak_count_raw();
+            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                return;
+            }
+
+            (*h).set_dirty(index);
+            heap.add_to_dirty_pages(header);
 
             if incremental_active {
                 std::sync::atomic::fence(Ordering::AcqRel);
@@ -2857,11 +2969,7 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
     });
 }
 
-/// Unified write barrier combining generational and incremental logic.
-///
-/// Performs both generational (dirty bit + dirty pages list) and incremental
-/// (remembered buffer) tracking in a single `with_heap` call, eliminating
-/// duplicate TLS accesses and page header lookups.
+/// Single `with_heap` for bounds + dirty + incremental. Philosophy: one TLS touch instead of 2–3.
 ///
 /// # Arguments
 /// * `ptr` - Raw pointer to the field being mutated (not the containing object)
@@ -2886,24 +2994,31 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                 return;
             }
 
-            if (*header.as_ptr()).generation == 0 {
-                return;
-            }
-
             let block_size = (*header.as_ptr()).block_size as usize;
             let header_size = (*header.as_ptr()).header_size as usize;
             let header_page_addr = header.as_ptr() as usize;
 
-            if ptr_addr >= header_page_addr + header_size {
-                let offset = ptr_addr - (header_page_addr + header_size);
-                let index = offset / block_size;
-                let obj_count = (*header.as_ptr()).obj_count as usize;
-
-                if index < obj_count {
-                    (*header.as_ptr()).set_dirty(index);
-                    heap.add_to_dirty_pages(header);
-                }
+            if ptr_addr < header_page_addr + header_size {
+                return;
             }
+
+            let offset = ptr_addr - (header_page_addr + header_size);
+            let index = offset / block_size;
+            let obj_count = (*header.as_ptr()).obj_count as usize;
+            if index >= obj_count {
+                return;
+            }
+
+            // GEN_OLD early-exit: parent young → skip barrier (no set_dirty, no mutex)
+            let gc_box_addr =
+                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+            let wc = (*gc_box_addr).weak_count_raw();
+            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                return;
+            }
+
+            (*header.as_ptr()).set_dirty(index);
+            heap.add_to_dirty_pages(header);
 
             if incremental_active {
                 std::sync::atomic::fence(Ordering::AcqRel);
@@ -2945,7 +3060,26 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                 return;
             }
 
-            if (*header.as_ptr()).generation == 0 {
+            let block_size = (*header.as_ptr()).block_size as usize;
+            let header_size = (*header.as_ptr()).header_size as usize;
+            let header_page_addr = header.as_ptr() as usize;
+
+            if ptr_addr < header_page_addr + header_size {
+                return;
+            }
+
+            let offset = ptr_addr - (header_page_addr + header_size);
+            let index = offset / block_size;
+            let obj_count = (*header.as_ptr()).obj_count as usize;
+            if index >= obj_count {
+                return;
+            }
+
+            // GEN_OLD early-exit
+            let gc_box_addr =
+                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+            let wc = (*gc_box_addr).weak_count_raw();
+            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
                 return;
             }
 

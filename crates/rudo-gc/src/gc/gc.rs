@@ -1646,6 +1646,23 @@ fn promote_young_pages(heap: &mut LocalHeap) {
                     (*header).generation = 1; // Promote!
 
                     let block_size = (*header).block_size as usize;
+                    let header_size = crate::heap::PageHeader::header_size(block_size);
+                    let page_addr = header as usize;
+
+                    // Set GEN_OLD_FLAG on each surviving object for barrier early-exit
+                    for word_idx in 0..crate::heap::BITMAP_SIZE {
+                        let bits = (*header).allocated_bitmap[word_idx].load(Ordering::Acquire);
+                        let mut b = bits;
+                        while b != 0 {
+                            let bit_idx = b.trailing_zeros() as usize;
+                            let obj_idx = word_idx * 64 + bit_idx;
+                            let gc_box_addr = (page_addr + header_size + obj_idx * block_size)
+                                as *const crate::ptr::GcBox<()>;
+                            (*gc_box_addr).set_gen_old();
+                            b &= b - 1; // clear lowest set bit
+                        }
+                    }
+
                     promoted_bytes += survivors_count * block_size;
                 }
             }

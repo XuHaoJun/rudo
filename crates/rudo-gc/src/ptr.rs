@@ -51,8 +51,11 @@ impl<T: Trace + ?Sized> GcBox<T> {
     const DEAD_FLAG: usize = 1 << (usize::BITS - 1);
     /// Bit mask for the "under construction" flag (second highest bit).
     const UNDER_CONSTRUCTION_FLAG: usize = 1 << (usize::BITS - 2);
+    /// Per-object generation. Enables barrier early-exit when parent is young (no page load).
+    /// Philosophy: check `weak_count` before touching `PageHeader`.
+    pub(crate) const GEN_OLD_FLAG: usize = 1 << (usize::BITS - 3);
     /// Combined mask for all flags stored in `weak_count`.
-    const FLAGS_MASK: usize = Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG;
+    const FLAGS_MASK: usize = Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG | Self::GEN_OLD_FLAG;
 
     /// Get the reference count.
     /// Uses Acquire ordering to ensure we see the complete effect of any
@@ -214,7 +217,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
             let ref_count = self.ref_count.load(Ordering::Acquire);
             let weak_count_raw = self.weak_count.load(Ordering::Acquire);
 
-            let flags = weak_count_raw & (Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG);
+            let flags = weak_count_raw & Self::FLAGS_MASK;
             let weak_count = weak_count_raw & !Self::FLAGS_MASK;
 
             if flags != 0 && weak_count == 0 {
@@ -308,6 +311,13 @@ impl<T: Trace + ?Sized> GcBox<T> {
         self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Relaxed);
         self.weak_count
             .fetch_and(!Self::UNDER_CONSTRUCTION_FLAG, Ordering::Relaxed);
+    }
+
+    /// Set `GEN_OLD_FLAG` on promotion. Enables barrier early-exit for young objects.
+    #[inline]
+    pub(crate) fn set_gen_old(&self) {
+        self.weak_count
+            .fetch_or(Self::GEN_OLD_FLAG, Ordering::Relaxed);
     }
 }
 
