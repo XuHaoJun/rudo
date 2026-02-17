@@ -2205,12 +2205,6 @@ fn sweep_phase2_reclaim(
 ) -> usize {
     let mut reclaimed = 0;
 
-    // Clear free_list_buffer: pointers in buffer may point to slots we are about to reclaim
-    // and add to free lists. Handing them out would cause double-allocation.
-    for buf in &mut heap.free_list_buffer {
-        buf.clear();
-    }
-
     let pages_snapshot: Vec<_> = heap.all_pages().collect();
 
     for page_ptr in pages_snapshot {
@@ -2700,11 +2694,6 @@ unsafe fn lazy_sweep_page_all_dead(
 /// - The heap's pages vector is not modified, only page metadata and free lists
 /// - Safe to call during allocation when pages need sweeping
 pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
-    // Clear free_list_buffer before sweeping; buffered pointers may become stale.
-    for buf in &mut heap.free_list_buffer {
-        buf.clear();
-    }
-
     let mut swept = 0;
     let mut pages_to_sweep: Vec<NonNull<PageHeader>> = heap
         .pages
@@ -2788,12 +2777,6 @@ pub unsafe fn sweep_specific_page(
     page_ptr: NonNull<crate::heap::PageHeader>,
     _num_pages: usize,
 ) -> usize {
-    // Clear free_list_buffer: we are about to rebuild free lists; any buffered
-    // pointers may point to slots being reclaimed and would be stale.
-    for buf in &mut heap.free_list_buffer {
-        buf.clear();
-    }
-
     let mut reclaimed = 0;
     unsafe {
         let header = page_ptr.as_ptr();

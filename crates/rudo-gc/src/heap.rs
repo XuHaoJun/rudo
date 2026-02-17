@@ -1081,18 +1081,10 @@ impl PageHeader {
     }
 
     #[cfg(feature = "lazy-sweep")]
-    /// Get the raw free list head value. Use `FREE_LIST_NONE` for empty.
-    /// Hot path uses this to avoid Option branch overhead.
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn free_list_head_raw(&self) -> u16 {
-        self.free_list_head.load(Ordering::Acquire)
-    }
-
-    #[cfg(feature = "lazy-sweep")]
     /// Get the current free list head, returning `None` if empty.
     #[allow(clippy::missing_const_for_fn)]
     pub fn free_list_head(&self) -> Option<u16> {
-        let val = self.free_list_head_raw();
+        let val = self.free_list_head.load(Ordering::Acquire);
         if val == Self::FREE_LIST_NONE {
             None
         } else {
@@ -1544,14 +1536,6 @@ pub struct LocalHeap {
     /// where P << K (pages with space vs all pages).
     pub(crate) pages_with_free_slots: [Vec<NonNull<PageHeader>>; 8],
 
-    /// Per-size-class buffer of pre-popped pointers.
-    /// Refilled from `alloc_from_free_list` in batches; reduces invocation count.
-    pub(crate) free_list_buffer: [Vec<NonNull<u8>>; 8],
-
-    /// Scratch buffer for batch refill; avoids Vec allocation in hot path.
-    #[cfg(feature = "lazy-sweep")]
-    batch_scratch: [Vec<NonNull<u8>>; 8],
-
     /// Per-size-class cursor: index into `pages` for next pending-sweep scan.
     /// Resets to 0 when a full cycle finds nothing.
     /// Reserved for future round-robin optimization; currently unused with `pending_sweep_by_class`.
@@ -1597,9 +1581,6 @@ impl LocalHeap {
             free_list_preferred: [None; 8],
             pages_by_class: std::array::from_fn(|_| Vec::new()),
             pages_with_free_slots: std::array::from_fn(|_| Vec::new()),
-            free_list_buffer: std::array::from_fn(|_| Vec::with_capacity(8)),
-            #[cfg(feature = "lazy-sweep")]
-            batch_scratch: std::array::from_fn(|_| Vec::with_capacity(8)),
             #[cfg(feature = "lazy-sweep")]
             pending_sweep_cursor: [0; 8],
             #[cfg(feature = "lazy-sweep")]
@@ -1834,7 +1815,6 @@ impl LocalHeap {
     /// This should be extremely rare in practice since size classes are
     /// powers of two starting at 16.
     pub fn alloc<T>(&mut self) -> NonNull<u8> {
-        const BATCH: usize = 8;
         let size = std::mem::size_of::<T>();
         let align = std::mem::align_of::<T>();
         // All new allocations start in young generation
@@ -1870,52 +1850,7 @@ impl LocalHeap {
             return ptr;
         }
 
-        // Serve from buffer if non-empty
-        if let Some(ptr) = self.free_list_buffer[class_index].pop() {
-            self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
-            return ptr;
-        }
-
-        #[cfg(feature = "lazy-sweep")]
-        {
-            let mut scratch = std::mem::take(&mut self.batch_scratch[class_index]);
-            scratch.clear();
-            if self.alloc_from_free_list_batch(class_index, &mut scratch, BATCH) {
-                let ptr = scratch.remove(0);
-                self.free_list_buffer[class_index].append(&mut scratch);
-                self.batch_scratch[class_index] = scratch;
-                self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
-                return ptr;
-            }
-            self.batch_scratch[class_index] = scratch;
-        }
-
-        // Fallback: single-pop loop
         if let Some(ptr) = self.alloc_from_free_list(class_index) {
-            #[cfg(feature = "lazy-sweep")]
-            {
-                let mut extra = std::mem::take(&mut self.batch_scratch[class_index]);
-                extra.clear();
-                if !self.alloc_from_free_list_batch(class_index, &mut extra, 7) {
-                    for _ in 1..BATCH {
-                        if let Some(p) = self.alloc_from_free_list(class_index) {
-                            extra.push(p);
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                self.free_list_buffer[class_index].append(&mut extra);
-                self.batch_scratch[class_index] = extra;
-            }
-            #[cfg(not(feature = "lazy-sweep"))]
-            for _ in 1..BATCH {
-                if let Some(p) = self.alloc_from_free_list(class_index) {
-                    self.free_list_buffer[class_index].push(p);
-                } else {
-                    break;
-                }
-            }
             self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
             return ptr;
         }
@@ -1983,16 +1918,8 @@ impl LocalHeap {
 
         // Fast path: try preferred page first if cached and valid
         if let Some(page_ptr) = self.free_list_preferred[class_index] {
-            if let Some(mut ptrs) =
-                unsafe { Self::try_pop_all_from_all_dead_page(page_ptr.as_ptr(), block_size, true) }
-            {
-                let ptr = ptrs.remove(0);
-                self.free_list_buffer[class_index].extend(ptrs);
-                self.free_list_preferred[class_index] = None;
-                return Some(ptr);
-            }
             if let Some((ptr, exhausted)) =
-                unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size, true) }
+                unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size) }
             {
                 if exhausted {
                     self.free_list_preferred[class_index] = None;
@@ -2012,16 +1939,8 @@ impl LocalHeap {
         let i = 0;
         while i < self.pages_with_free_slots[class_index].len() {
             let page_ptr = self.pages_with_free_slots[class_index][i];
-            if let Some(mut ptrs) =
-                unsafe { Self::try_pop_all_from_all_dead_page(page_ptr.as_ptr(), block_size, true) }
-            {
-                let ptr = ptrs.remove(0);
-                self.free_list_buffer[class_index].extend(ptrs);
-                self.pages_with_free_slots[class_index].swap_remove(i);
-                return Some(ptr);
-            }
             if let Some((ptr, exhausted)) =
-                unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size, true) }
+                unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size) }
             {
                 if exhausted {
                     self.pages_with_free_slots[class_index].swap_remove(i);
@@ -2036,15 +1955,8 @@ impl LocalHeap {
 
         // Fallback: O(K) scan over all pages (preserves correctness for edge cases)
         for page_ptr in &self.pages_by_class[class_index] {
-            if let Some(mut ptrs) =
-                unsafe { Self::try_pop_all_from_all_dead_page(page_ptr.as_ptr(), block_size, true) }
-            {
-                let ptr = ptrs.remove(0);
-                self.free_list_buffer[class_index].extend(ptrs);
-                return Some(ptr);
-            }
             if let Some((ptr, exhausted)) =
-                unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size, true) }
+                unsafe { Self::try_pop_from_page(page_ptr.as_ptr(), block_size) }
             {
                 if !exhausted {
                     self.free_list_preferred[class_index] = Some(*page_ptr);
@@ -2056,185 +1968,26 @@ impl LocalHeap {
         None
     }
 
-    #[cfg(feature = "lazy-sweep")]
-    /// Fill `out` with up to `max` pointers from the free list using batch pop.
-    /// Returns `true` if any pointers were added, `false` to fall back to single-pop.
-    fn alloc_from_free_list_batch(
-        &mut self,
-        class_index: usize,
-        out: &mut Vec<NonNull<u8>>,
-        max: usize,
-    ) -> bool {
-        let block_size = SIZE_CLASSES[class_index];
-
-        if let Some(page_ptr) = self.free_list_preferred[class_index] {
-            if let Some((ptrs, exhausted)) =
-                unsafe { Self::try_pop_batch_from_page(page_ptr.as_ptr(), block_size, max, true) }
-            {
-                if !ptrs.is_empty() {
-                    out.extend(ptrs);
-                    if exhausted {
-                        self.free_list_preferred[class_index] = None;
-                        if let Some(pos) = self.pages_with_free_slots[class_index]
-                            .iter()
-                            .position(|&p| p == page_ptr)
-                        {
-                            self.pages_with_free_slots[class_index].swap_remove(pos);
-                        }
-                    } else {
-                        self.free_list_preferred[class_index] = Some(page_ptr);
-                    }
-                    return true;
-                }
-            }
-            self.free_list_preferred[class_index] = None;
-        }
-
-        let i = 0;
-        while i < self.pages_with_free_slots[class_index].len() {
-            let page_ptr = self.pages_with_free_slots[class_index][i];
-            if let Some((ptrs, exhausted)) =
-                unsafe { Self::try_pop_batch_from_page(page_ptr.as_ptr(), block_size, max, true) }
-            {
-                if !ptrs.is_empty() {
-                    out.extend(ptrs);
-                    if exhausted {
-                        self.pages_with_free_slots[class_index].swap_remove(i);
-                    } else {
-                        self.free_list_preferred[class_index] = Some(page_ptr);
-                    }
-                    return true;
-                }
-            }
-            self.pages_with_free_slots[class_index].swap_remove(i);
-        }
-
-        // Fallback: O(K) scan over pages_by_class (mirrors single-pop fallback)
-        for page_ptr in &self.pages_by_class[class_index] {
-            if let Some((ptrs, exhausted)) =
-                unsafe { Self::try_pop_batch_from_page(page_ptr.as_ptr(), block_size, max, true) }
-            {
-                if !ptrs.is_empty() {
-                    out.extend(ptrs);
-                    if !exhausted {
-                        self.free_list_preferred[class_index] = Some(*page_ptr);
-                        self.pages_with_free_slots[class_index].push(*page_ptr);
-                    }
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-
-    /// Bulk-grab all slots from an all-dead page in one CAS. Philosophy: avoid per-slot CAS
-    /// when page is fully reclaimed; caller stashes surplus in `free_list_buffer`.
+    /// Try to pop one object from a page's free list.
     ///
-    /// Returns `Some(ptrs)` when page is `all_dead` and has free slots; `None` otherwise.
-    ///
-    /// # Safety
-    /// `header` must point to a valid `PageHeader` for a page owned by this heap.
-    unsafe fn try_pop_all_from_all_dead_page(
-        header: *mut PageHeader,
-        block_size: usize,
-        known_small: bool,
-    ) -> Option<Vec<NonNull<u8>>> {
-        // SAFETY: Caller guarantees header is valid.
-        if !known_small && unsafe { (*header).is_large_object() } {
-            return None;
-        }
-        if unsafe { (*header).block_size as usize } != block_size {
-            return None;
-        }
-        if !unsafe { (*header).all_dead() } {
-            return None;
-        }
-        let first_idx = unsafe { (*header).free_list_head_raw() };
-        if first_idx == PageHeader::FREE_LIST_NONE {
-            return None;
-        }
-        if unsafe { (*header).is_allocated(first_idx as usize) } {
-            let _ = unsafe { (*header).compare_exchange_free_list(Some(first_idx), None) };
-            return None;
-        }
-
-        let h_size = unsafe { (*header).header_size as usize };
-        let obj_count = unsafe { (*header).obj_count as usize };
-        let page_addr = header.cast::<u8>();
-
-        let mut ptrs = Vec::with_capacity(obj_count);
-        let mut idx = first_idx;
-        let mut next_head: Option<u16> = None;
-
-        for _ in 0..obj_count {
-            if unsafe { (*header).is_allocated(idx as usize) } {
-                break;
-            }
-            let obj_ptr = unsafe { page_addr.add(h_size + (idx as usize * block_size)) };
-            let next = unsafe { obj_ptr.cast::<Option<u16>>().read_unaligned() };
-            ptrs.push(unsafe { NonNull::new_unchecked(obj_ptr) });
-            next_head = next;
-            match next {
-                Some(n) => idx = n,
-                None => break,
-            }
-        }
-
-        if ptrs.is_empty() {
-            return None;
-        }
-
-        loop {
-            if unsafe { (*header).compare_exchange_free_list(Some(first_idx), next_head) }.is_ok() {
-                break;
-            }
-        }
-
-        for ptr in &ptrs {
-            let offset = ptr
-                .as_ptr()
-                .addr()
-                .saturating_sub(page_addr.addr())
-                .saturating_sub(h_size);
-            let slot_idx = offset / block_size;
-            unsafe { (*header).set_allocated(slot_idx) };
-        }
-
-        unsafe {
-            (*header).clear_all_dead();
-            (*header).set_dead_count(0);
-        }
-
-        Some(ptrs)
-    }
-
-    /// Pop one slot from free list. `known_small`: skip `is_large_object` when page came from
-    /// small-only lists. Philosophy: `pages_by_class` only holds small pages; avoid atomic load
-    /// on allocation hot path.
-    ///
-    /// Returns `Some((ptr, exhausted))` on success. `exhausted` if no more free slots.
-    /// Returns `None` if no free slots or slot is stale.
+    /// Returns `Some((ptr, exhausted))` on success, where `exhausted` is true
+    /// if the page has no more free slots after this pop. Returns `None` if
+    /// the page has no free slots or slot is stale (`allocated_bitmap` out of sync).
     #[allow(clippy::cognitive_complexity)]
     /// # Safety
     /// `header` must point to a valid `PageHeader` for a page owned by this heap.
     unsafe fn try_pop_from_page(
         header: *mut PageHeader,
         block_size: usize,
-        known_small: bool,
     ) -> Option<(NonNull<u8>, bool)> {
         // SAFETY: Caller guarantees header is valid.
-        if !known_small && unsafe { (*header).is_large_object() } {
-            return None;
-        }
-        if unsafe { (*header).block_size as usize } != block_size {
+        if unsafe { (*header).is_large_object() }
+            || unsafe { (*header).block_size as usize } != block_size
+        {
             return None;
         }
         // SAFETY: Caller guarantees header is valid.
-        let idx = unsafe { (*header).free_list_head_raw() };
-        if idx == PageHeader::FREE_LIST_NONE {
-            return None;
-        }
+        let idx = (unsafe { (*header).free_list_head() })?;
         // Sanity check: ensure slot is not already allocated
         // This can happen if free list and allocated_bitmap are out of sync
         // due to concurrent sweep/allocate operations.
@@ -2280,101 +2033,6 @@ impl LocalHeap {
         }
 
         Some((unsafe { NonNull::new_unchecked(obj_ptr) }, exhausted))
-    }
-
-    #[cfg(feature = "lazy-sweep")]
-    /// Pop up to `batch_size` slots. `known_small`: skip `is_large_object`.
-    /// Philosophy: `pages_by_class` only holds small pages; avoid atomic load on alloc hot path.
-    ///
-    /// Returns `Some((ptrs, exhausted))`. Uses one CAS for batch instead of N.
-    ///
-    /// # Safety
-    /// `header` must point to a valid `PageHeader` for a page owned by this heap.
-    #[allow(clippy::cognitive_complexity)]
-    unsafe fn try_pop_batch_from_page(
-        header: *mut PageHeader,
-        block_size: usize,
-        batch_size: usize,
-        known_small: bool,
-    ) -> Option<(Vec<NonNull<u8>>, bool)> {
-        // SAFETY: Caller guarantees header is valid.
-        if !known_small && unsafe { (*header).is_large_object() } {
-            return None;
-        }
-        if unsafe { (*header).block_size as usize } != block_size {
-            return None;
-        }
-        // SAFETY: Caller guarantees header is valid.
-        let first_idx = unsafe { (*header).free_list_head_raw() };
-        if first_idx == PageHeader::FREE_LIST_NONE {
-            return None;
-        }
-        // SAFETY: Caller guarantees header is valid.
-        if unsafe { (*header).is_allocated(first_idx as usize) } {
-            let _ = unsafe { (*header).compare_exchange_free_list(Some(first_idx), None) };
-            return None;
-        }
-
-        let h_size = unsafe { (*header).header_size as usize };
-        let obj_count = unsafe { (*header).obj_count as usize };
-        let page_addr = header.cast::<u8>();
-
-        // All-dead page: bulk grab all slots in one CAS. Philosophy: avoid per-slot CAS when
-        // page is fully reclaimed; subsequent allocs served from thread-local buffer.
-        let effective_batch = if unsafe { (*header).all_dead() } {
-            obj_count
-        } else {
-            batch_size
-        };
-
-        let mut ptrs = Vec::with_capacity(effective_batch);
-        let mut idx = first_idx;
-        let mut next_head: Option<u16> = None;
-
-        for _ in 0..effective_batch {
-            // SAFETY: Caller guarantees header is valid.
-            if unsafe { (*header).is_allocated(idx as usize) } {
-                next_head = None;
-                break;
-            }
-            let obj_ptr = unsafe { page_addr.add(h_size + (idx as usize * block_size)) };
-            let next = unsafe { obj_ptr.cast::<Option<u16>>().read_unaligned() };
-            ptrs.push(unsafe { NonNull::new_unchecked(obj_ptr) });
-            next_head = next;
-            match next {
-                Some(n) => idx = n,
-                None => break,
-            }
-        }
-
-        let exhausted = next_head.is_none();
-
-        loop {
-            // SAFETY: Caller guarantees header is valid.
-            if unsafe { (*header).compare_exchange_free_list(Some(first_idx), next_head) }.is_ok() {
-                break;
-            }
-        }
-
-        for ptr in &ptrs {
-            let offset = ptr
-                .as_ptr()
-                .addr()
-                .saturating_sub(page_addr.addr())
-                .saturating_sub(h_size);
-            let slot_idx = offset / block_size;
-            // SAFETY: Caller guarantees header is valid.
-            unsafe { (*header).set_allocated(slot_idx) };
-        }
-
-        if !ptrs.is_empty() && unsafe { (*header).all_dead() } {
-            unsafe {
-                (*header).clear_all_dead();
-                (*header).set_dead_count(0);
-            }
-        }
-
-        Some((ptrs, exhausted))
     }
 
     #[inline(never)]
@@ -3735,16 +3393,6 @@ fn clear_local_heap() {
             vec.clear();
         }
         for vec in &mut heap.pages_with_free_slots {
-            vec.clear();
-        }
-        for vec in &mut heap.free_list_buffer {
-            vec.clear();
-        }
-        for slot in &mut heap.free_list_preferred {
-            *slot = None;
-        }
-        #[cfg(feature = "lazy-sweep")]
-        for vec in &mut heap.batch_scratch {
             vec.clear();
         }
         #[cfg(feature = "lazy-sweep")]
