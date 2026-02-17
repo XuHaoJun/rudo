@@ -379,6 +379,7 @@ fn test_many_handles() {
 /// Test handle with different data types (basic types only).
 #[test]
 fn test_different_types() {
+    rudo_gc::test_util::reset();
     let int_handle: GcHandle<i32> = Gc::new(42).cross_thread_handle();
     let vec_handle: GcHandle<Vec<i32>> = Gc::new(vec![1, 2, 3]).cross_thread_handle();
 
