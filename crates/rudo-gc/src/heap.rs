@@ -3740,6 +3740,9 @@ fn clear_local_heap() {
         for vec in &mut heap.free_list_buffer {
             vec.clear();
         }
+        for slot in &mut heap.free_list_preferred {
+            *slot = None;
+        }
         #[cfg(feature = "lazy-sweep")]
         for vec in &mut heap.batch_scratch {
             vec.clear();
