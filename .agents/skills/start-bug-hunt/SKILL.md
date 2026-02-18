@@ -7,6 +7,11 @@ description: Structured bug hunting for rudo-gc using multi-perspective analysis
 
 Structured bug hunting workflow with parallel-world expert collaboration. Output goes to `docs/issues/`.
 
+## Preconditions
+
+- **Assume all tests pass.** Do not run `./test.sh` or `cargo test` as part of the bug hunt.
+- **Read existing tests** in `crates/rudo-gc/tests/` to understand coverage; use this to identify untested or under-tested code paths.
+
 ## Personas
 
 | Expert | Perspective |
