@@ -128,6 +128,7 @@ fn test_external_ref_tracking() {
 ## Workspace Structure
 - Three crates: `rudo-gc` (main), `rudo-gc-derive` (proc macro), `sys_alloc` (system allocator)
 - Default features: `derive` for `#[derive(Trace)]` macro
+- **docs/**: 大多沒有對齊 implementation，僅供參考。**閱讀實作優先！**
 
 ## Agent Workflows
 This project uses custom agentic workflows defined in `.agent/workflows/` (previously `.cursor/commands/`):
