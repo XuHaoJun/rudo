@@ -5,16 +5,21 @@
 //! write barrier is skipped, SATB invariant violated, leading to potential UAF.
 //!
 //! See: docs/issues/2026-02-18_ISSUES_bug-hunt.md, docs/issues/2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md
+//!
+//! Platform page sizes (rudo-gc uses allocation_granularity):
+//! - Linux: 4KB | macOS Intel: 4KB | macOS ARM (M1/M2): 16KB | Windows: 64KB
 
 use rudo_gc::cell::GcCell;
 use rudo_gc::{collect_full, Gc, Trace};
 use std::cell::RefCell;
 
+/// Padding size in u64s. 9000 * 8 = 72KB, exceeds 64KB (Windows) and all common Unix page sizes.
+const PADDING_U64_COUNT: usize = 9000;
+
 #[repr(C)]
 #[allow(clippy::large_stack_arrays)]
 struct Container {
-    /// Padding to push `GcCell` beyond first page. 7000 * 8 = 56KB > typical 4KB page.
-    _padding: [u64; 7000],
+    _padding: [u64; PADDING_U64_COUNT],
     cell: GcCell<Gc<RefCell<u32>>>,
 }
 
@@ -29,9 +34,14 @@ unsafe impl Trace for Container {
 fn test_multi_page_gccell_write_barrier() {
     let page_size = rudo_gc::heap::page_size();
     let page_mask = rudo_gc::heap::page_mask();
+    let padding_bytes = PADDING_U64_COUNT * std::mem::size_of::<u64>();
+    assert!(
+        padding_bytes > page_size,
+        "Padding {padding_bytes} bytes must exceed page_size {page_size} (increase PADDING_U64_COUNT)"
+    );
 
     let gc = Gc::new(Container {
-        _padding: [0; 7000],
+        _padding: [0; PADDING_U64_COUNT],
         cell: GcCell::new(Gc::new(RefCell::new(0))),
     });
 
