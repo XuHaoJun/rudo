@@ -6,7 +6,7 @@
 //!
 //! See: docs/issues/2026-02-18_ISSUES_bug-hunt.md, docs/issues/2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md
 //!
-//! Platform page sizes (rudo-gc uses allocation_granularity):
+//! Platform page sizes (rudo-gc uses `allocation_granularity`):
 //! - Linux: 4KB | macOS Intel: 4KB | macOS ARM (M1/M2): 16KB | Windows: 64KB
 
 use rudo_gc::cell::GcCell;
