@@ -102,17 +102,26 @@ impl<T: Trace + 'static> GcHandle<T> {
     ///
     /// This is idempotent — calling it multiple times is safe.
     pub fn unregister(&mut self) {
+        if self.handle_id == HandleId::INVALID {
+            return;
+        }
         let mut roots = self.origin_tcb.cross_thread_roots.lock().unwrap();
         roots.strong.remove(&self.handle_id);
         drop(roots);
         self.handle_id = HandleId::INVALID;
+        crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
     }
 
     /// Resolves this handle to a `Gc<T>` on the origin thread.
     ///
     /// # Panics
     ///
-    /// Panics if called from a thread other than the origin thread.
+    /// Panics if called from a thread other than the origin thread. This includes
+    /// the case where the origin thread has already terminated, since the current
+    /// thread can never match a terminated thread's ID.
+    ///
+    /// When thread affinity is uncertain (e.g., callbacks that may run on different
+    /// threads), use [`try_resolve()`] instead to get `None` instead of panicking.
     ///
     /// # Example
     ///
@@ -139,15 +148,21 @@ impl<T: Trace + 'static> GcHandle<T> {
             self.origin_thread,
             std::thread::current().id(),
         );
-        // SAFETY: The root registration guarantees the object is alive.
-        // We've verified we're on the origin thread, so producing a Gc<T>
-        // is safe even if T: !Send.
-        unsafe { Gc::from_raw(self.ptr.as_ptr() as *const u8) }
+        // Take ownership of one ref for the returned Gc. The handle holds refs;
+        // resolving transfers one to the caller. SAFETY: verified on origin thread.
+        unsafe {
+            (*self.ptr.as_ptr()).inc_ref();
+            Gc::from_raw(self.ptr.as_ptr() as *const u8)
+        }
     }
 
-    /// Tries to resolve, returning `None` if called from wrong thread.
+    /// Tries to resolve, returning `None` if called from the wrong thread.
     ///
-    /// Useful in contexts where you cannot guarantee which thread you're on.
+    /// Returns `None` when:
+    /// - Called from a thread other than the origin thread, or
+    /// - The origin thread has already terminated.
+    ///
+    /// Use this instead of [`resolve()`] when thread affinity is uncertain.
     ///
     /// # Example
     ///
@@ -170,8 +185,11 @@ impl<T: Trace + 'static> GcHandle<T> {
         if std::thread::current().id() != self.origin_thread {
             return None;
         }
-        // SAFETY: same as resolve().
-        Some(unsafe { Gc::from_raw(self.ptr.as_ptr() as *const u8) })
+        // Take ownership of one ref for the returned Gc. SAFETY: same as resolve().
+        unsafe {
+            (*self.ptr.as_ptr()).inc_ref();
+            Some(Gc::from_raw(self.ptr.as_ptr() as *const u8))
+        }
     }
 
     /// Downgrades to a weak cross-thread handle.
@@ -214,6 +232,7 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
         let mut roots = self.origin_tcb.cross_thread_roots.lock().unwrap();
         let new_id = roots.allocate_id();
         roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());
+        unsafe { (*self.ptr.as_ptr()).inc_ref() };
         drop(roots);
 
         Self {
@@ -226,17 +245,20 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
 }
 
 impl<T: Trace + 'static> Drop for GcHandle<T> {
-    /// Unregisters the root entry from the origin thread's TCB.
+    /// Unregisters the root entry and releases the reference count held by this handle.
     ///
     /// Safe to call from any thread: the TCB is held via `Arc`, and the root
     /// list is `Mutex`-protected. No thread-local storage is accessed.
     fn drop(&mut self) {
-        // Lock the origin thread's root table. This is safe from any thread
-        // because origin_tcb is an Arc<ThreadControlBlock>.
+        if self.handle_id == HandleId::INVALID {
+            return;
+        }
         let mut roots = self.origin_tcb.cross_thread_roots.lock().unwrap();
         roots.strong.remove(&self.handle_id);
-        // Lock released here. The object becomes eligible for collection
-        // on the next GC cycle (unless other roots exist).
+        drop(roots);
+        self.handle_id = HandleId::INVALID;
+        // Release the ref count we held. May trigger object drop if this was last ref.
+        crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
     }
 }
 

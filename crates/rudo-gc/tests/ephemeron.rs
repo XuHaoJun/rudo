@@ -442,13 +442,17 @@ fn test_ephemeron_vec_multiple_collections() {
         ephemerons.push(Ephemeron::new(&key, value));
     }
 
+    // Root ephemerons so GC traces them and keeps values alive
+    let ephemerons_gc = Gc::new(RefCell::new(ephemerons));
+    root!(ephemerons_gc);
+
     // Run multiple collections
     #[allow(clippy::cast_possible_truncation)]
     for _ in 0..5 {
         #[cfg(feature = "debug-suspicious-sweep")]
         clear_history();
         collect_full();
-        for (i, eph) in ephemerons.iter().enumerate() {
+        for (i, eph) in ephemerons_gc.borrow().iter().enumerate() {
             assert!(eph.is_key_alive(), "ephemeron {i} should be alive");
             let val = eph.upgrade().unwrap();
             assert_eq!(*val, i as i32 * 10, "ephemeron {i} value mismatch");
@@ -599,8 +603,12 @@ fn test_ephemeron_many_keys() {
         .collect();
     drop(keys_ref);
 
+    // Root ephemerons so GC traces them and keeps values alive
+    let ephemerons_gc = Gc::new(RefCell::new(ephemerons));
+    root!(ephemerons_gc);
+
     // All should work
-    for (i, eph) in ephemerons.iter().enumerate() {
+    for (i, eph) in ephemerons_gc.borrow().iter().enumerate() {
         assert!(eph.is_key_alive(), "eph {} should be alive", i);
         assert_eq!(
             *eph.upgrade().unwrap(),
@@ -615,7 +623,7 @@ fn test_ephemeron_many_keys() {
         #[cfg(feature = "debug-suspicious-sweep")]
         clear_history();
         collect_full();
-        for (i, eph) in ephemerons.iter().enumerate() {
+        for (i, eph) in ephemerons_gc.borrow().iter().enumerate() {
             assert!(eph.is_key_alive(), "eph {} should be alive after GC", i);
             assert_eq!(*eph.upgrade().unwrap(), i as i32);
         }

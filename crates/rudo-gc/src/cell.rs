@@ -279,139 +279,6 @@ impl<T: ?Sized> GcCell<T> {
              4. Use single-threaded Tokio runtime"
         );
     }
-
-    #[allow(dead_code)]
-    #[allow(clippy::unused_self)]
-    fn write_barrier(&self) {
-        let ptr = std::ptr::from_ref(self).cast::<u8>();
-
-        if crate::gc::incremental::is_generational_barrier_active() {
-            self.generational_write_barrier(ptr);
-        }
-
-        if crate::gc::incremental::is_incremental_marking_active() {
-            self.incremental_write_barrier(ptr);
-        }
-    }
-
-    #[inline]
-    #[allow(clippy::unused_self)]
-    fn is_gc_heap_pointer(&self, ptr: *const u8) -> bool {
-        let ptr_addr = ptr as usize;
-        let heap_start = crate::heap::heap_start();
-        let heap_end = crate::heap::heap_end();
-
-        if ptr_addr < heap_start || ptr_addr > heap_end {
-            return false;
-        }
-
-        let _page_addr = ptr_addr & crate::heap::page_mask();
-        let header = unsafe { crate::heap::ptr_to_page_header(ptr) };
-        unsafe { (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE }
-    }
-
-    /// Records a write to an old-generation object for generational GC.
-    ///
-    /// This implements the generational GC invariant: all OLD→YOUNG references
-    /// must be tracked so minor collections can find roots without scanning old gen.
-    ///
-    /// **Important**: This barrier remains active through ALL phases of incremental
-    /// marking (including `FinalMark`), not just during Marking. Mutations during
-    /// `FinalMark` must still be recorded for correctness.
-    #[allow(dead_code)]
-    #[allow(clippy::unused_self)]
-    fn generational_write_barrier(&self, ptr: *const u8) {
-        if !self.is_gc_heap_pointer(ptr) {
-            return;
-        }
-
-        unsafe {
-            crate::heap::with_heap(|heap| {
-                let ptr_addr = ptr as usize;
-                let header = crate::heap::ptr_to_page_header(ptr);
-
-                if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
-                    let h = header.as_ptr();
-                    if (*h).generation > 0 {
-                        let block_size = (*h).block_size as usize;
-                        let header_size = (*h).header_size as usize;
-                        let header_page_addr = header.as_ptr() as usize;
-                        let obj_count = (*h).obj_count as usize;
-
-                        if ptr_addr >= header_page_addr + header_size {
-                            let offset = ptr_addr - (header_page_addr + header_size);
-                            let index = offset / block_size;
-
-                            if index < obj_count {
-                                (*h).set_dirty(index);
-                                heap.add_to_dirty_pages(header);
-                            }
-                        }
-                    }
-                    return;
-                }
-
-                let page_addr = ptr_addr & crate::heap::page_mask();
-                if let Some(&(head_addr, _obj_size, _h_size)) =
-                    heap.large_object_map.get(&page_addr)
-                {
-                    let h = head_addr as *mut crate::heap::PageHeader;
-                    if (*h).magic == crate::heap::MAGIC_GC_PAGE && (*h).generation > 0 {
-                        let block_size = (*h).block_size as usize;
-                        let header_size = (*h).header_size as usize;
-                        let header_page_addr = head_addr;
-
-                        if ptr_addr >= header_page_addr + header_size {
-                            let offset = ptr_addr - (header_page_addr + header_size);
-                            let index = offset / block_size;
-                            let obj_count = (*h).obj_count as usize;
-
-                            if index < obj_count {
-                                (*h).set_dirty(index);
-                                heap.add_to_dirty_pages(NonNull::new_unchecked(
-                                    head_addr as *mut crate::heap::PageHeader,
-                                ));
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    #[allow(dead_code)]
-    #[allow(clippy::unused_self)]
-    #[allow(clippy::needless_return)]
-    fn incremental_write_barrier(&self, ptr: *const u8) {
-        if !self.is_gc_heap_pointer(ptr) {
-            return;
-        }
-
-        let state = IncrementalMarkState::global();
-
-        if !state.config().enabled || state.fallback_requested() {
-            return;
-        }
-
-        // SAFETY: This fence synchronizes with the GC thread to ensure
-        // that all prior writes are visible before we check page metadata.
-        std::sync::atomic::fence(Ordering::AcqRel);
-
-        unsafe {
-            if state.fallback_requested() {
-                return;
-            }
-
-            let header = ptr_to_page_header(ptr);
-            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
-                return;
-            }
-
-            if (*header.as_ptr()).generation > 0 {
-                let _ = record_page_in_remembered_buffer(header);
-            }
-        }
-    }
 }
 
 /// Record a page in the thread's remembered buffer.
@@ -918,8 +785,15 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
             if !gc_ptrs.is_empty() {
                 if crate::heap::try_with_heap(|heap| {
                     for gc_ptr in &gc_ptrs {
-                        let _ = heap.record_satb_old_value(*gc_ptr);
+                        if !heap.record_satb_old_value(*gc_ptr) {
+                            crate::gc::incremental::IncrementalMarkState::global()
+                                .request_fallback(
+                                    crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                                );
+                            break;
+                        }
                     }
+                    true
                 })
                 .is_some()
                 {

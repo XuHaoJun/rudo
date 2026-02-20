@@ -409,6 +409,10 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
         unsafe {
             let gc_box = &*ptr.as_ptr();
 
+            if gc_box.is_under_construction() {
+                return None;
+            }
+
             // If DEAD_FLAG is set, value has been dropped - cannot resurrect
             if gc_box.has_dead_flag() {
                 return None;
@@ -1048,9 +1052,14 @@ impl<T: Trace> Gc<T> {
     pub fn try_deref(gc: &Self) -> Option<&T> {
         let ptr = gc.ptr.load(Ordering::Acquire);
         if ptr.is_null() {
-            None
-        } else {
-            Some(&**gc)
+            return None;
+        }
+        let gc_box_ptr = ptr.as_ptr();
+        unsafe {
+            if (*gc_box_ptr).has_dead_flag() || (*gc_box_ptr).dropping_state() != 0 {
+                return None;
+            }
+            Some(&(*gc_box_ptr).value)
         }
     }
 
@@ -1060,10 +1069,15 @@ impl<T: Trace> Gc<T> {
     pub fn try_clone(gc: &Self) -> Option<Self> {
         let ptr = gc.ptr.load(Ordering::Acquire);
         if ptr.is_null() {
-            None
-        } else {
-            Some(gc.clone())
+            return None;
         }
+        let gc_box_ptr = ptr.as_ptr();
+        unsafe {
+            if (*gc_box_ptr).has_dead_flag() {
+                return None;
+            }
+        }
+        Some(gc.clone())
     }
 
     /// Get a raw pointer to the data.
@@ -1219,6 +1233,7 @@ impl<T: Trace + 'static> Gc<T> {
 
         let ptr = self.as_non_null();
         roots.strong.insert(handle_id, ptr.cast::<GcBox<()>>());
+        unsafe { (*ptr.as_ptr()).inc_ref() };
 
         drop(roots);
 
@@ -1267,8 +1282,13 @@ impl<T: Trace> Deref for Gc<T> {
     fn deref(&self) -> &Self::Target {
         let ptr = self.ptr.load(Ordering::Acquire);
         let gc_box_ptr = ptr.as_ptr();
-        // SAFETY: ptr is not null (checked in callers), and ptr is valid
-        unsafe { &(*gc_box_ptr).value }
+        unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag() && (*gc_box_ptr).dropping_state() == 0,
+                "Gc::deref: cannot dereference a dead Gc"
+            );
+            &(*gc_box_ptr).value
+        }
     }
 }
 

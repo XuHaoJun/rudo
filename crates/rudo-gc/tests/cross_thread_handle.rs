@@ -410,18 +410,15 @@ fn test_cross_thread_handle_survives_major_gc() {
     let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
     let handle = gc.cross_thread_handle();
 
-    // Drop the original reference
+    // Drop the original reference. The handle holds a ref, so the value is NOT dropped yet.
     drop(gc);
 
-    // Verify original was collected
+    // Object should NOT be dropped yet - handle keeps it alive via ref count
     assert_eq!(
         DROP_COUNT.load(Ordering::SeqCst),
-        1,
-        "Original Gc reference should have been dropped"
+        0,
+        "Object should not be dropped while handle holds ref"
     );
-
-    // Reset for next check
-    DROP_COUNT.store(0, Ordering::SeqCst);
 
     // Allocate >10MB to force major GC (triggers actual collection)
     let mut allocations = Vec::with_capacity(1024);

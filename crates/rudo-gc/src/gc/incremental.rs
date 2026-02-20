@@ -471,9 +471,7 @@ pub fn write_barrier_needed() -> bool {
 
 pub fn is_generational_barrier_active() -> bool {
     let state = IncrementalMarkState::global();
-    state.enabled.load(Ordering::Relaxed)
-        && !state.fallback_requested()
-        && is_incremental_marking_active()
+    state.enabled.load(Ordering::Relaxed) && !state.fallback_requested()
 }
 
 #[allow(clippy::significant_drop_tightening)]
@@ -767,17 +765,13 @@ unsafe fn scan_page_for_marked_refs(
         if (*header).is_allocated(i) && !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
             refs_found += 1;
-            if let Some(idx) = crate::heap::ptr_to_object_index(obj_ptr.cast()) {
-                if !(*header).is_marked(idx) {
-                    (*header).set_mark(idx);
-                    #[allow(clippy::cast_ptr_alignment)]
-                    #[allow(clippy::unnecessary_cast)]
-                    #[allow(clippy::ptr_as_ptr)]
-                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                    if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
-                        state.push_work(gc_box);
-                    }
-                }
+            (*header).set_mark(i);
+            #[allow(clippy::cast_ptr_alignment)]
+            #[allow(clippy::unnecessary_cast)]
+            #[allow(clippy::ptr_as_ptr)]
+            let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+            if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
+                state.push_work(gc_box);
             }
         }
     }
