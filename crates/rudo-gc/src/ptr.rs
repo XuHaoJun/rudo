@@ -1584,6 +1584,10 @@ impl<T: Trace> Weak<T> {
                     return None;
                 }
 
+                if gc_box.dropping_state() != 0 {
+                    return None;
+                }
+
                 let current_count = gc_box.ref_count.load(Ordering::Relaxed);
                 if current_count == 0 || current_count == usize::MAX {
                     return None;
