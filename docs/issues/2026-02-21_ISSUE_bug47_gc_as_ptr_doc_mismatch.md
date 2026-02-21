@@ -1,7 +1,7 @@
 # [Bug]: Gc::as_ptr() 文件與實作不符 - 文件說會 panic 但實際不會
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -124,4 +124,17 @@ pub fn as_ptr(&self) -> *const T {
 這是一個文件與實作不一致的問題。雖然不會直接造成 UB，但會誤導開發者依賴錯誤的行為。
 
 **Geohot (Exploit 觀點):**
-如果開發者依賴 `as_ptr()` 在 dead 時 panic 來做安全檢查，攻擊者可能利用這個差異進行預期外的記憶體操作。
+If developers rely on `as_ptr()` panicking when dead to perform safety checks, attackers can exploit this discrepancy for unexpected memory operations.
+
+---
+
+## ✅ 解決記錄 (Resolution Note)
+
+**決策:** 選擇選項 1 — 移除文件中錯誤的 `# Panics` 描述，改為正確的 `# Safety` 注釋。
+
+**理由:**
+- `as_ptr()` 回傳 `*const T`（raw pointer），這類 API 在 Rust 生態系中慣例上不應 panic，由呼叫者負責確保有效性。
+- 加入 panic 反而與 `Deref::deref()` 重複，且打破 raw pointer API 的語義（`unsafe` 代碼的呼叫者通常自行負責有效性判斷）。
+- 文件現在明確說明呼叫者的責任，並引導使用 `Gc::try_deref` 作為安全替代方案。
+
+**修改位置:** `crates/rudo-gc/src/ptr.rs:1083-1092` — 將 `# Panics` 文件改為 `# Safety` 注釋。

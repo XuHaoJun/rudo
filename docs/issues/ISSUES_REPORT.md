@@ -3,11 +3,11 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 7
+- **Fixed**: 8
 - **Open**: 50
 
 ### By Tags
-- **Verified**: 10
+- **Verified**: 11
 - **Not Verified**: 40
 - **Not Reproduced**: 7
 
@@ -15,6 +15,15 @@
 
 | Issue | Title | Status | Tags |
 |---|---|---|---|
+| [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Open | Not Reproduced |
+| [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Open | Not Reproduced |
+| [2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md](./2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md) | Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏 | Open | Not Reproduced |
+| [2026-02-19_ISSUE_bug4_cross_thread_handle_tcb_leak.md](./2026-02-19_ISSUE_bug4_cross_thread_handle_tcb_leak.md) | Origin 執行緒終止後 GcHandle 持有無效的 Arc<ThreadControlBlock> 導致記憶體洩露 | Open | Verified |
+| [2026-02-19_ISSUE_bug5_incremental_worklist_unbounded.md](./2026-02-19_ISSUE_bug5_incremental_worklist_unbounded.md) | Incremental Marking 增量標記階段 Overflow 時的 Worklist 無界成長 | Open | Not Reproduced |
+| [2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md](./2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md) | Multi-Page Large Object 的 GcCell Write Barrier 在 Tail Pages 上失效 | Open | Not Reproduced |
+| [2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md](./2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md) | unified_write_barrier 缺少執行緒所有權驗證 | Open | Verified |
+| [2026-02-19_ISSUE_bug8_weak_is_alive_toctou.md](./2026-02-19_ISSUE_bug8_weak_is_alive_toctou.md) | Weak::is_alive() 存在 TOCTOU 競爭條件可能導致 Use-After-Free | Open | Not Reproduced |
+| [2026-02-19_ISSUE_bug9_weak_is_alive_refcount.md](./2026-02-19_ISSUE_bug9_weak_is_alive_refcount.md) | Weak::is_alive() 不檢查 ref_count 導致不一致行為 | Open | Not Verified |
 | [2026-02-19_ISSUE_bug10_gcbox_weak_ref_upgrade_construction.md](./2026-02-19_ISSUE_bug10_gcbox_weak_ref_upgrade_construction.md) | GcBoxWeakRef::upgrade() 缺少 is_under_construction 檢查 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug11_gchandle_origin_thread_terminated.md](./2026-02-19_ISSUE_bug11_gchandle_origin_thread_terminated.md) | GcHandle::resolve() 在原始執行緒終止後 panic | Open | Verified |
 | [2026-02-19_ISSUE_bug12_generational_barrier_docs_inconsistent.md](./2026-02-19_ISSUE_bug12_generational_barrier_docs_inconsistent.md) | is_generational_barrier_active() 與文檔不一致 | Fixed | Verified |
@@ -25,7 +34,6 @@
 | [2026-02-19_ISSUE_bug17_gen_old_flag_not_cleared.md](./2026-02-19_ISSUE_bug17_gen_old_flag_not_cleared.md) | GEN_OLD_FLAG 在物件釋放時未被清除，導致重新配置後產生錯誤的 barrier 行為 | Open | Not Reproduced |
 | [2026-02-19_ISSUE_bug18_gcrwlock_gcmutex_drop_missing_satb.md](./2026-02-19_ISSUE_bug18_gcrwlock_gcmutex_drop_missing_satb.md) | GcRwLockWriteGuard 與 GcMutexGuard 缺少 Drop 時的 SATB Barrier，導致修改後的 GC 指針可能未被標記 | Open | Not Verified |
 | [2026-02-19_ISSUE_bug19_gcscope_spawn_bounds_check.md](./2026-02-19_ISSUE_bug19_gcscope_spawn_bounds_check.md) | GcScope::spawn Missing Bounds Check Causes Buffer Overflow | Open | Not Verified |
-| [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Open | Not Reproduced |
 | [2026-02-19_ISSUE_bug20_cross_thread_satb_buffer_unbounded.md](./2026-02-19_ISSUE_bug20_cross_thread_satb_buffer_unbounded.md) | Cross-Thread SATB Buffer Unbounded Growth Potential | Open | Not Verified |
 | [2026-02-19_ISSUE_bug21_scan_page_redundant_index_check.md](./2026-02-19_ISSUE_bug21_scan_page_redundant_index_check.md) | Redundant Index Check in scan_page_for_marked_refs | Fixed | Verified |
 | [2026-02-19_ISSUE_bug22_hashmap_gccapture_iterator_invalidation.md](./2026-02-19_ISSUE_bug22_hashmap_gccapture_iterator_invalidation.md) | HashMap GcCapture Potential Iterator Invalidation | Open | Not Verified |
@@ -34,14 +42,6 @@
 | [2026-02-19_ISSUE_bug26_gc_deref_dead_flag.md](./2026-02-19_ISSUE_bug26_gc_deref_dead_flag.md) | Gc::deref 與 try_deref 未檢查 DEAD_FLAG 導致 Use-After-Free | Fixed | Verified |
 | [2026-02-19_ISSUE_bug27_weak_upgrade_toctou.md](./2026-02-19_ISSUE_bug27_weak_upgrade_toctou.md) | Weak::upgrade() ref_count Relaxed 載入導致 TOCTOU Use-After-Free | Open | Not Verified |
 | [2026-02-19_ISSUE_bug28_gcrwlock_capture_gc_ptrs_empty_slice.md](./2026-02-19_ISSUE_bug28_gcrwlock_capture_gc_ptrs_empty_slice.md) | GcRwLock::capture_gc_ptrs() 返回空切片導致 GC 遺漏內部指標 | Open | Not Verified |
-| [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Open | Not Reproduced |
-| [2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md](./2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md) | Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏 | Open | Not Reproduced |
-| [2026-02-19_ISSUE_bug4_cross_thread_handle_tcb_leak.md](./2026-02-19_ISSUE_bug4_cross_thread_handle_tcb_leak.md) | Origin 執行緒終止後 GcHandle 持有無效的 Arc<ThreadControlBlock> 導致記憶體洩露 | Open | Verified |
-| [2026-02-19_ISSUE_bug5_incremental_worklist_unbounded.md](./2026-02-19_ISSUE_bug5_incremental_worklist_unbounded.md) | Incremental Marking 增量標記階段 Overflow 時的 Worklist 無界成長 | Open | Not Reproduced |
-| [2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md](./2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md) | Multi-Page Large Object 的 GcCell Write Barrier 在 Tail Pages 上失效 | Open | Not Reproduced |
-| [2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md](./2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md) | unified_write_barrier 缺少執行緒所有權驗證 | Open | Verified |
-| [2026-02-19_ISSUE_bug8_weak_is_alive_toctou.md](./2026-02-19_ISSUE_bug8_weak_is_alive_toctou.md) | Weak::is_alive() 存在 TOCTOU 競爭條件可能導致 Use-After-Free | Open | Not Reproduced |
-| [2026-02-19_ISSUE_bug9_weak_is_alive_refcount.md](./2026-02-19_ISSUE_bug9_weak_is_alive_refcount.md) | Weak::is_alive() 不檢查 ref_count 導致不一致行為 | Open | Not Verified |
 | [2026-02-20_ISSUE_bug29_gchandle_clone_unregister_race.md](./2026-02-20_ISSUE_bug29_gchandle_clone_unregister_race.md) | GcHandle clone()/unregister() Race 導致物件在 Root 移除後仍被視為 Root | Open | Not Verified |
 | [2026-02-20_ISSUE_bug30_gc_requested_relaxed_ordering.md](./2026-02-20_ISSUE_bug30_gc_requested_relaxed_ordering.md) | GC_REQUESTED Relaxed Ordering Causes Missed GC Handshake | Open | Not Verified |
 | [2026-02-20_ISSUE_bug31_weak_clone_toctou.md](./2026-02-20_ISSUE_bug31_weak_clone_toctou.md) | Weak::clone has TOCTOU race causing potential use-after-free | Open | Not Verified |
@@ -61,7 +61,7 @@
 | [2026-02-21_ISSUE_bug44_gc_clone_missing_flag_check.md](./2026-02-21_ISSUE_bug44_gc_clone_missing_flag_check.md) | Gc::clone() 缺少 has_dead_flag 和 dropping_state 檢查導致異常行為 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug45_dirty_pages_snapshot_race.md](./2026-02-21_ISSUE_bug45_dirty_pages_snapshot_race.md) | Dirty Pages Snapshot Race 導致 Young 物件被錯誤回收 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug46_gc_clone_missing_dead_flag_check.md](./2026-02-21_ISSUE_bug46_gc_clone_missing_dead_flag_check.md) | Gc::clone() Missing Dead Flag Check 導致記憶體不安全 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug47_gc_as_ptr_doc_mismatch.md](./2026-02-21_ISSUE_bug47_gc_as_ptr_doc_mismatch.md) | Gc::as_ptr() 文件與實作不符 - 文件說會 panic 但實際不會 | Open | Not Verified |
+| [2026-02-21_ISSUE_bug47_gc_as_ptr_doc_mismatch.md](./2026-02-21_ISSUE_bug47_gc_as_ptr_doc_mismatch.md) | Gc::as_ptr() 文件與實作不符 - 文件說會 panic 但實際不會 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug48_gc_try_clone_missing_dropping_state_check.md](./2026-02-21_ISSUE_bug48_gc_try_clone_missing_dropping_state_check.md) | Gc::try_clone 缺少 dropping_state 檢查 - 與 try_deref 行為不一致 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug49_gc_ref_count_weak_count_doc_mismatch.md](./2026-02-21_ISSUE_bug49_gc_ref_count_weak_count_doc_mismatch.md) | Gc::ref_count() 與 Gc::weak_count() 文件與實作不符 - 文件說會 panic 但實際不會 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug50_gc_downgrade_missing_dead_check.md](./2026-02-21_ISSUE_bug50_gc_downgrade_missing_dead_check.md) | Gc::downgrade() 文件說會 panic 但實際不會 | Open | Not Verified |
@@ -72,3 +72,4 @@
 | [2026-02-21_ISSUE_bug55_asyncgchandle_downcast_ref_missing_dead_check.md](./2026-02-21_ISSUE_bug55_asyncgchandle_downcast_ref_missing_dead_check.md) | AsyncGcHandle::downcast_ref() 缺少 Dead Flag 檢查導致潛在 UAF | Open | Not Verified |
 | [2026-02-21_ISSUE_bug56_gchandle_clone_missing_dead_check.md](./2026-02-21_ISSUE_bug56_gchandle_clone_missing_dead_check.md) | GcHandle::clone() Missing Dead Flag Check 導致潛在記憶體不安全 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md](./2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md) | Ephemeron<K,V> Trace 實作總是追蹤 value，導致記憶體無法正確回收 | Open | Not Verified |
+| [2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md](./2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md) | Weak::is_alive() 缺少 dropping_state 檢查導致不一致行為 | Open | Not Verified |

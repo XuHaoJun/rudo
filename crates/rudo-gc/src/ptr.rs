@@ -1082,9 +1082,12 @@ impl<T: Trace> Gc<T> {
 
     /// Get a raw pointer to the data.
     ///
-    /// # Panics
+    /// # Safety
     ///
-    /// Panics if the Gc is dead.
+    /// The caller is responsible for ensuring that the `Gc` is still alive
+    /// (i.e. not dead or in dropping state) before dereferencing the returned
+    /// pointer. Dereferencing a pointer obtained from a dead `Gc` is undefined
+    /// behaviour. Use [`Gc::try_deref`] for a safe alternative.
     pub fn as_ptr(&self) -> *const T {
         let ptr = self.ptr.load(Ordering::Acquire);
         let gc_box_ptr = ptr.as_ptr();
