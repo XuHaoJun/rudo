@@ -1157,10 +1157,15 @@ impl<T: GcCapture + ?Sized> GcCapture for GcThreadSafeCell<T> {
         &[]
     }
 
+    /// Captures GC pointers from the inner value.
+    ///
+    /// Uses `try_lock()` to avoid data races: if the lock is held by another thread
+    /// (e.g. a writer), we skip capturing. The writer will record SATB in `borrow_mut()`.
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        let raw_ptr = self.inner.data_ptr();
-        unsafe { (*raw_ptr).capture_gc_ptrs_into(ptrs) }
+        if let Some(guard) = self.inner.try_lock() {
+            guard.capture_gc_ptrs_into(ptrs);
+        }
     }
 }
 

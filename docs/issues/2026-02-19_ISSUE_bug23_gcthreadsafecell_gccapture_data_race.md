@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell GcCapture Implementation Data Race
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -173,3 +173,14 @@ impl<T: GcCapture + ?Sized> GcCapture for GcThreadSafeCell<T> {
 
 **Geohot (Exploit 觀點):**
 從攻擊者角度來看，這是一個潛在的漏洞利用向量。如果攻擊者能夠控制時序，他們可能能夠觸發資料競爭並導致記憶體損壞或讀取敏感資料。這是優先級較高的安全問題，應該立即修復。
+
+---
+
+## Resolution
+
+**2026-02-21** — Applied 方案 1 (try_lock):
+
+- Updated `GcThreadSafeCell::capture_gc_ptrs_into` in `cell.rs` to use `try_lock()` instead of `data_ptr()`.
+- If the lock is available, capture GC pointers under the guard; if not (writer holds it), skip. The writer records SATB in `borrow_mut()` before releasing.
+- Aligns with `GcRwLock` which uses `try_read()` for the same purpose.
+- Build, clippy, and `./test.sh` pass.

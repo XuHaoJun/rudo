@@ -314,10 +314,18 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Set `GEN_OLD_FLAG` on promotion. Enables barrier early-exit for young objects.
+    /// Uses `Release` ordering so barrier reads (Acquire) synchronize with promotion.
     #[inline]
     pub(crate) fn set_gen_old(&self) {
         self.weak_count
-            .fetch_or(Self::GEN_OLD_FLAG, Ordering::Relaxed);
+            .fetch_or(Self::GEN_OLD_FLAG, Ordering::Release);
+    }
+
+    /// Check if `GEN_OLD_FLAG` is set. For use in write barriers only.
+    /// Uses `Acquire` ordering to synchronize with `set_gen_old` (Release).
+    #[inline]
+    pub(crate) fn has_gen_old_flag(&self) -> bool {
+        (self.weak_count.load(Ordering::Acquire) & Self::GEN_OLD_FLAG) != 0
     }
 
     /// Clear `GEN_OLD_FLAG`. Used when deallocating so reused slots don't inherit stale state.

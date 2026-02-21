@@ -1,6 +1,6 @@
 # [Bug]: HashMap GcCapture Potential Iterator Invalidation
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Not Verified
 
 
@@ -145,3 +145,9 @@ fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
 
 **Geohot (Exploit 觀點):**
 在極端情況下，如果攻擊者能夠控制 HashMap 的 rehash 行為，可能會利用這一點進行攻擊。雖然目前看來不太可能，但防禦性編碼是更好的選擇。
+
+---
+
+## Resolution Note
+
+**Invalid (2025-02):** The described bug does not occur. Rust's borrow checker guarantees that when `self.keys()` or `self.values()` is used, the iterator holds an immutable borrow (`&self`) of the HashMap for the entire iteration. No mutation (insert/remove) can occur during that time, so rehash cannot happen. Rehash only occurs on mutation, which is impossible while the iterator is active. The `capture_gc_ptrs_into` method only reads and collects pointers—it does not invoke user code that could mutate the map. No code change is needed.

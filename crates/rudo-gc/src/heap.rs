@@ -2594,8 +2594,7 @@ pub fn simple_write_barrier(ptr: *const u8) {
                         return;
                     }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
-                    let wc = (*gc_box_addr).weak_count_raw();
-                    if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                    if !(*gc_box_addr).has_gen_old_flag() {
                         return;
                     }
                     (
@@ -2621,8 +2620,7 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-                    let wc = (*gc_box_addr).weak_count_raw();
-                    if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                    if !(*gc_box_addr).has_gen_old_flag() {
                         return;
                     }
                     (h, index)
@@ -2689,8 +2687,7 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                      4. Use single-threaded Tokio runtime"
                 );
                 let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
-                let wc = (*gc_box_addr).weak_count_raw();
-                if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                if !(*gc_box_addr).has_gen_old_flag() {
                     return;
                 }
                 (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -2739,8 +2736,7 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 // GEN_OLD early-exit: parent young → skip barrier
                 let gc_box_addr =
                     (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-                let wc = (*gc_box_addr).weak_count_raw();
-                if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                if !(*gc_box_addr).has_gen_old_flag() {
                     return;
                 }
                 (header, index)
@@ -2784,8 +2780,7 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                         return;
                     }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
-                    let wc = (*gc_box_addr).weak_count_raw();
-                    if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                    if !(*gc_box_addr).has_gen_old_flag() {
                         return;
                     }
                     (
@@ -2811,8 +2806,7 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-                    let wc = (*gc_box_addr).weak_count_raw();
-                    if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                    if !(*gc_box_addr).has_gen_old_flag() {
                         return;
                     }
                     (h, index)
@@ -2879,8 +2873,7 @@ pub fn incremental_write_barrier(ptr: *const u8) {
             // GEN_OLD early-exit
             let gc_box_addr =
                 (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-            let wc = (*gc_box_addr).weak_count_raw();
-            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+            if !(*gc_box_addr).has_gen_old_flag() {
                 return;
             }
 

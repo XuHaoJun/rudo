@@ -1,7 +1,7 @@
 # [Bug]: Write Barrier 中 GEN_OLD_FLAG 讀取使用 Relaxed Ordering 導致潛在 Race Condition
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -153,4 +153,16 @@ Relaxed ordering 在這種情況下是一個微妙的問題。雖然不是立即
 3. 實現記憶體錯誤
 
 這個問題在單執行緒環境下不會出現，但在多執行緒環境下可能導致微妙的記憶體錯誤。
+
+---
+
+## Resolution
+
+**2026-02-21** — Applied 選項 1 + 2 (Acquire/Release ordering):
+
+- Added `has_gen_old_flag()` in `ptr.rs` using `Ordering::Acquire` for barrier reads.
+- Changed `set_gen_old()` from `fetch_or(Relaxed)` to `fetch_or(Release)` so GC promotion and mutator barrier synchronize correctly.
+- Replaced all write-barrier `weak_count_raw()` + `GEN_OLD_FLAG` checks in `heap.rs` with `has_gen_old_flag()`.
+- Affected: `simple_write_barrier`, `gc_cell_validate_and_barrier`, `unified_write_barrier`, `incremental_write_barrier`.
+- Build, clippy, and `./test.sh` pass.
 

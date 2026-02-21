@@ -3,13 +3,13 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 21
-- **Open**: 36
-- **Invalid**: 2
+- **Fixed**: 23
+- **Open**: 33
+- **Invalid**: 3
 
 ### By Tags
-- **Verified**: 17
-- **Not Verified**: 36
+- **Verified**: 19
+- **Not Verified**: 34
 - **Not Reproduced**: 6
 
 ## All Issues
@@ -37,9 +37,9 @@
 | [2026-02-19_ISSUE_bug19_gcscope_spawn_bounds_check.md](./2026-02-19_ISSUE_bug19_gcscope_spawn_bounds_check.md) | GcScope::spawn Missing Bounds Check Causes Buffer Overflow | Fixed | Verified |
 | [2026-02-19_ISSUE_bug20_cross_thread_satb_buffer_unbounded.md](./2026-02-19_ISSUE_bug20_cross_thread_satb_buffer_unbounded.md) | Cross-Thread SATB Buffer Unbounded Growth Potential | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug21_scan_page_redundant_index_check.md](./2026-02-19_ISSUE_bug21_scan_page_redundant_index_check.md) | Redundant Index Check in scan_page_for_marked_refs | Fixed | Verified |
-| [2026-02-19_ISSUE_bug22_hashmap_gccapture_iterator_invalidation.md](./2026-02-19_ISSUE_bug22_hashmap_gccapture_iterator_invalidation.md) | HashMap GcCapture Potential Iterator Invalidation | Open | Not Verified |
-| [2026-02-19_ISSUE_bug23_gcthreadsafecell_gccapture_data_race.md](./2026-02-19_ISSUE_bug23_gcthreadsafecell_gccapture_data_race.md) | GcThreadSafeCell GcCapture Implementation Data Race | Open | Not Verified |
-| [2026-02-19_ISSUE_bug25_write_barrier_gen_old_relaxed_ordering.md](./2026-02-19_ISSUE_bug25_write_barrier_gen_old_relaxed_ordering.md) | Write Barrier 中 GEN_OLD_FLAG 讀取使用 Relaxed Ordering 導致潛在 Race Condition | Open | Not Verified |
+| [2026-02-19_ISSUE_bug22_hashmap_gccapture_iterator_invalidation.md](./2026-02-19_ISSUE_bug22_hashmap_gccapture_iterator_invalidation.md) | HashMap GcCapture Potential Iterator Invalidation | Invalid | Not Verified |
+| [2026-02-19_ISSUE_bug23_gcthreadsafecell_gccapture_data_race.md](./2026-02-19_ISSUE_bug23_gcthreadsafecell_gccapture_data_race.md) | GcThreadSafeCell GcCapture Implementation Data Race | Fixed | Verified |
+| [2026-02-19_ISSUE_bug25_write_barrier_gen_old_relaxed_ordering.md](./2026-02-19_ISSUE_bug25_write_barrier_gen_old_relaxed_ordering.md) | Write Barrier 中 GEN_OLD_FLAG 讀取使用 Relaxed Ordering 導致潛在 Race Condition | Fixed | Verified |
 | [2026-02-19_ISSUE_bug26_gc_deref_dead_flag.md](./2026-02-19_ISSUE_bug26_gc_deref_dead_flag.md) | Gc::deref 與 try_deref 未檢查 DEAD_FLAG 導致 Use-After-Free | Fixed | Verified |
 | [2026-02-19_ISSUE_bug27_weak_upgrade_toctou.md](./2026-02-19_ISSUE_bug27_weak_upgrade_toctou.md) | Weak::upgrade() ref_count Relaxed 載入導致 TOCTOU Use-After-Free | Open | Not Verified |
 | [2026-02-19_ISSUE_bug28_gcrwlock_capture_gc_ptrs_empty_slice.md](./2026-02-19_ISSUE_bug28_gcrwlock_capture_gc_ptrs_empty_slice.md) | GcRwLock::capture_gc_ptrs() 返回空切片導致 GC 遺漏內部指標 | Open | Not Verified |
