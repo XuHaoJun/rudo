@@ -1,5 +1,9 @@
 # [Bug]: Ephemeron<K,V> Trace 實作總是追蹤 value，導致記憶體無法正確回收
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

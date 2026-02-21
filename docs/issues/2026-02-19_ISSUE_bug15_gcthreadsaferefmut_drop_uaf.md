@@ -1,5 +1,9 @@
 # [Bug]: GcThreadSafeRefMut::drop() 可能於並髮標記期間導致 UAF
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

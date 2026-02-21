@@ -1,5 +1,9 @@
 # [Bug]: GcThreadSafeCell GcCapture Implementation Data Race
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

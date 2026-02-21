@@ -1,5 +1,9 @@
 # [Bug]: std::rc::Rc 缺少 GcCapture 實作導致 SATB 屏障失效
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

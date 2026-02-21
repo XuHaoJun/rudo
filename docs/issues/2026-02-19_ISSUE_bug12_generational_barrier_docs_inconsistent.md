@@ -1,5 +1,9 @@
 # [Bug]: is_generational_barrier_active() 與文檔不一致
 
+**Status:** Fixed
+**Tags:** Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

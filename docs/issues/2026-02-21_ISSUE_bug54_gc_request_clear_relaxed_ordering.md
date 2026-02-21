@@ -1,5 +1,9 @@
 # [Bug]: GC Request Clear 使用 Relaxed Ordering 導致執行緒可能錯過 GC 完成信號
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

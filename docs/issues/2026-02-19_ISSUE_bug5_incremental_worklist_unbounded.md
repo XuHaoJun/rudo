@@ -1,5 +1,9 @@
 # [Bug]: Incremental Marking 增量標記階段 Overflow 時的 Worklist 無界成長
 
+**Status:** Open
+**Tags:** Not Reproduced
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 指標 | 等級 | 說明 |

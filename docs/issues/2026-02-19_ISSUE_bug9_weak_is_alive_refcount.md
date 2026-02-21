@@ -1,5 +1,9 @@
 # [Bug]: Weak::is_alive() 不檢查 ref_count 導致不一致行為
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

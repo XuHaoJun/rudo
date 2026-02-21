@@ -1,5 +1,9 @@
 # [Bug]: scan_page_for_marked_refs 冗餘的物件索引計算
 
+**Status:** Fixed
+**Tags:** Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

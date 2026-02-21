@@ -36,8 +36,9 @@ Structured bug hunting workflow with parallel-world expert collaboration. Output
 ### Step 3: Create Issue File (if no duplicate)
 
 - Ensure `docs/issues/` exists.
-- Create file: `docs/issues/YYYY-MM-DD_ISSUES_<bug-name>.md` (use today's date).
+- Create file: `docs/issues/YYYY-MM-DD_ISSUE_bug<N>_<short-desc>.md` (use today's date, and set N to the next available bug number).
 - Use the template in [ISSUE_TEMPLATE.md](ISSUE_TEMPLATE.md).
+- **Initial State**: Ensure the document starts with `Status: Open` and `Tags: Unverified` (or `Tags: Verified` if you successfully reproduced it with a PoC).
 
 ## Output Format
 

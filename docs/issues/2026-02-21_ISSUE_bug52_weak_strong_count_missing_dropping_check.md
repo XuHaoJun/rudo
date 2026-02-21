@@ -1,5 +1,9 @@
 # [Bug]: Weak::strong_count() 與 Weak::weak_count() 缺少 dropping_state 檢查
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

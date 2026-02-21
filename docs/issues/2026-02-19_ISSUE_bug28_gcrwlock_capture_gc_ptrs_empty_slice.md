@@ -1,5 +1,9 @@
 # [Bug]: GcRwLock::capture_gc_ptrs() 返回空切片導致 GC 遺漏內部指標
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

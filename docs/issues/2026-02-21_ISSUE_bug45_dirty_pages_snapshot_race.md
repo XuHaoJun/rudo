@@ -1,5 +1,9 @@
 # [Bug]: Dirty Pages Snapshot Race 導致 Young 物件被錯誤回收
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

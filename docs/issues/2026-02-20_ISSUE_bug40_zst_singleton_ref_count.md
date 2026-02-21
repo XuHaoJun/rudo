@@ -1,5 +1,9 @@
 # [Bug]: ZST Singleton 初始化時 ref_count 為 2 而非 1
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

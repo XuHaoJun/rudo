@@ -1,5 +1,9 @@
 # [Bug]: GcHandle clone()/unregister() Race 導致物件在 Root 移除後仍被視為 Root
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

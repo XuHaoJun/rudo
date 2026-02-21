@@ -1,5 +1,9 @@
 # [Bug]: Gc::as_ptr() 文件與實作不符 - 文件說會 panic 但實際不會
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

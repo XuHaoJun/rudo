@@ -1,5 +1,9 @@
 # [Bug]: GcBoxWeakRef::upgrade() 未檢查 dropping_state 導致 Use-After-Free 風險
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

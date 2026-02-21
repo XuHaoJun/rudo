@@ -1,5 +1,9 @@
 # [Bug]: Write Barrier 中 GEN_OLD_FLAG 讀取使用 Relaxed Ordering 導致潛在 Race Condition
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

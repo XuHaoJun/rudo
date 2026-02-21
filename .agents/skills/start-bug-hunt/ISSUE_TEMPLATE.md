@@ -1,5 +1,8 @@
 # [Bug]: <請填寫簡短且具描述性的標題，例如：Vec<Gc<T>> 繞過 SATB 導致 UAF>
 
+**Status:** <Open / Fixed / Invalid>
+**Tags:** <Verified / Not Reproduced / Not Verified>
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

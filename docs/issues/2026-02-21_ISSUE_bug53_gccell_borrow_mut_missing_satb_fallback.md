@@ -1,5 +1,9 @@
 # [Bug]: GcCell::borrow_mut() 缺少 SATB buffer overflow fallback 請求
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

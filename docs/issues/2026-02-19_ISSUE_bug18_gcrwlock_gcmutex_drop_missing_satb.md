@@ -1,5 +1,9 @@
 # [Bug]: GcRwLockWriteGuard 與 GcMutexGuard 缺少 Drop 時的 SATB Barrier，導致修改後的 GC 指針可能未被標記
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

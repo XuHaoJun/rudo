@@ -1,5 +1,9 @@
 # [Bug]: Origin 執行緒終止後 GcHandle 持有無效的 Arc<ThreadControlBlock> 導致記憶體洩露
 
+**Status:** Open
+**Tags:** Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

@@ -1,5 +1,9 @@
 # [Bug]: unified_write_barrier 缺少執行緒所有權驗證
 
+**Status:** Open
+**Tags:** Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

@@ -1,5 +1,9 @@
 # [Bug]: Gc::deref 與 try_deref 未檢查 DEAD_FLAG 導致 Use-After-Free
 
+**Status:** Fixed
+**Tags:** Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

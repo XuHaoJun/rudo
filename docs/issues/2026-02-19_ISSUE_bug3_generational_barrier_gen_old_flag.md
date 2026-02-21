@@ -1,5 +1,9 @@
 # [Bug]: Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏
 
+**Status:** Open
+**Tags:** Not Reproduced
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

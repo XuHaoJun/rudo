@@ -1,5 +1,9 @@
 # [Bug]: GEN_OLD_FLAG 在物件釋放時未被清除，導致重新配置後產生錯誤的 barrier 行為
 
+**Status:** Open
+**Tags:** Not Reproduced
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

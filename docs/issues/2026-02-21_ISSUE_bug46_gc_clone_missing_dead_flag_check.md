@@ -1,5 +1,9 @@
 # [Bug]: Gc::clone() Missing Dead Flag Check 導致記憶體不安全
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

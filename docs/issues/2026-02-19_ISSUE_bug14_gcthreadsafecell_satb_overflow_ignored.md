@@ -1,5 +1,9 @@
 # [Bug]: GcThreadSafeCell::borrow_mut() 忽略 record_satb_old_value 返回值導致 SATB 不變性破壞
 
+**Status:** Fixed
+**Tags:** Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

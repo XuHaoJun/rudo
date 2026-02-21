@@ -1,5 +1,9 @@
 # [Bug]: Gc::try_clone 缺少 dropping_state 檢查 - 與 try_deref 行為不一致
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

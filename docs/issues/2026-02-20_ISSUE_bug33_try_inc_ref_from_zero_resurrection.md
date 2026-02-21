@@ -1,5 +1,9 @@
 # [Bug]: try_inc_ref_from_zero 允許在有 weak references 時復活已死亡物件
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

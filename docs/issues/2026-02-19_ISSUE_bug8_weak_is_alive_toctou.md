@@ -1,5 +1,9 @@
 # [Bug]: Weak::is_alive() 存在 TOCTOU 競爭條件可能導致 Use-After-Free
 
+**Status:** Open
+**Tags:** Not Reproduced
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

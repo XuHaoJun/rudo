@@ -1,5 +1,9 @@
 # [Bug]: Multi-Page Large Object 的 GcCell Write Barrier 在 Tail Pages 上失效
 
+**Status:** Open
+**Tags:** Not Reproduced
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

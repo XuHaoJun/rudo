@@ -1,5 +1,9 @@
 # [Bug]: Weak::upgrade() ref_count Relaxed 載入導致 TOCTOU Use-After-Free
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

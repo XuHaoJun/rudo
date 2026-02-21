@@ -1,5 +1,9 @@
 # [Bug]: GcHandle::resolve() 在原始執行緒終止後 panic
 
+**Status:** Open
+**Tags:** Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

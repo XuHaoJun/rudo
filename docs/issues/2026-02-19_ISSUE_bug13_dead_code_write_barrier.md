@@ -1,5 +1,9 @@
 # [Bug]: GcCell::write_barrier() 是永遠不會被調用的死代碼
 
+**Status:** Fixed
+**Tags:** Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

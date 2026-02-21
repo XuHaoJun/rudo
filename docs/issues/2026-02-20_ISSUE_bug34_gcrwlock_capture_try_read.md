@@ -1,5 +1,9 @@
 # [Bug]: GcRwLock::capture_gc_ptrs_into 使用 try_read() 可能導致指標遺漏
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

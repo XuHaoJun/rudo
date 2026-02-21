@@ -1,5 +1,9 @@
 # [Bug]: Gc::clone() 缺少 has_dead_flag 和 dropping_state 檢查導致異常行為
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

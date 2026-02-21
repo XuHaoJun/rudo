@@ -1,5 +1,9 @@
 # [Bug]: std::sync::Arc 缺少 GcCapture 實作導致指標遺漏
 
+**Status:** Open
+**Tags:** Not Verified
+
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |
