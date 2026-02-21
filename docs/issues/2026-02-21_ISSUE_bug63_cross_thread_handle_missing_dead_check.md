@@ -1,7 +1,7 @@
 # [Bug]: Gc::cross_thread_handle() 與 Gc::weak_cross_thread_handle() 缺少 dead_flag / dropping_state 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -180,4 +180,10 @@ pub fn weak_cross_thread_handle(&self) -> crate::handles::WeakCrossThreadHandle<
 
 ## Resolution
 
-待修復。
+**已修復** - 2026-02-22
+
+在 `ptr.rs:1267-1293` 的 `cross_thread_handle()` 中添加了 `has_dead_flag()` 和 `dropping_state()` 檢查。
+
+在 `ptr.rs:1313-1325` 的 `weak_cross_thread_handle()` 中添加了同樣的檢查。
+
+對比 `Gc::clone()` 和 `Gc::downgrade()` 的行為，現在這兩個方法在物件已死亡或正在 dropping 時會 panic。

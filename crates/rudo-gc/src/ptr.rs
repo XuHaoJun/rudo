@@ -1272,15 +1272,20 @@ impl<T: Trace + 'static> Gc<T> {
         let tcb = crate::heap::current_thread_control_block()
             .expect("cross_thread_handle called outside of GC context");
 
-        // Lock the root table BEFORE reading the pointer.
-        // While this lock is held, GC cannot sweep this thread's
-        // cross-thread roots (GC also acquires this lock for marking).
         let mut roots = tcb.cross_thread_roots.lock().unwrap();
         let handle_id = roots.allocate_id();
 
         let ptr = self.as_non_null();
+
+        unsafe {
+            assert!(
+                !(*ptr.as_ptr()).has_dead_flag() && (*ptr.as_ptr()).dropping_state() == 0,
+                "Gc::cross_thread_handle: cannot create handle for dead or dropping Gc"
+            );
+            (*ptr.as_ptr()).inc_ref();
+        }
+
         roots.strong.insert(handle_id, ptr.cast::<GcBox<()>>());
-        unsafe { (*ptr.as_ptr()).inc_ref() };
 
         drop(roots);
 
@@ -1312,7 +1317,12 @@ impl<T: Trace + 'static> Gc<T> {
     #[must_use]
     pub fn weak_cross_thread_handle(&self) -> crate::handles::WeakCrossThreadHandle<T> {
         unsafe {
-            (*self.as_non_null().as_ptr()).inc_weak();
+            let gc_box = &*self.as_non_null().as_ptr();
+            assert!(
+                !gc_box.has_dead_flag() && gc_box.dropping_state() == 0,
+                "Gc::weak_cross_thread_handle: cannot create handle for dead or dropping Gc"
+            );
+            gc_box.inc_weak();
         }
         crate::handles::WeakCrossThreadHandle {
             weak: GcBoxWeakRef::new(self.as_non_null()),
