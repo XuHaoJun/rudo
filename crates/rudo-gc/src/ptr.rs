@@ -525,7 +525,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             }
 
             // Check for overflow (for consistency with public Weak<T>::try_upgrade)
-            let current_count = gc_box.ref_count.load(Ordering::Relaxed);
+            let current_count = gc_box.ref_count.load(Ordering::Acquire);
             if current_count == usize::MAX {
                 return None;
             }
@@ -1526,7 +1526,7 @@ impl<T: Trace> Weak<T> {
                     return None;
                 }
 
-                let current_count = gc_box.ref_count.load(Ordering::Relaxed);
+                let current_count = gc_box.ref_count.load(Ordering::Acquire);
                 if current_count == 0 {
                     return None;
                 }
@@ -1608,7 +1608,7 @@ impl<T: Trace> Weak<T> {
                     return None;
                 }
 
-                let current_count = gc_box.ref_count.load(Ordering::Relaxed);
+                let current_count = gc_box.ref_count.load(Ordering::Acquire);
                 if current_count == 0 || current_count == usize::MAX {
                     return None;
                 }

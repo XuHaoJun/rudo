@@ -229,20 +229,26 @@ impl<T: Trace + 'static> GcHandle<T> {
 
 impl<T: Trace + 'static> Clone for GcHandle<T> {
     fn clone(&self) -> Self {
-        assert_ne!(
-            self.handle_id,
-            HandleId::INVALID,
-            "cannot clone an unregistered GcHandle"
-        );
-
+        if self.handle_id == HandleId::INVALID {
+            panic!("cannot clone an unregistered GcHandle");
+        }
         let (new_id, origin_tcb) = self.origin_tcb.upgrade().map_or_else(
             || {
-                let new_id = heap::allocate_orphan_handle_id();
-                heap::insert_orphan_root(self.origin_thread, new_id, self.ptr.cast::<GcBox<()>>());
+                let (new_id, ok) = heap::clone_orphan_root(
+                    self.origin_thread,
+                    self.handle_id,
+                    self.ptr.cast::<GcBox<()>>(),
+                );
+                if !ok {
+                    panic!("cannot clone an unregistered GcHandle");
+                }
                 (new_id, Weak::clone(&self.origin_tcb))
             },
             |tcb| {
                 let mut roots = tcb.cross_thread_roots.lock().unwrap();
+                if !roots.strong.contains_key(&self.handle_id) {
+                    panic!("cannot clone an unregistered GcHandle");
+                }
                 let new_id = roots.allocate_id();
                 roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());
                 drop(roots);

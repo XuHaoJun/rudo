@@ -629,6 +629,11 @@ unsafe impl<T: Trace + ?Sized> Trace for GcRwLock<T> {
 }
 
 impl<T: GcCapture + ?Sized> GcCapture for GcRwLock<T> {
+    /// Returns empty slice because inner data requires locking.
+    ///
+    /// Lock-protected types cannot return a static slice; pointer collection
+    /// must use [`capture_gc_ptrs_into()`](GcCapture::capture_gc_ptrs_into) which
+    /// acquires the lock and delegates to the inner value.
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
@@ -649,6 +654,23 @@ unsafe impl<T: Trace + ?Sized> Trace for GcMutex<T> {
         let raw_ptr = self.inner.data_ptr();
         // SAFETY: See safety proof for GcRwLock.
         unsafe { (*raw_ptr).trace(visitor) }
+    }
+}
+
+impl<T: GcCapture + ?Sized> GcCapture for GcMutex<T> {
+    /// Returns empty slice because inner data requires locking.
+    ///
+    /// See [`GcRwLock`]'s `capture_gc_ptrs()` for rationale.
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        if let Some(guard) = self.inner.try_lock() {
+            guard.capture_gc_ptrs_into(ptrs);
+        }
     }
 }
 

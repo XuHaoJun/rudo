@@ -719,6 +719,35 @@ fn test_write_exclusivity() {
     assert!(value == 42 || value == 100);
 }
 
+#[test]
+fn test_gcrwlock_gcmutex_capture_gc_ptrs_into() {
+    use rudo_gc::cell::GcCapture;
+
+    rudo_gc::test_util::reset();
+
+    #[derive(Trace)]
+    struct Inner {
+        value: i32,
+    }
+    rudo_gc::impl_gc_capture!(Inner);
+
+    let inner = Gc::new(Inner { value: 42 });
+    let rwlock: GcRwLock<Gc<Inner>> = GcRwLock::new(inner.clone());
+    let mutex: GcMutex<Gc<Inner>> = GcMutex::new(inner.clone());
+
+    let mut ptrs = Vec::new();
+    rwlock.capture_gc_ptrs_into(&mut ptrs);
+    assert_eq!(ptrs.len(), 1);
+    ptrs.clear();
+
+    mutex.capture_gc_ptrs_into(&mut ptrs);
+    assert_eq!(ptrs.len(), 1);
+
+    assert!(GcRwLock::<Gc<Inner>>::new(inner)
+        .capture_gc_ptrs()
+        .is_empty());
+}
+
 // Compile-time assertions for GcRwLock and GcMutex Send + Sync traits
 #[allow(dead_code)]
 const _: fn() = || {

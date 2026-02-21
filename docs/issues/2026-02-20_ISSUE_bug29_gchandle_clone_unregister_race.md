@@ -1,7 +1,7 @@
 # [Bug]: GcHandle clone()/unregister() Race 導致物件在 Root 移除後仍被視為 Root
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -223,3 +223,14 @@ struct HandleGroup {
 2. 觸發 GC
 3. 物件被回收，但 clone 仍持有指標
 4. 後續使用該指標 → Use-After-Free
+
+---
+
+## Resolution
+
+**2026-02-21** — Fixed TOCTOU by moving validity check under lock (resolve-patterns TOCTOU):
+
+- **Clone (TCB path):** Before allocating/inserting, acquire `cross_thread_roots` lock and verify `roots.strong.contains_key(&self.handle_id)`. If not present (removed by concurrent unregister), panic.
+- **Clone (orphan path):** Added `heap::clone_orphan_root()` which atomically checks `(thread_id, handle_id)` exists, allocates new ID, inserts. Returns `(id, false)` if source was removed.
+- Early `handle_id == INVALID` check remains for fast-fail; the critical check is under lock to prevent TOCTOU where another thread unregisters a *different* handle (clone) sharing the same object.
+- Added tests: `test_clone_unregistered_handle_panics`, `test_clone_then_unregister_cloned_keeps_alive`.

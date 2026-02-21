@@ -1,7 +1,7 @@
 # [Bug]: Weak::upgrade() ref_count Relaxed 載入導致 TOCTOU Use-After-Free
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -171,3 +171,15 @@ let current_count = gc_box.ref_count.load(Ordering::Acquire);
 2. 在 dec_ref 執行的同時觸發 weak upgrade
 3. 利用過期的計數值來 access 已釋放的記憶體
 4. 這可用於資訊洩露或進一步的記憶體腐敗攻擊
+
+---
+
+## Resolution
+
+**2026-02-21** — Changed `ref_count.load(Ordering::Relaxed)` to `Ordering::Acquire` in three locations in `ptr.rs`:
+
+- `Weak::upgrade()` (line ~1529): Load before CAS loop
+- `Weak::try_upgrade()` (line ~1611): Load before CAS loop
+- `GcBoxWeakRef::try_upgrade()` (line ~528): Overflow check load
+
+Acquire ordering synchronizes with dec_ref's Release/AcqRel, ensuring we observe the latest ref_count and object state before proceeding to CAS or returning. Prevents TOCTOU where a stale Relaxed load could allow upgrade after the object was already dropped.

@@ -3,13 +3,13 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 23
-- **Open**: 33
+- **Fixed**: 26
+- **Open**: 30
 - **Invalid**: 3
 
 ### By Tags
-- **Verified**: 19
-- **Not Verified**: 34
+- **Verified**: 22
+- **Not Verified**: 31
 - **Not Reproduced**: 6
 
 ## All Issues
@@ -41,9 +41,9 @@
 | [2026-02-19_ISSUE_bug23_gcthreadsafecell_gccapture_data_race.md](./2026-02-19_ISSUE_bug23_gcthreadsafecell_gccapture_data_race.md) | GcThreadSafeCell GcCapture Implementation Data Race | Fixed | Verified |
 | [2026-02-19_ISSUE_bug25_write_barrier_gen_old_relaxed_ordering.md](./2026-02-19_ISSUE_bug25_write_barrier_gen_old_relaxed_ordering.md) | Write Barrier 中 GEN_OLD_FLAG 讀取使用 Relaxed Ordering 導致潛在 Race Condition | Fixed | Verified |
 | [2026-02-19_ISSUE_bug26_gc_deref_dead_flag.md](./2026-02-19_ISSUE_bug26_gc_deref_dead_flag.md) | Gc::deref 與 try_deref 未檢查 DEAD_FLAG 導致 Use-After-Free | Fixed | Verified |
-| [2026-02-19_ISSUE_bug27_weak_upgrade_toctou.md](./2026-02-19_ISSUE_bug27_weak_upgrade_toctou.md) | Weak::upgrade() ref_count Relaxed 載入導致 TOCTOU Use-After-Free | Open | Not Verified |
-| [2026-02-19_ISSUE_bug28_gcrwlock_capture_gc_ptrs_empty_slice.md](./2026-02-19_ISSUE_bug28_gcrwlock_capture_gc_ptrs_empty_slice.md) | GcRwLock::capture_gc_ptrs() 返回空切片導致 GC 遺漏內部指標 | Open | Not Verified |
-| [2026-02-20_ISSUE_bug29_gchandle_clone_unregister_race.md](./2026-02-20_ISSUE_bug29_gchandle_clone_unregister_race.md) | GcHandle clone()/unregister() Race 導致物件在 Root 移除後仍被視為 Root | Open | Not Verified |
+| [2026-02-19_ISSUE_bug27_weak_upgrade_toctou.md](./2026-02-19_ISSUE_bug27_weak_upgrade_toctou.md) | Weak::upgrade() ref_count Relaxed 載入導致 TOCTOU Use-After-Free | Fixed | Verified |
+| [2026-02-19_ISSUE_bug28_gcrwlock_capture_gc_ptrs_empty_slice.md](./2026-02-19_ISSUE_bug28_gcrwlock_capture_gc_ptrs_empty_slice.md) | GcRwLock::capture_gc_ptrs() 返回空切片導致 GC 遺漏內部指標 | Fixed | Verified |
+| [2026-02-20_ISSUE_bug29_gchandle_clone_unregister_race.md](./2026-02-20_ISSUE_bug29_gchandle_clone_unregister_race.md) | GcHandle clone()/unregister() Race 導致物件在 Root 移除後仍被視為 Root | Fixed | Verified |
 | [2026-02-20_ISSUE_bug30_gc_requested_relaxed_ordering.md](./2026-02-20_ISSUE_bug30_gc_requested_relaxed_ordering.md) | GC_REQUESTED Relaxed Ordering Causes Missed GC Handshake | Open | Not Verified |
 | [2026-02-20_ISSUE_bug31_weak_clone_toctou.md](./2026-02-20_ISSUE_bug31_weak_clone_toctou.md) | Weak::clone has TOCTOU race causing potential use-after-free | Open | Not Verified |
 | [2026-02-20_ISSUE_bug32_gcmutex_try_lock_missing_barrier.md](./2026-02-20_ISSUE_bug32_gcmutex_try_lock_missing_barrier.md) | GcMutex::try_lock() 缺少 Write Barrier 導致 SATB 不變性破壞 | Open | Not Verified |

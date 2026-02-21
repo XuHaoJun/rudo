@@ -203,6 +203,24 @@ pub fn insert_orphan_root(thread_id: ThreadId, handle_id: HandleId, ptr: NonNull
     orphan.insert((thread_id, handle_id), ptr.as_ptr() as usize);
 }
 
+/// Clone an orphan root atomically. Verifies source exists, allocates new ID, inserts.
+/// Returns (`new_handle_id`, true) on success, (`HandleId::INVALID`, false) if source was removed.
+#[must_use]
+pub fn clone_orphan_root(
+    thread_id: ThreadId,
+    source_handle_id: HandleId,
+    ptr: NonNull<GcBox<()>>,
+) -> (HandleId, bool) {
+    let mut orphan = orphaned_cross_thread_roots().lock();
+    if !orphan.contains_key(&(thread_id, source_handle_id)) {
+        return (HandleId::INVALID, false);
+    }
+    let new_id = allocate_orphan_handle_id();
+    orphan.insert((thread_id, new_id), ptr.as_ptr() as usize);
+    drop(orphan);
+    (new_id, true)
+}
+
 /// Allocate a new handle ID for orphaned roots (when cloning a handle whose TCB is gone).
 #[must_use]
 pub fn allocate_orphan_handle_id() -> HandleId {

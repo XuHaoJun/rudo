@@ -154,6 +154,31 @@ fn test_drop_from_foreign_thread() {
     assert_eq!(resolved.value, 42);
 }
 
+/// Test that cloning an unregistered handle panics (Bug 29 - clone/unregister TOCTOU fix).
+#[test]
+#[should_panic(expected = "cannot clone an unregistered GcHandle")]
+fn test_clone_unregistered_handle_panics() {
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let mut handle = gc.cross_thread_handle();
+    handle.unregister();
+    let _ = handle.clone();
+}
+
+/// Test clone-then-unregister: cloned handle keeps object alive (expected behavior).
+#[test]
+fn test_clone_then_unregister_cloned_keeps_alive() {
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let handle = gc.cross_thread_handle();
+    let cloned = handle.clone();
+    drop(gc);
+    let mut handle = handle;
+    handle.unregister();
+    drop(handle);
+    rudo_gc::collect_full();
+    let resolved = cloned.resolve();
+    assert_eq!(resolved.value, 42);
+}
+
 /// Test `is_valid()` checks.
 #[test]
 fn test_is_valid_checks() {

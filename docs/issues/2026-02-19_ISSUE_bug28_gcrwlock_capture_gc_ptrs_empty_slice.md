@@ -1,7 +1,7 @@
 # [Bug]: GcRwLock::capture_gc_ptrs() 返回空切片導致 GC 遺漏內部指標
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -152,3 +152,15 @@ fn main() {
 2. 利用 GC 遍歷路徑的差異
 3. 當 GC 遺漏內部指標時，物件被錯誤回收
 4. 攻擊者可以控制被回收物件的內容，實現記憶體利用
+
+---
+
+## Resolution
+
+**2026-02-21** — 方案 2 + 3 (文件化 + 補齊 GcMutex):
+
+- **GcRwLock/GcMutex** `capture_gc_ptrs()` 設計上回傳 `&[]`：lock 保護的資料無法提供靜態切片，需透過 `capture_gc_ptrs_into()` 取得指標。
+- 在 `capture_gc_ptrs()` 上加註說明，要求必須使用 `capture_gc_ptrs_into()`。
+- 新增 **GcMutex** 的 `GcCapture` 實作（含 `capture_gc_ptrs_into`，使用 `try_lock()`，與 GcRwLock/GcThreadSafeCell 相同）。
+- SATB 與 GC 流程僅使用 `capture_gc_ptrs_into()`，無任何路徑使用 `capture_gc_ptrs()` 做指標收集。
+- 新增 `test_gcrwlock_gcmutex_capture_gc_ptrs_into`，驗證兩者 `capture_gc_ptrs_into` 正確收集內部 Gc。
