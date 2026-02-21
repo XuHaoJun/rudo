@@ -1,7 +1,7 @@
 # [Bug]: Ephemeron<K,V> Trace 實作總是追蹤 value，導致記憶體無法正確回收
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -150,3 +150,9 @@ unsafe impl<K: Trace + 'static, V: Trace + 'static> Trace for Ephemeron<K, V> {
 
 **Geohot (Exploit 攻擊觀點):**
 雖然這不是安全性問題，但記憶體無法正確回收可能導致：1) 記憶體使用量不斷增長（記憶體洩漏）；2) 如果攻擊者能控制 key 的生命週期，可能利用這一點造成過度記憶體消耗。然而這更像是 DOS 攻擊而非傳統意義的記憶體腐敗。
+
+---
+
+## Resolution
+
+Ephemeron Trace 實作已於 ptr.rs 改為僅在 `is_key_alive()` 為 true 時才追蹤 value。當 key 死亡時不再 trace value，允許 GC 正確回收。

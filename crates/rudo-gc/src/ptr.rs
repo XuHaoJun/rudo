@@ -1736,7 +1736,7 @@ impl<T: Trace> Weak<T> {
     }
     /// Gets the number of strong `Gc<T>` pointers pointing to this allocation.
     ///
-    /// Returns 0 if the value has been dropped.
+    /// Returns 0 if the value has been dropped or is currently being dropped.
     #[must_use]
     pub fn strong_count(&self) -> usize {
         let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
@@ -1749,22 +1749,37 @@ impl<T: Trace> Weak<T> {
         }
 
         unsafe {
-            if (*ptr.as_ptr()).has_dead_flag() {
+            let gc_box = &*ptr.as_ptr();
+            if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 {
                 0
             } else {
-                (*ptr.as_ptr()).ref_count().get()
+                gc_box.ref_count().get()
             }
         }
     }
 
     /// Gets the number of `Weak<T>` pointers pointing to this allocation.
+    ///
+    /// Returns 0 if the value has been dropped or is currently being dropped.
     #[must_use]
     pub fn weak_count(&self) -> usize {
         let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
             return 0;
         };
+        let ptr_addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if ptr_addr % alignment != 0 {
+            return 0;
+        }
 
-        unsafe { (*ptr.as_ptr()).weak_count() }
+        unsafe {
+            let gc_box = &*ptr.as_ptr();
+            if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 {
+                0
+            } else {
+                gc_box.weak_count()
+            }
+        }
     }
 
     /// Returns `true` if the two `Weak`s point to the same allocation.
@@ -1961,30 +1976,13 @@ impl<T: Trace> Default for Weak<T> {
 /// assert!(ephemeron.upgrade().is_none());
 /// ```
 ///
-/// # Current Implementation Status
-///
-/// **Partial Implementation**: This type provides the correct API for ephemeron semantics,
-/// but full GC-level semantics are not yet implemented.
+/// # Implementation Status
 ///
 /// ✅ What works:
 /// - `upgrade()` correctly returns `None` when the key is no longer reachable
 /// - `is_key_alive()` correctly detects when key has been collected
 /// - The value is properly kept alive while the key is alive
-///
-/// ⚠️ Current limitation:
-/// - The value is NOT automatically collected when the key becomes unreachable
-/// - This is because the current `Trace` implementation unconditionally traces the value
-/// - Full implementation would require GC-level ephemeron tracking (future work)
-///
-/// This limitation means memory usage may be higher than expected for some use cases,
-/// but the API is sound and correctly prevents accessing values when keys are dead.
-///
-/// # Future Work
-///
-/// Full ephemeron semantics would require:
-/// 1. Track ephemerons in a global list during marking
-/// 2. In mark phase: if key is marked, trace value; if not, skip (broken ephemeron)
-/// 3. In sweep phase: clear broken ephemerons' value references
+/// - The value is no longer traced when the key is dead, allowing GC to collect it
 pub struct Ephemeron<K: Trace + 'static, V: Trace + 'static> {
     /// Weak reference to key - does NOT keep key alive
     key: Weak<K>,
@@ -2101,20 +2099,12 @@ impl<K: Trace + 'static, V: Trace + 'static> std::fmt::Debug for Ephemeron<K, V>
 
 unsafe impl<K: Trace + 'static, V: Trace + 'static> Trace for Ephemeron<K, V> {
     fn trace(&self, visitor: &mut impl Visitor) {
-        // For basic ephemeron implementation:
+        // Ephemeron semantics: value is only reachable if key is reachable.
         // - The key is stored as a Weak, so it's not traced (correct)
-        // - The value is always traced while the ephemeron exists
-        //
-        // NOTE: This keeps the value alive as long as the ephemeron exists.
-        // For true ephemeron semantics where value is collected when key dies,
-        // the GC would need special ephemeron handling:
-        // - Track ephemerons in a special list during marking
-        // - Only trace value if key was marked (reachable)
-        // - Clear broken ephemerons during sweep
-        //
-        // For now, this basic implementation provides the API but not the
-        // full GC semantics. The value will stay in memory even after key dies.
-        visitor.visit(&self.value);
+        // - Only trace value when key is alive; when key dies, value can be collected
+        if self.is_key_alive() {
+            visitor.visit(&self.value);
+        }
     }
 }
 

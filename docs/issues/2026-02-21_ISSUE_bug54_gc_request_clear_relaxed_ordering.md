@@ -1,7 +1,7 @@
 # [Bug]: GC Request Clear 使用 Relaxed Ordering 導致執行緒可能錯過 GC 完成信號
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -145,3 +145,9 @@ GC_REQUESTED.store(false, Ordering::Release);
 - 導致 GC 執行緒無法恢復執行
 - 造成程式無回應（類似 DoS）
 - 在極端情況下可能與其他 bug 組合導致記憶體腐敗
+
+---
+
+## Resolution
+
+heap.rs 中 `resume_all_threads()` 與 `clear_gc_request()` 已改為使用 `Ordering::Release` 清除 `gc_requested` 與 `GC_REQUESTED` 標誌，與 mutator 執行緒的 `Acquire` load 正確配對。

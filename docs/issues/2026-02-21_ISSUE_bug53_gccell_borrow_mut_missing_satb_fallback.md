@@ -1,7 +1,7 @@
 # [Bug]: GcCell::borrow_mut() 缺少 SATB buffer overflow fallback 請求
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -165,3 +165,9 @@ SATB (Snapshot-At-The-Beginning) 是一個重要的不變性：所有在 GC 開�
 2. 觸發 incremental marking
 3. 透過 GcCell 大量 mutation 導致 buffer 溢出4. 由於 fallback 未被請求，GC 可能錯誤回收物件
 5. 攻擊者可以讀取已回收記憶體中的殘餘數據
+
+---
+
+## Resolution
+
+`GcCell::borrow_mut()` 已於 cell.rs 在 `record_satb_old_value()` 返回 `false` 時呼叫 `IncrementalMarkState::global().request_fallback(FallbackReason::SatbBufferOverflow)`，與 `GcThreadSafeCell::borrow_mut()` 行為一致。

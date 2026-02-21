@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::clone() Missing Dead Flag Check 導致潛在記憶體不安全
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -178,3 +178,9 @@ GcHandle 是跨執行緒的 root 追蹤機制。當物件被標記為 dead 後�
 - 與 bug46（Gc::clone missing dead flag）互補
 - bug44 和 bug46 分別從不同角度覆蓋了 Gc::clone 的問題
 - 此 bug 專門針對 GcHandle<T> 類型
+
+---
+
+## Resolution
+
+`GcHandle::clone()` 已於 handles/cross_thread.rs 加入 `has_dead_flag()` 與 `dropping_state()` 檢查。當物件為 dead 或 dropping 時 panic，與 `Gc::clone()` 行為一致。

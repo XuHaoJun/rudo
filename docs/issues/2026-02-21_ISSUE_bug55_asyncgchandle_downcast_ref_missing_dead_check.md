@@ -1,7 +1,7 @@
 # [Bug]: AsyncGcHandle::downcast_ref() 缺少 Dead Flag 檢查導致潛在 UAF
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -176,3 +176,9 @@ Async handles 需要特別小心記憶體管理。當物件被標記為 dead 但
 2. 觸發 GC 標記該物件為 dead
 3. 利用 async task 仍然持有 handle 的時機
 4. 透過 `downcast_ref` 讀取已釋放記憶體中的殘餘數據
+
+---
+
+## Resolution
+
+`AsyncGcHandle::downcast_ref()` 已於 handles/async.rs 加入 `has_dead_flag()` 與 `dropping_state()` 檢查。當物件為 dead 或處於 dropping 狀態時回傳 `None`，避免 UAF。

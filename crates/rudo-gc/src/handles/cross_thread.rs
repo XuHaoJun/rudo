@@ -277,7 +277,14 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
             },
         );
 
-        unsafe { (*self.ptr.as_ptr()).inc_ref() };
+        unsafe {
+            let gc_box = &*self.ptr.as_ptr();
+            assert!(
+                !gc_box.has_dead_flag() && gc_box.dropping_state() == 0,
+                "GcHandle::clone: cannot clone a dead or dropping GcHandle"
+            );
+            gc_box.inc_ref();
+        };
 
         Self {
             ptr: self.ptr,

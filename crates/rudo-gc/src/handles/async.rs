@@ -1178,7 +1178,8 @@ impl AsyncGcHandle {
     ///
     /// # Returns
     ///
-    /// `Some(&T)` if the handle contains the specified type, `None` otherwise.
+    /// `Some(&T)` if the handle contains the specified type and the object is alive,
+    /// `None` if the type does not match or the object is dead or in dropping state.
     ///
     /// # Example
     ///
@@ -1209,7 +1210,13 @@ impl AsyncGcHandle {
         if self.type_id == TypeId::of::<T>() {
             let slot = unsafe { &*self.slot };
             let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
-            Some(unsafe { &*gc_box_ptr }.value())
+            unsafe {
+                let gc_box = &*gc_box_ptr;
+                if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 {
+                    return None;
+                }
+                Some(gc_box.value())
+            }
         } else {
             None
         }

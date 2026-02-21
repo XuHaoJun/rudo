@@ -3,13 +3,13 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 47
-- **Open**: 9
+- **Fixed**: 53
+- **Open**: 5
 - **Invalid**: 4
 
 ### By Tags
-- **Verified**: 43
-- **Not Verified**: 11
+- **Verified**: 50
+- **Not Verified**: 6
 - **Not Reproduced**: 6
 
 ## All Issues
@@ -67,12 +67,14 @@
 | [2026-02-21_ISSUE_bug49_gc_ref_count_weak_count_doc_mismatch.md](./2026-02-21_ISSUE_bug49_gc_ref_count_weak_count_doc_mismatch.md) | Gc::ref_count() 與 Gc::weak_count() 文件與實作不符 - 文件說會 panic 但實際不會 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug50_gc_downgrade_missing_dead_check.md](./2026-02-21_ISSUE_bug50_gc_downgrade_missing_dead_check.md) | Gc::downgrade() 文件說會 panic 但實際不會 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug51_gchandle_downgrade_missing_dead_check.md](./2026-02-21_ISSUE_bug51_gchandle_downgrade_missing_dead_check.md) | GcHandle::downgrade() Missing Dead/Dropping State Check | Fixed | Verified |
-| [2026-02-21_ISSUE_bug52_weak_strong_count_missing_dropping_check.md](./2026-02-21_ISSUE_bug52_weak_strong_count_missing_dropping_check.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 dropping_state 檢查 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug53_gccell_borrow_mut_missing_satb_fallback.md](./2026-02-21_ISSUE_bug53_gccell_borrow_mut_missing_satb_fallback.md) | GcCell::borrow_mut() 缺少 SATB buffer overflow fallback 請求 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug54_gc_request_clear_relaxed_ordering.md](./2026-02-21_ISSUE_bug54_gc_request_clear_relaxed_ordering.md) | GC Request Clear 使用 Relaxed Ordering 導致執行緒可能錯過 GC 完成信號 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug55_asyncgchandle_downcast_ref_missing_dead_check.md](./2026-02-21_ISSUE_bug55_asyncgchandle_downcast_ref_missing_dead_check.md) | AsyncGcHandle::downcast_ref() 缺少 Dead Flag 檢查導致潛在 UAF | Open | Not Verified |
-| [2026-02-21_ISSUE_bug56_gchandle_clone_missing_dead_check.md](./2026-02-21_ISSUE_bug56_gchandle_clone_missing_dead_check.md) | GcHandle::clone() Missing Dead Flag Check 導致潛在記憶體不安全 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md](./2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md) | Ephemeron<K,V> Trace 實作總是追蹤 value，導致記憶體無法正確回收 | Open | Not Verified |
+| [2026-02-21_ISSUE_bug52_weak_strong_count_missing_dropping_check.md](./2026-02-21_ISSUE_bug52_weak_strong_count_missing_dropping_check.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 dropping_state 檢查 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug53_gccell_borrow_mut_missing_satb_fallback.md](./2026-02-21_ISSUE_bug53_gccell_borrow_mut_missing_satb_fallback.md) | GcCell::borrow_mut() 缺少 SATB buffer overflow fallback 請求 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug54_gc_request_clear_relaxed_ordering.md](./2026-02-21_ISSUE_bug54_gc_request_clear_relaxed_ordering.md) | GC Request Clear 使用 Relaxed Ordering 導致執行緒可能錯過 GC 完成信號 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug55_asyncgchandle_downcast_ref_missing_dead_check.md](./2026-02-21_ISSUE_bug55_asyncgchandle_downcast_ref_missing_dead_check.md) | AsyncGcHandle::downcast_ref() 缺少 Dead Flag 檢查導致潛在 UAF | Fixed | Verified |
+| [2026-02-21_ISSUE_bug56_gchandle_clone_missing_dead_check.md](./2026-02-21_ISSUE_bug56_gchandle_clone_missing_dead_check.md) | GcHandle::clone() Missing Dead Flag Check 導致潛在記憶體不安全 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md](./2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md) | Ephemeron<K,V> Trace 實作總是追蹤 value，導致記憶體無法正確回收 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md](./2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md) | Weak::is_alive() 缺少 dropping_state 檢查導致不一致行為 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug59_gcrwlock_write_guard_drop_missing_satb.md](./2026-02-21_ISSUE_bug59_gcrwlock_write_guard_drop_missing_satb.md) | GcRwLockWriteGuard 與 GcMutexGuard Drop 時缺少 SATB Barrier 標記 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md](./2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md) | mark_page_dirty_for_ptr 未處理大型物件導致 Vec<Gc<T>> 追蹤失敗 | Open | Not Verified |
+| [2026-02-21_ISSUE_bug61_gcmutex_capture_gc_ptrs_try_lock.md](./2026-02-21_ISSUE_bug61_gcmutex_capture_gc_ptrs_try_lock.md) | GcMutex::capture_gc_ptrs_into() 使用 try_lock() 而非 lock()，與 GcRwLock 不一致 | Open | Verified |
+| [2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md](./2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md) | GcHandle::resolve() 與 GcHandle::try_resolve() 缺少 dropping_state 檢查 | Open | Not Verified |

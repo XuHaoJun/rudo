@@ -167,6 +167,10 @@ impl<T: ?Sized> GcCell<T> {
                     crate::heap::with_heap(|heap| {
                         for gc_ptr in gc_ptrs {
                             if !heap.record_satb_old_value(gc_ptr) {
+                                crate::gc::incremental::IncrementalMarkState::global()
+                                    .request_fallback(
+                                        crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                                    );
                                 break;
                             }
                         }

@@ -1,7 +1,7 @@
 # [Bug]: Weak::strong_count() 與 Weak::weak_count() 缺少 dropping_state 檢查
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -169,3 +169,9 @@ pub fn weak_count(&self) -> usize {
 
 **Geohot (Exploit 攻擊觀點):**
 在並發場景下，如果攻擊者能夠精確控制 timing，可能利用這個邊界條件讀取到不一致的計數值，進一步探索記憶體佈局。不過由於沒有直接的記憶體讀取漏洞，這個攻擊面的影響有限。
+
+---
+
+## Resolution
+
+`Weak::strong_count()` 和 `Weak::weak_count()` 已於 ptr.rs 加入 `dropping_state()` 檢查。當物件為 dead 或正在 drop 時，兩者皆回傳 0，避免讀取到變動中的計數。`weak_count()` 同時加入 alignment 檢查以與 `strong_count()` 一致。
