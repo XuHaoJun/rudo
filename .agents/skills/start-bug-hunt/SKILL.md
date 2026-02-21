@@ -66,7 +66,7 @@ Then summarize the consensus or main conclusions.
 
 ## Verification Guidelines (避免誤判)
 
-Based on [REPRODUCTION_REPORT.md](docs/issues/REPRODUCTION_REPORT.md). Before reporting an issue as **reproduced**, verify it against these patterns.
+Based on past investigations. Before reporting an issue as **reproduced** (`Tags: Verified`), verify it against these patterns.
 
 ### Pattern 1: Full GC 會遮蔽 barrier 相關 bug
 
@@ -111,5 +111,4 @@ Based on [REPRODUCTION_REPORT.md](docs/issues/REPRODUCTION_REPORT.md). Before re
 ### 誤判處理
 
 若依上述檢視後認為是誤判：
-1. **不要修復**，僅在 REPRODUCTION_REPORT 記錄為「疑似誤判」並簡述理由
-2. **回報給使用者**，由使用者決定是否關閉 issue
+1. **不要修復**，僅在 Issue 內新增 `Status: Invalid` 標籤，並簡述理由
