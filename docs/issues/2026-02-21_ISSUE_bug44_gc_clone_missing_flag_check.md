@@ -1,7 +1,7 @@
 # [Bug]: Gc::clone() 缺少 has_dead_flag 和 dropping_state 檢查導致異常行為
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -227,3 +227,7 @@ pub fn try_clone(gc: &Self) -> Option<Self> {
    - 本該被釋放的記憶體繼續存在
    - 可能在後續造成記憶體洩漏
    - 或造成 use-after-free 如果記憶體被重新分配
+
+---
+
+**Resolution:** Added `assert!(!has_dead_flag() && dropping_state() == 0)` to `Gc::clone()` before `inc_ref()`, matching `Deref` semantics. Added `dropping_state() != 0` check to `Gc::try_clone()` alongside `has_dead_flag()`, matching `try_deref`.

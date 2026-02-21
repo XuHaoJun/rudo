@@ -1,7 +1,7 @@
 # [Bug]: Dirty Pages Snapshot Race 導致 Young 物件被錯誤回收
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -115,3 +115,7 @@ fn main() {
 3. 建立 arbitrary write 原語
 
 在多執行緒 WASM 環境下特別危險。
+
+---
+
+**Resolution:** Added `drain_dirty_pages_overflow()` to LocalHeap to capture pages added by write barriers after `take_dirty_pages_snapshot()`. All dirty-page scan sites now also iterate overflow: mark_minor_roots_multi, mark_minor_roots_parallel, mark_minor_roots (gc.rs), mark_slice and execute_final_mark (incremental.rs). Implements Option 3 (hybrid scan).

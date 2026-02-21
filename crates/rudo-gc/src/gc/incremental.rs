@@ -668,6 +668,12 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
             dirty_scanned += scan_page_for_marked_refs(page_ptr, state);
         }
     }
+    // Scan overflow pages added by write barriers during snapshot (bug45)
+    for page_ptr in heap.drain_dirty_pages_overflow() {
+        unsafe {
+            dirty_scanned += scan_page_for_marked_refs(page_ptr, state);
+        }
+    }
     heap.clear_dirty_pages_snapshot();
     state
         .stats()
@@ -835,6 +841,12 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
 
         let snapshot_count = heap.take_dirty_pages_snapshot();
         for page_ptr in heap.dirty_pages_iter() {
+            unsafe {
+                scan_page_for_unmarked_refs(page_ptr, state.stats());
+            }
+        }
+        // Scan overflow pages added during snapshot (bug45)
+        for page_ptr in heap.drain_dirty_pages_overflow() {
             unsafe {
                 scan_page_for_unmarked_refs(page_ptr, state.stats());
             }

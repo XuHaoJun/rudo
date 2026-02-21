@@ -1088,7 +1088,7 @@ impl<T: Trace> Gc<T> {
 
     /// Attempt to clone this `Gc`.
     ///
-    /// Returns `None` if this Gc is "dead".
+    /// Returns `None` if this Gc is "dead" or in dropping state.
     pub fn try_clone(gc: &Self) -> Option<Self> {
         let ptr = gc.ptr.load(Ordering::Acquire);
         if ptr.is_null() {
@@ -1096,7 +1096,7 @@ impl<T: Trace> Gc<T> {
         }
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
-            if (*gc_box_ptr).has_dead_flag() {
+            if (*gc_box_ptr).has_dead_flag() || (*gc_box_ptr).dropping_state() != 0 {
                 return None;
             }
         }
@@ -1332,9 +1332,13 @@ impl<T: Trace> Clone for Gc<T> {
 
         let gc_box_ptr = ptr.as_ptr();
 
-        // Increment reference count
-        // SAFETY: Pointer is valid (not null)
+        // SAFETY: Pointer is valid (not null).
+        // Check flags before incrementing ref_count; must match Deref/try_deref semantics.
         unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag() && (*gc_box_ptr).dropping_state() == 0,
+                "Gc::clone: cannot clone a dead or dropping Gc"
+            );
             (*gc_box_ptr).inc_ref();
         }
 

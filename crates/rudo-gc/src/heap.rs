@@ -1758,6 +1758,17 @@ impl LocalHeap {
         self.dirty_pages_snapshot.iter().copied()
     }
 
+    /// Drain pages added to `dirty_pages` after `take_dirty_pages_snapshot()`.
+    ///
+    /// Write barriers may add pages during the scan; these would be missed if we
+    /// only scan the snapshot. Call this after scanning the snapshot and scan
+    /// the returned pages too (bug45).
+    #[inline]
+    pub fn drain_dirty_pages_overflow(&self) -> Vec<NonNull<PageHeader>> {
+        let mut guard = self.dirty_pages.lock();
+        std::mem::take(&mut *guard)
+    }
+
     /// Clear the snapshot and update statistics.
     ///
     /// # Contract

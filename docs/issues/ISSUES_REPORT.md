@@ -3,13 +3,13 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 40
-- **Open**: 16
+- **Fixed**: 42
+- **Open**: 14
 - **Invalid**: 4
 
 ### By Tags
-- **Verified**: 36
-- **Not Verified**: 18
+- **Verified**: 38
+- **Not Verified**: 16
 - **Not Reproduced**: 6
 
 ## All Issues
@@ -59,8 +59,8 @@
 | [2026-02-20_ISSUE_bug41_gcbox_weak_upgrade_dropping_state.md](./2026-02-20_ISSUE_bug41_gcbox_weak_upgrade_dropping_state.md) | GcBoxWeakRef::upgrade() 未檢查 dropping_state 導致 Use-After-Free 風險 | Fixed | Verified |
 | [2026-02-20_ISSUE_bug42_weak_try_upgrade_missing_dropping_state.md](./2026-02-20_ISSUE_bug42_weak_try_upgrade_missing_dropping_state.md) | Weak::try_upgrade() 缺少 dropping_state 檢查導致 Use-After-Free 風險 | Fixed | Verified |
 | [2026-02-20_ISSUE_bug43_weak_ephemeron_missing_gccapture.md](./2026-02-20_ISSUE_bug43_weak_ephemeron_missing_gccapture.md) | Weak<T> and Ephemeron<K,V> missing GcCapture implementation | Fixed | Verified |
-| [2026-02-21_ISSUE_bug44_gc_clone_missing_flag_check.md](./2026-02-21_ISSUE_bug44_gc_clone_missing_flag_check.md) | Gc::clone() 缺少 has_dead_flag 和 dropping_state 檢查導致異常行為 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug45_dirty_pages_snapshot_race.md](./2026-02-21_ISSUE_bug45_dirty_pages_snapshot_race.md) | Dirty Pages Snapshot Race 導致 Young 物件被錯誤回收 | Open | Not Verified |
+| [2026-02-21_ISSUE_bug44_gc_clone_missing_flag_check.md](./2026-02-21_ISSUE_bug44_gc_clone_missing_flag_check.md) | Gc::clone() 缺少 has_dead_flag 和 dropping_state 檢查導致異常行為 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug45_dirty_pages_snapshot_race.md](./2026-02-21_ISSUE_bug45_dirty_pages_snapshot_race.md) | Dirty Pages Snapshot Race 導致 Young 物件被錯誤回收 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug46_gc_clone_missing_dead_flag_check.md](./2026-02-21_ISSUE_bug46_gc_clone_missing_dead_flag_check.md) | Gc::clone() Missing Dead Flag Check 導致記憶體不安全 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug47_gc_as_ptr_doc_mismatch.md](./2026-02-21_ISSUE_bug47_gc_as_ptr_doc_mismatch.md) | Gc::as_ptr() 文件與實作不符 - 文件說會 panic 但實際不會 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug48_gc_try_clone_missing_dropping_state_check.md](./2026-02-21_ISSUE_bug48_gc_try_clone_missing_dropping_state_check.md) | Gc::try_clone 缺少 dropping_state 檢查 - 與 try_deref 行為不一致 | Open | Not Verified |
