@@ -1053,9 +1053,7 @@ impl GcScope {
             .map(|tracked| {
                 let used = unsafe { &*scope.data.used.get() }.fetch_add(1, Ordering::Relaxed);
                 if used >= HANDLE_BLOCK_SIZE {
-                    panic!(
-                        "GcScope::spawn: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})"
-                    );
+                    panic!("GcScope::spawn: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})");
                 }
 
                 validate_gc_in_current_heap(tracked.ptr as *const u8);

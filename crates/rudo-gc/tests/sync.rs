@@ -802,10 +802,7 @@ fn test_miri_gc_rwlock_trace() {
         fn capture_gc_ptrs(&self) -> &[std::ptr::NonNull<rudo_gc::GcBox<()>>] {
             &[]
         }
-        fn capture_gc_ptrs_into(
-            &self,
-            ptrs: &mut Vec<std::ptr::NonNull<rudo_gc::GcBox<()>>>,
-        ) {
+        fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<std::ptr::NonNull<rudo_gc::GcBox<()>>>) {
             self.next.capture_gc_ptrs_into(ptrs);
         }
     }
