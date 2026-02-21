@@ -1,7 +1,7 @@
 # [Bug]: Gc::try_clone 缺少 dropping_state 檢查 - 與 try_deref 行為不一致
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -174,3 +174,7 @@ impl<T: Trace> Clone for Gc<T> {
 
 **Geohot (Exploit 觀點):**
 攻擊者可能利用這個時間視窗，在物件 drop 過程中取得一個看似有效的 Gc 指標，進而存取已釋放或部分摧毀的記憶體。
+
+---
+
+**Resolution:** Fixed in bug44. `Gc::try_clone()` already has `dropping_state() != 0` check at ptr.rs:1099, matching `try_deref`.

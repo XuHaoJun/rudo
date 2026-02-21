@@ -1,7 +1,7 @@
 # [Bug]: Gc::ref_count() 與 Gc::weak_count() 文件與實作不符 - 文件說會 panic 但實際不會
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -148,3 +148,7 @@ pub fn ref_count(gc: &Self) -> NonZeroUsize {
 
 **Geohot (Exploit 攻擊觀點):**
 如果開發者依賴 `ref_count()` 或 `weak_count()` 在 dead 時 panic 來做安全檢查，攻擊者可能利用這個差異進行預期外的記憶體操作。
+
+---
+
+**Resolution:** Added assertions to `ref_count()` and `weak_count()`: null check and `!has_dead_flag() && dropping_state() == 0`, matching documented panic behavior. Updated escape test that was calling ref_count on a dead Gc (from_raw without inc_ref).

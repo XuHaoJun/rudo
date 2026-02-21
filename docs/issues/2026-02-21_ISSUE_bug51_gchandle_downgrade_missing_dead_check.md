@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::downgrade() Missing Dead/Dropping State Check
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -119,3 +119,7 @@ pub fn downgrade(&self) -> WeakCrossThreadHandle<T> {
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可能利用這個差異，在物件死亡後仍然創建 cross-thread weak reference，進一步探索記憶體佈局或進行 cross-thread 攻擊。
+
+---
+
+**Resolution:** Added `assert!(!has_dead_flag() && dropping_state() == 0)` to `GcHandle::downgrade()` before `inc_weak()`. Made `GcBox::dropping_state()` pub(crate) for handles access.

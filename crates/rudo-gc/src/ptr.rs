@@ -89,7 +89,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// Returns the dropping state: 0 = not dropping, 1 = dropping phase 1, 2 = final dropping.
     /// Uses `Acquire` ordering to synchronize with `try_mark_dropping()`.
     #[inline]
-    fn dropping_state(&self) -> usize {
+    pub(crate) fn dropping_state(&self) -> usize {
         self.is_dropping.load(Ordering::Acquire)
     }
 
@@ -1132,31 +1132,49 @@ impl<T: Trace> Gc<T> {
     ///
     /// # Panics
     ///
-    /// Panics if the Gc is dead.
+    /// Panics if the Gc is dead or in dropping state.
     pub fn ref_count(gc: &Self) -> NonZeroUsize {
         let ptr = gc.ptr.load(Ordering::Acquire);
+        assert!(
+            !ptr.is_null(),
+            "Gc::ref_count: cannot get ref_count of a dead Gc"
+        );
         let gc_box_ptr = ptr.as_ptr();
-        // SAFETY: ptr is not null (checked in callers)
-        unsafe { (*gc_box_ptr).ref_count() }
+        unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag() && (*gc_box_ptr).dropping_state() == 0,
+                "Gc::ref_count: Gc is dead or in dropping state"
+            );
+            (*gc_box_ptr).ref_count()
+        }
     }
 
     /// Get the current weak reference count.
     ///
     /// # Panics
     ///
-    /// Panics if the Gc is dead.
+    /// Panics if the Gc is dead or in dropping state.
     pub fn weak_count(gc: &Self) -> usize {
         let ptr = gc.ptr.load(Ordering::Acquire);
+        assert!(
+            !ptr.is_null(),
+            "Gc::weak_count: cannot get weak_count of a dead Gc"
+        );
         let gc_box_ptr = ptr.as_ptr();
-        // SAFETY: ptr is not null (checked in callers)
-        unsafe { (*gc_box_ptr).weak_count() }
+        unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag() && (*gc_box_ptr).dropping_state() == 0,
+                "Gc::weak_count: Gc is dead or in dropping state"
+            );
+            (*gc_box_ptr).weak_count()
+        }
     }
 
     /// Create a `Weak<T>` pointer to this allocation.
     ///
     /// # Panics
     ///
-    /// Panics if the Gc is dead.
+    /// Panics if the Gc is dead or in dropping state.
     ///
     /// # Examples
     ///
@@ -1173,10 +1191,13 @@ impl<T: Trace> Gc<T> {
     /// ```
     pub fn downgrade(gc: &Self) -> Weak<T> {
         let ptr = gc.ptr.load(Ordering::Acquire);
+        assert!(!ptr.is_null(), "Gc::downgrade: cannot downgrade a dead Gc");
         let gc_box_ptr = ptr.as_ptr();
-        // Increment the weak count
-        // SAFETY: ptr is valid and not null
         unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag() && (*gc_box_ptr).dropping_state() == 0,
+                "Gc::downgrade: Gc is dead or in dropping state"
+            );
             (*gc_box_ptr).inc_weak();
         }
         Weak {

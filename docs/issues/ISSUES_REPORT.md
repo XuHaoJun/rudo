@@ -3,13 +3,13 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 42
-- **Open**: 14
+- **Fixed**: 47
+- **Open**: 9
 - **Invalid**: 4
 
 ### By Tags
-- **Verified**: 38
-- **Not Verified**: 16
+- **Verified**: 43
+- **Not Verified**: 11
 - **Not Reproduced**: 6
 
 ## All Issues
@@ -61,12 +61,12 @@
 | [2026-02-20_ISSUE_bug43_weak_ephemeron_missing_gccapture.md](./2026-02-20_ISSUE_bug43_weak_ephemeron_missing_gccapture.md) | Weak<T> and Ephemeron<K,V> missing GcCapture implementation | Fixed | Verified |
 | [2026-02-21_ISSUE_bug44_gc_clone_missing_flag_check.md](./2026-02-21_ISSUE_bug44_gc_clone_missing_flag_check.md) | Gc::clone() 缺少 has_dead_flag 和 dropping_state 檢查導致異常行為 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug45_dirty_pages_snapshot_race.md](./2026-02-21_ISSUE_bug45_dirty_pages_snapshot_race.md) | Dirty Pages Snapshot Race 導致 Young 物件被錯誤回收 | Fixed | Verified |
-| [2026-02-21_ISSUE_bug46_gc_clone_missing_dead_flag_check.md](./2026-02-21_ISSUE_bug46_gc_clone_missing_dead_flag_check.md) | Gc::clone() Missing Dead Flag Check 導致記憶體不安全 | Open | Not Verified |
+| [2026-02-21_ISSUE_bug46_gc_clone_missing_dead_flag_check.md](./2026-02-21_ISSUE_bug46_gc_clone_missing_dead_flag_check.md) | Gc::clone() Missing Dead Flag Check 導致記憶體不安全 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug47_gc_as_ptr_doc_mismatch.md](./2026-02-21_ISSUE_bug47_gc_as_ptr_doc_mismatch.md) | Gc::as_ptr() 文件與實作不符 - 文件說會 panic 但實際不會 | Fixed | Verified |
-| [2026-02-21_ISSUE_bug48_gc_try_clone_missing_dropping_state_check.md](./2026-02-21_ISSUE_bug48_gc_try_clone_missing_dropping_state_check.md) | Gc::try_clone 缺少 dropping_state 檢查 - 與 try_deref 行為不一致 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug49_gc_ref_count_weak_count_doc_mismatch.md](./2026-02-21_ISSUE_bug49_gc_ref_count_weak_count_doc_mismatch.md) | Gc::ref_count() 與 Gc::weak_count() 文件與實作不符 - 文件說會 panic 但實際不會 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug50_gc_downgrade_missing_dead_check.md](./2026-02-21_ISSUE_bug50_gc_downgrade_missing_dead_check.md) | Gc::downgrade() 文件說會 panic 但實際不會 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug51_gchandle_downgrade_missing_dead_check.md](./2026-02-21_ISSUE_bug51_gchandle_downgrade_missing_dead_check.md) | GcHandle::downgrade() Missing Dead/Dropping State Check | Open | Not Verified |
+| [2026-02-21_ISSUE_bug48_gc_try_clone_missing_dropping_state_check.md](./2026-02-21_ISSUE_bug48_gc_try_clone_missing_dropping_state_check.md) | Gc::try_clone 缺少 dropping_state 檢查 - 與 try_deref 行為不一致 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug49_gc_ref_count_weak_count_doc_mismatch.md](./2026-02-21_ISSUE_bug49_gc_ref_count_weak_count_doc_mismatch.md) | Gc::ref_count() 與 Gc::weak_count() 文件與實作不符 - 文件說會 panic 但實際不會 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug50_gc_downgrade_missing_dead_check.md](./2026-02-21_ISSUE_bug50_gc_downgrade_missing_dead_check.md) | Gc::downgrade() 文件說會 panic 但實際不會 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug51_gchandle_downgrade_missing_dead_check.md](./2026-02-21_ISSUE_bug51_gchandle_downgrade_missing_dead_check.md) | GcHandle::downgrade() Missing Dead/Dropping State Check | Fixed | Verified |
 | [2026-02-21_ISSUE_bug52_weak_strong_count_missing_dropping_check.md](./2026-02-21_ISSUE_bug52_weak_strong_count_missing_dropping_check.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 dropping_state 檢查 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug53_gccell_borrow_mut_missing_satb_fallback.md](./2026-02-21_ISSUE_bug53_gccell_borrow_mut_missing_satb_fallback.md) | GcCell::borrow_mut() 缺少 SATB buffer overflow fallback 請求 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug54_gc_request_clear_relaxed_ordering.md](./2026-02-21_ISSUE_bug54_gc_request_clear_relaxed_ordering.md) | GC Request Clear 使用 Relaxed Ordering 導致執行緒可能錯過 GC 完成信號 | Open | Not Verified |

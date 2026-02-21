@@ -1,7 +1,7 @@
 # [Bug]: Gc::downgrade() 文件說會 panic 但實際不會
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -143,3 +143,7 @@ pub fn downgrade(gc: &Self) -> Weak<T> {
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可能利用這個差異，在物件死亡後仍然試圖創建 weak reference，進一步探索記憶體佈局。
+
+---
+
+**Resolution:** Added null check and `assert!(!has_dead_flag() && dropping_state() == 0)` to `Gc::downgrade()` before `inc_weak()`, matching documented panic behavior.

@@ -1,7 +1,7 @@
 # [Bug]: Gc::clone() Missing Dead Flag Check 導致記憶體不安全
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -157,3 +157,7 @@ fn try_clone(&self) -> Option<Self> {
 2. 透過 clone 重新激活引用計數
 3. 阻止 GC 回收該物件
 4. 實現記憶體佈局控制
+
+---
+
+**Resolution:** Duplicate of bug44. `Gc::clone()` already has `assert!(!has_dead_flag() && dropping_state() == 0)` at ptr.rs:1338–1340, added in the bug44 fix.

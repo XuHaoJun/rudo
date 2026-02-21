@@ -212,6 +212,10 @@ impl<T: Trace + 'static> GcHandle<T> {
 
     /// Downgrades to a weak cross-thread handle.
     ///
+    /// # Panics
+    ///
+    /// Panics if the object is dead or in dropping state.
+    ///
     /// # Example
     ///
     /// ```
@@ -229,7 +233,12 @@ impl<T: Trace + 'static> GcHandle<T> {
     #[must_use]
     pub fn downgrade(&self) -> WeakCrossThreadHandle<T> {
         unsafe {
-            (*self.ptr.as_ptr()).inc_weak();
+            let gc_box = &*self.ptr.as_ptr();
+            assert!(
+                !gc_box.has_dead_flag() && gc_box.dropping_state() == 0,
+                "GcHandle::downgrade: object is dead or in dropping state"
+            );
+            gc_box.inc_weak();
         }
         WeakCrossThreadHandle {
             weak: GcBoxWeakRef::new(self.ptr),
