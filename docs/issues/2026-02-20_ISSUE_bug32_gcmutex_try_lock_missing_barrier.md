@@ -156,3 +156,17 @@ pub fn try_lock(&self) -> Option<GcMutexGuard<'_, T>> {
 2. 在 GC 標記期間快速修改物件
 3. 導致目標物件被錯誤回收
 4. 佔用已回收物件的記憶體布局，實現 use-after-free
+
+---
+
+## ✅ 確認記錄 (Confirmation Record)
+
+**Date:** 2026-02-21
+**Confirmed by:** Bug hunt analysis
+
+程式碼確認：`sync.rs:489-494` 中的 `try_lock()` 方法仍然缺少 `trigger_write_barrier()` 調用。與 `GcRwLock::try_write()` (sync.rs:248-256) 的正確實現形成對比。
+
+**Verification:** 
+- `GcMutex::lock()` at line 461 correctly calls `self.trigger_write_barrier()`
+- `GcMutex::try_lock()` at line 489-494 does NOT call `trigger_write_barrier()`
+- `GcRwLock::try_write()` at line 250 correctly calls `self.trigger_write_barrier()`
