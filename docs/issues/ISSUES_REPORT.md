@@ -4,12 +4,12 @@
 
 ### By Status
 - **Fixed**: 58
-- **Open**: 2
+- **Open**: 3
 - **Invalid**: 4
 
 ### By Tags
 - **Verified**: 55
-- **Unverified**: 1
+- **Unverified**: 2
 - **Not Verified**: 2
 - **Not Reproduced**: 6
 
@@ -81,3 +81,4 @@
 | [2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md](./2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md) | GcHandle::resolve() 與 GcHandle::try_resolve() 缺少 dropping_state 檢查 | Fixed | Verified |
 | [2026-02-22_ISSUE_bug64_weak_clone_missing_dead_check.md](./2026-02-22_ISSUE_bug64_weak_clone_missing_dead_check.md) | Weak::clone() 缺少 dead_flag / dropping_state 檢查 | Open | Unverified |
 | [2026-02-22_ISSUE_bug66_parking_lot_mutex_rwlock_missing_gccapture.md](./2026-02-22_ISSUE_bug66_parking_lot_mutex_rwlock_missing_gccapture.md) | parking_lot::Mutex 與 parking_lot::RwLock 缺少 GcCapture 實作導致指標遺漏 | Open | Verified |
+| [2026-02-22_ISSUE_bug68_gc_as_weak_missing_dead_check.md](./2026-02-22_ISSUE_bug68_gc_as_weak_missing_dead_check.md) | Gc::as_weak() 缺少 dead_flag / dropping_state 檢查 | Open | Unverified |
