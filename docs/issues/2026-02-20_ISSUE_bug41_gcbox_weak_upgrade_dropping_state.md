@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::upgrade() 未檢查 dropping_state 導致 Use-After-Free 風險
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -157,3 +157,5 @@ Some(Gc { ... })
 3. 利用已釋放的記憶體（取決於記憶體分配器行為）
 
 ---
+
+**Resolution:** Added `dropping_state() != 0` check in `GcBoxWeakRef::upgrade()` before `inc_ref()`, returning `None` when the object is being dropped. Matches `Weak::upgrade()` pattern.

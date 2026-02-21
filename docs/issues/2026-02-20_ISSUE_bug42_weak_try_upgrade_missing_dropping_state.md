@@ -1,7 +1,7 @@
 # [Bug]: Weak::try_upgrade() 缺少 dropping_state 檢查導致 Use-After-Free 風險
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -183,3 +183,7 @@ pub fn try_upgrade(&self) -> Option<Gc<T>> {
 3. 在 dropping_state 設置後、ref_count 歸零前，呼叫 try_upgrade()
 4. 成功建立新的 Gc<T>，指向即將被釋放的記憶體
 5. 存取此 Gc<T> 會導致 Use-After-Free
+
+---
+
+**Resolution:** `Weak::try_upgrade()` already has `dropping_state() != 0` check at ptr.rs:1614-1616, matching `Weak::upgrade()`.

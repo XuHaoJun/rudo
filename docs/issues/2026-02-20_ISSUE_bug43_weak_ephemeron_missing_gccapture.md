@@ -1,7 +1,7 @@
 # [Bug]: Weak<T> and Ephemeron<K,V> missing GcCapture implementation
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -153,3 +153,7 @@ This is primarily a usability issue - the lack of `GcCapture` implementation pre
 
 **Geohot (Exploit 觀點):**
 No direct exploit path here - this is a missing feature that causes compilation failures rather than memory safety issues.
+
+---
+
+**Resolution:** Added `GcCapture` impl for `Weak<T>` and `Ephemeron<K,V>` in ptr.rs. Weak uses `try_upgrade()` and captures the pointer when upgrade succeeds. Ephemeron captures value (Gc<V>) and key (if `try_upgrade()` succeeds).

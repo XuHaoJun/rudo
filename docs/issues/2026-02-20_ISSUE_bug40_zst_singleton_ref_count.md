@@ -1,6 +1,6 @@
 # [Bug]: ZST Singleton 初始化時 ref_count 為 2 而非 1
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Not Verified
 
 
@@ -138,3 +138,7 @@ ZST 使用 singleton 模式是合理的設計，但 internal ref_count 的不一
 - 此 bug 不會造成實際的記憶體問題，因為 ZST 是 immortal
 - 現有測試 `test_zst_singleton_ref_count_maintained` 只檢查相對變化，不會發現此問題
 - 建議修復以保持內部一致性
+
+---
+
+**Resolution:** ref_count=2 for the first ZST Gc is intentional. The initial ref_count=1 acts as a phantom ref that keeps the ZST immortal—it prevents the value from ever being dropped when all user-visible Gcs are dropped. Without it, ref_count would hit 0, DEAD_FLAG would be set, and Weak::upgrade would fail. Fixing to ref_count=1 breaks test_zst_weak_ref_behavior and test_zst_weak_ref_to_singleton. The "inconsistency" with non-ZST is by design for immortality.

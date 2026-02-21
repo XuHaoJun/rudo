@@ -3,13 +3,13 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 37
-- **Open**: 20
-- **Invalid**: 3
+- **Fixed**: 40
+- **Open**: 16
+- **Invalid**: 4
 
 ### By Tags
-- **Verified**: 33
-- **Not Verified**: 21
+- **Verified**: 36
+- **Not Verified**: 18
 - **Not Reproduced**: 6
 
 ## All Issues
@@ -55,10 +55,10 @@
 | [2026-02-20_ISSUE_bug37_arc_missing_gccapture.md](./2026-02-20_ISSUE_bug37_arc_missing_gccapture.md) | std::sync::Arc 缺少 GcCapture 實作導致指標遺漏 | Fixed | Verified |
 | [2026-02-20_ISSUE_bug38_rc_missing_gccapture.md](./2026-02-20_ISSUE_bug38_rc_missing_gccapture.md) | std::rc::Rc 缺少 GcCapture 實作導致 SATB 屏障失效 | Fixed | Verified |
 | [2026-02-20_ISSUE_bug39_gchandle_resolve_missing_validity_check.md](./2026-02-20_ISSUE_bug39_gchandle_resolve_missing_validity_check.md) | GcHandle::resolve() 缺少物件有效性驗證 | Fixed | Verified |
-| [2026-02-20_ISSUE_bug40_zst_singleton_ref_count.md](./2026-02-20_ISSUE_bug40_zst_singleton_ref_count.md) | ZST Singleton 初始化時 ref_count 為 2 而非 1 | Open | Not Verified |
-| [2026-02-20_ISSUE_bug41_gcbox_weak_upgrade_dropping_state.md](./2026-02-20_ISSUE_bug41_gcbox_weak_upgrade_dropping_state.md) | GcBoxWeakRef::upgrade() 未檢查 dropping_state 導致 Use-After-Free 風險 | Open | Not Verified |
-| [2026-02-20_ISSUE_bug42_weak_try_upgrade_missing_dropping_state.md](./2026-02-20_ISSUE_bug42_weak_try_upgrade_missing_dropping_state.md) | Weak::try_upgrade() 缺少 dropping_state 檢查導致 Use-After-Free 風險 | Open | Not Verified |
-| [2026-02-20_ISSUE_bug43_weak_ephemeron_missing_gccapture.md](./2026-02-20_ISSUE_bug43_weak_ephemeron_missing_gccapture.md) | Weak<T> and Ephemeron<K,V> missing GcCapture implementation | Open | Not Verified |
+| [2026-02-20_ISSUE_bug40_zst_singleton_ref_count.md](./2026-02-20_ISSUE_bug40_zst_singleton_ref_count.md) | ZST Singleton 初始化時 ref_count 為 2 而非 1 | Invalid | Not Verified |
+| [2026-02-20_ISSUE_bug41_gcbox_weak_upgrade_dropping_state.md](./2026-02-20_ISSUE_bug41_gcbox_weak_upgrade_dropping_state.md) | GcBoxWeakRef::upgrade() 未檢查 dropping_state 導致 Use-After-Free 風險 | Fixed | Verified |
+| [2026-02-20_ISSUE_bug42_weak_try_upgrade_missing_dropping_state.md](./2026-02-20_ISSUE_bug42_weak_try_upgrade_missing_dropping_state.md) | Weak::try_upgrade() 缺少 dropping_state 檢查導致 Use-After-Free 風險 | Fixed | Verified |
+| [2026-02-20_ISSUE_bug43_weak_ephemeron_missing_gccapture.md](./2026-02-20_ISSUE_bug43_weak_ephemeron_missing_gccapture.md) | Weak<T> and Ephemeron<K,V> missing GcCapture implementation | Fixed | Verified |
 | [2026-02-21_ISSUE_bug44_gc_clone_missing_flag_check.md](./2026-02-21_ISSUE_bug44_gc_clone_missing_flag_check.md) | Gc::clone() 缺少 has_dead_flag 和 dropping_state 檢查導致異常行為 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug45_dirty_pages_snapshot_race.md](./2026-02-21_ISSUE_bug45_dirty_pages_snapshot_race.md) | Dirty Pages Snapshot Race 導致 Young 物件被錯誤回收 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug46_gc_clone_missing_dead_flag_check.md](./2026-02-21_ISSUE_bug46_gc_clone_missing_dead_flag_check.md) | Gc::clone() Missing Dead Flag Check 導致記憶體不安全 | Open | Not Verified |

@@ -11,6 +11,7 @@ use std::ops::Deref;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
+use crate::cell::GcCapture;
 use crate::gc::incremental::mark_new_object_black;
 use crate::gc::notify_dropped_gc;
 use crate::heap::{with_heap, LocalHeap};
@@ -441,6 +442,11 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 });
             }
 
+            // Object is being dropped - do not allow new strong refs (UAF prevention)
+            if gc_box.dropping_state() != 0 {
+                return None;
+            }
+
             gc_box.inc_ref();
             Some(Gc {
                 ptr: AtomicNullable::new(ptr),
@@ -845,7 +851,9 @@ impl<T: Trace> Gc<T> {
         };
 
         // SAFETY: We know this is a valid GcBox<()> for ZST
-        // Increment ref count for the new Gc handle
+        // Increment ref count for the new Gc handle.
+        // Note: Initial ref_count=1 serves as a phantom ref that keeps the ZST immortal
+        // (prevents value drop when all user Gcs are dropped). So first Gc has ref_count=2.
         unsafe {
             (*gc_box_ptr).inc_ref();
         }
@@ -2082,6 +2090,47 @@ unsafe impl<K: Trace + 'static, V: Trace + 'static> Trace for Ephemeron<K, V> {
         // For now, this basic implementation provides the API but not the
         // full GC semantics. The value will stay in memory even after key dies.
         visitor.visit(&self.value);
+    }
+}
+
+// ============================================================================
+// GcCapture for Weak and Ephemeron
+// ============================================================================
+
+impl<T: Trace + 'static> GcCapture for Weak<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        if let Some(gc) = self.try_upgrade() {
+            let raw = gc.raw_ptr();
+            if !raw.is_null() {
+                unsafe {
+                    let nn = NonNull::new_unchecked(raw.cast());
+                    ptrs.push(nn);
+                }
+            }
+        }
+    }
+}
+
+impl<K: Trace + 'static, V: Trace + 'static> GcCapture for Ephemeron<K, V> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        // Capture value (strong reference) - always present
+        self.value.capture_gc_ptrs_into(ptrs);
+        // Capture key if still alive (weak -> upgrade)
+        if let Some(key_gc) = self.key.try_upgrade() {
+            key_gc.capture_gc_ptrs_into(ptrs);
+        }
     }
 }
 
