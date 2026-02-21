@@ -29,10 +29,10 @@
 //!    `Mutex`-protected handle list.
 
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
 
-use crate::heap::{HandleId, ThreadControlBlock};
+use crate::heap::{self, HandleId, ThreadControlBlock};
 use crate::ptr::GcBox;
 use crate::ptr::GcBoxWeakRef;
 use crate::trace::Trace;
@@ -66,8 +66,8 @@ use crate::Gc;
 pub struct GcHandle<T: Trace + 'static> {
     /// Raw pointer to the `GcBox`. Validity is guaranteed by root registration.
     pub(crate) ptr: NonNull<GcBox<T>>,
-    /// TCB of the origin thread. Prevents TCB deallocation; holds root list.
-    pub(crate) origin_tcb: Arc<ThreadControlBlock>,
+    /// TCB of the origin thread. Weak allows TCB to be dropped when thread terminates.
+    pub(crate) origin_tcb: Weak<ThreadControlBlock>,
     /// Origin thread identity, for resolve-time check.
     pub(crate) origin_thread: ThreadId,
     /// Unique ID for this handle's root entry (for O(1) unregistration).
@@ -105,9 +105,13 @@ impl<T: Trace + 'static> GcHandle<T> {
         if self.handle_id == HandleId::INVALID {
             return;
         }
-        let mut roots = self.origin_tcb.cross_thread_roots.lock().unwrap();
-        roots.strong.remove(&self.handle_id);
-        drop(roots);
+        if let Some(tcb) = self.origin_tcb.upgrade() {
+            let mut roots = tcb.cross_thread_roots.lock().unwrap();
+            roots.strong.remove(&self.handle_id);
+            drop(roots);
+        } else {
+            let _ = heap::remove_orphan_root(self.origin_thread, self.handle_id);
+        }
         self.handle_id = HandleId::INVALID;
         crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
     }
@@ -215,7 +219,7 @@ impl<T: Trace + 'static> GcHandle<T> {
         }
         WeakCrossThreadHandle {
             weak: GcBoxWeakRef::new(self.ptr),
-            origin_tcb: Arc::clone(&self.origin_tcb),
+            origin_tcb: Weak::clone(&self.origin_tcb),
             origin_thread: self.origin_thread,
         }
     }
@@ -229,15 +233,26 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
             "cannot clone an unregistered GcHandle"
         );
 
-        let mut roots = self.origin_tcb.cross_thread_roots.lock().unwrap();
-        let new_id = roots.allocate_id();
-        roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());
+        let (new_id, origin_tcb) = self.origin_tcb.upgrade().map_or_else(
+            || {
+                let new_id = heap::allocate_orphan_handle_id();
+                heap::insert_orphan_root(self.origin_thread, new_id, self.ptr.cast::<GcBox<()>>());
+                (new_id, Weak::clone(&self.origin_tcb))
+            },
+            |tcb| {
+                let mut roots = tcb.cross_thread_roots.lock().unwrap();
+                let new_id = roots.allocate_id();
+                roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());
+                drop(roots);
+                (new_id, Arc::downgrade(&tcb))
+            },
+        );
+
         unsafe { (*self.ptr.as_ptr()).inc_ref() };
-        drop(roots);
 
         Self {
             ptr: self.ptr,
-            origin_tcb: Arc::clone(&self.origin_tcb),
+            origin_tcb,
             origin_thread: self.origin_thread,
             handle_id: new_id,
         }
@@ -247,15 +262,19 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
 impl<T: Trace + 'static> Drop for GcHandle<T> {
     /// Unregisters the root entry and releases the reference count held by this handle.
     ///
-    /// Safe to call from any thread: the TCB is held via `Arc`, and the root
-    /// list is `Mutex`-protected. No thread-local storage is accessed.
+    /// Safe to call from any thread: the TCB is held via `Weak`, and the root
+    /// list (or orphan table) is `Mutex`-protected. No thread-local storage is accessed.
     fn drop(&mut self) {
         if self.handle_id == HandleId::INVALID {
             return;
         }
-        let mut roots = self.origin_tcb.cross_thread_roots.lock().unwrap();
-        roots.strong.remove(&self.handle_id);
-        drop(roots);
+        if let Some(tcb) = self.origin_tcb.upgrade() {
+            let mut roots = tcb.cross_thread_roots.lock().unwrap();
+            roots.strong.remove(&self.handle_id);
+            drop(roots);
+        } else {
+            let _ = heap::remove_orphan_root(self.origin_thread, self.handle_id);
+        }
         self.handle_id = HandleId::INVALID;
         // Release the ref count we held. May trigger object drop if this was last ref.
         crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
@@ -293,7 +312,7 @@ impl<T: Trace + 'static> std::fmt::Debug for GcHandle<T> {
 /// ```
 pub struct WeakCrossThreadHandle<T: Trace + 'static> {
     pub(crate) weak: GcBoxWeakRef<T>,
-    pub(crate) origin_tcb: Arc<ThreadControlBlock>,
+    pub(crate) origin_tcb: Weak<ThreadControlBlock>,
     pub(crate) origin_thread: ThreadId,
 }
 
@@ -394,7 +413,7 @@ impl<T: Trace + 'static> Clone for WeakCrossThreadHandle<T> {
     fn clone(&self) -> Self {
         Self {
             weak: self.weak.clone(),
-            origin_tcb: Arc::clone(&self.origin_tcb),
+            origin_tcb: Weak::clone(&self.origin_tcb),
             origin_thread: self.origin_thread,
         }
     }

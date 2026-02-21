@@ -1,6 +1,6 @@
 # [Bug]: Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Not Reproduced
 
 
@@ -168,3 +168,4 @@ fn generational_write_barrier(&self, ptr: *const u8) {
 1. 構造特定的内次 GC 觸發模式
 2. 利用這個 race condition 實現記憶體佈局控制
 3. 最終可能實現任意記憶體讀寫（如果配合其他漏洞）
+

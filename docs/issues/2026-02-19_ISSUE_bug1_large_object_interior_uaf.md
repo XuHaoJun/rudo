@@ -1,6 +1,6 @@
 # [Bug]: 大型物件內部指標在執行緒終止後失效導致 UAF
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Not Reproduced
 
 
@@ -130,3 +130,4 @@ cargo test --test bug1_large_object_interior_uaf -- --test-threads=1
 攻擊者可以通過控制執行緒終止時機來實現：
 1. 任意記憶體讀取（透過 UAF）
 2. 記憶體佈局洩露（透過觀察 GC 回收行為）
+

@@ -1,6 +1,6 @@
 # [Bug]: 孤立物件的 Weak 參考在回收時導致記憶體錯誤
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Not Reproduced
 
 
@@ -138,3 +138,4 @@ cargo test --test bug2_orphan_sweep_weak_ref -- --test-threads=1
 1. 構造 Weak 參考與執行緒終止的 race condition
 2. 洩露記憶體佈局資訊（透過觀察何時發生錯誤）
 3. 可能實現任意記憶體讀取（如果錯誤處理不當）
+

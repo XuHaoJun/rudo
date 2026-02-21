@@ -478,7 +478,7 @@ fn test_cross_thread_handle_thread_exit_before_gc() {
     //
     // SAFETY: At this point:
     // - The spawned thread has already stored the handle and exited
-    // - The handle holds Arc<TCB>, so cross_thread_roots is valid
+    // - The handle's roots were migrated to the orphan table; handle holds Weak<TCB>
     // - The handle incremented ref count at creation (see cross_thread_handle())
     // - Dropping `gc` only drops our local Gc<T> wrapper, not the GcBox ref count
     // - The object cannot be collected because the handle root keeps it alive

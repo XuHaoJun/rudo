@@ -3,8 +3,8 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 8
-- **Open**: 50
+- **Fixed**: 12
+- **Open**: 46
 
 ### By Tags
 - **Verified**: 11
@@ -15,10 +15,10 @@
 
 | Issue | Title | Status | Tags |
 |---|---|---|---|
-| [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Open | Not Reproduced |
-| [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Open | Not Reproduced |
-| [2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md](./2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md) | Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏 | Open | Not Reproduced |
-| [2026-02-19_ISSUE_bug4_cross_thread_handle_tcb_leak.md](./2026-02-19_ISSUE_bug4_cross_thread_handle_tcb_leak.md) | Origin 執行緒終止後 GcHandle 持有無效的 Arc<ThreadControlBlock> 導致記憶體洩露 | Open | Verified |
+| [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Fixed | Not Reproduced |
+| [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Fixed | Not Reproduced |
+| [2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md](./2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md) | Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏 | Fixed | Not Reproduced |
+| [2026-02-19_ISSUE_bug4_cross_thread_handle_tcb_leak.md](./2026-02-19_ISSUE_bug4_cross_thread_handle_tcb_leak.md) | Origin 執行緒終止後 GcHandle 持有無效的 Arc<ThreadControlBlock> 導致記憶體洩露 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug5_incremental_worklist_unbounded.md](./2026-02-19_ISSUE_bug5_incremental_worklist_unbounded.md) | Incremental Marking 增量標記階段 Overflow 時的 Worklist 無界成長 | Open | Not Reproduced |
 | [2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md](./2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md) | Multi-Page Large Object 的 GcCell Write Barrier 在 Tail Pages 上失效 | Open | Not Reproduced |
 | [2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md](./2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md) | unified_write_barrier 缺少執行緒所有權驗證 | Open | Verified |

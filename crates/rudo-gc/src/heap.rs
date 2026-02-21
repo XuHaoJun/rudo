@@ -12,6 +12,7 @@ use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 use std::sync::Arc;
+use std::thread::ThreadId;
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
@@ -134,6 +135,75 @@ impl HandleId {
     #[allow(dead_code)]
     #[allow(clippy::use_self)]
     pub(crate) const INVALID: HandleId = Self(u64::MAX);
+}
+
+/// Orphaned cross-thread roots. When a thread terminates with outstanding `GcHandles`,
+/// its roots are migrated here so the TCB can be dropped. Key: (`origin_thread`, `handle_id`).
+/// Stores pointer as `usize` for `Send`/`Sync` (`GcBox` is not necessarily Send).
+static ORPHANED_CROSS_THREAD_ROOTS: OnceLock<
+    parking_lot::Mutex<HashMap<(ThreadId, HandleId), usize>>,
+> = OnceLock::new();
+
+fn orphaned_cross_thread_roots() -> &'static parking_lot::Mutex<HashMap<(ThreadId, HandleId), usize>>
+{
+    ORPHANED_CROSS_THREAD_ROOTS.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
+}
+
+/// Global counter for orphan handle IDs when cloning handles whose origin thread has terminated.
+static ORPHAN_HANDLE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Migrate cross-thread roots from a terminating thread's TCB to the orphan table.
+/// Called from `ThreadLocalHeap::drop` before unregistering, so the TCB can be dropped.
+pub fn migrate_roots_to_orphan(tcb: &ThreadControlBlock, thread_id: ThreadId) {
+    let mut roots = tcb
+        .cross_thread_roots
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if roots.strong.is_empty() {
+        return;
+    }
+    let drained: Vec<_> = roots
+        .strong
+        .drain()
+        .map(|(k, v)| (k, v.as_ptr() as usize))
+        .collect();
+    drop(roots);
+
+    let mut orphan = orphaned_cross_thread_roots().lock();
+    for (handle_id, ptr) in drained {
+        orphan.insert((thread_id, handle_id), ptr);
+    }
+}
+
+/// Get all orphaned cross-thread roots for GC marking.
+#[must_use]
+pub fn get_orphaned_cross_thread_roots() -> Vec<*const GcBox<()>> {
+    let guard = orphaned_cross_thread_roots().lock();
+    guard
+        .values()
+        .map(|&addr| addr as *const GcBox<()>)
+        .collect()
+}
+
+/// Remove an orphan root (when `GcHandle` is dropped and TCB is already gone).
+/// Returns the pointer address if it was found and removed (not used by callers).
+#[must_use]
+pub fn remove_orphan_root(thread_id: ThreadId, handle_id: HandleId) -> Option<usize> {
+    let mut orphan = orphaned_cross_thread_roots().lock();
+    orphan.remove(&(thread_id, handle_id))
+}
+
+/// Insert an orphan root (when cloning a `GcHandle` whose origin thread has terminated).
+pub fn insert_orphan_root(thread_id: ThreadId, handle_id: HandleId, ptr: NonNull<GcBox<()>>) {
+    let mut orphan = orphaned_cross_thread_roots().lock();
+    orphan.insert((thread_id, handle_id), ptr.as_ptr() as usize);
+}
+
+/// Allocate a new handle ID for orphaned roots (when cloning a handle whose TCB is gone).
+#[must_use]
+pub fn allocate_orphan_handle_id() -> HandleId {
+    let id = ORPHAN_HANDLE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    HandleId(id)
 }
 
 // ============================================================================
@@ -2961,7 +3031,12 @@ impl ThreadLocalHeap {
 
 impl Drop for ThreadLocalHeap {
     fn drop(&mut self) {
-        let mut registry = thread_registry().lock().unwrap();
+        let thread_id = std::thread::current().id();
+        migrate_roots_to_orphan(&self.tcb, thread_id);
+
+        let mut registry = thread_registry()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if self.tcb.state.load(Ordering::SeqCst) == THREAD_STATE_EXECUTING {
             registry.active_count.fetch_sub(1, Ordering::SeqCst);
         }

@@ -1401,7 +1401,7 @@ fn mark_major_roots_multi(
     }
 
     #[allow(clippy::type_complexity)]
-    let cross_thread_roots: Vec<*const GcBox<()>> = stack_roots
+    let mut cross_thread_roots: Vec<*const GcBox<()>> = stack_roots
         .iter()
         .flat_map(|(_, tcb)| {
             let mut roots = Vec::new();
@@ -1409,6 +1409,7 @@ fn mark_major_roots_multi(
             roots
         })
         .collect();
+    cross_thread_roots.extend(crate::heap::get_orphaned_cross_thread_roots());
 
     for ptr in cross_thread_roots {
         unsafe {
@@ -1879,7 +1880,7 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
     }
 
     #[allow(clippy::type_complexity)]
-    let cross_thread_roots: Vec<*const GcBox<()>> = {
+    let mut cross_thread_roots: Vec<*const GcBox<()>> = {
         crate::heap::thread_registry().lock().map_or_else(
             |_| Vec::new(),
             |registry| {
@@ -1895,6 +1896,7 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
             },
         )
     };
+    cross_thread_roots.extend(crate::heap::get_orphaned_cross_thread_roots());
 
     for ptr in cross_thread_roots {
         unsafe {
@@ -1977,7 +1979,7 @@ fn mark_major_roots(heap: &LocalHeap) -> usize {
     }
 
     #[allow(clippy::type_complexity)]
-    let cross_thread_roots: Vec<*const GcBox<()>> = {
+    let mut cross_thread_roots: Vec<*const GcBox<()>> = {
         crate::heap::thread_registry().lock().map_or_else(
             |_| Vec::new(),
             |registry| {
@@ -1993,6 +1995,7 @@ fn mark_major_roots(heap: &LocalHeap) -> usize {
             },
         )
     };
+    cross_thread_roots.extend(crate::heap::get_orphaned_cross_thread_roots());
 
     for ptr in cross_thread_roots {
         unsafe {

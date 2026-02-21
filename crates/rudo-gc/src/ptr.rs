@@ -1242,7 +1242,7 @@ impl<T: Trace + 'static> Gc<T> {
 
         GcHandle {
             ptr,
-            origin_tcb: Arc::clone(&tcb),
+            origin_tcb: Arc::downgrade(&tcb),
             origin_thread: std::thread::current().id(),
             handle_id,
         }
@@ -1272,8 +1272,10 @@ impl<T: Trace + 'static> Gc<T> {
         }
         crate::handles::WeakCrossThreadHandle {
             weak: GcBoxWeakRef::new(self.as_non_null()),
-            origin_tcb: crate::heap::current_thread_control_block()
-                .expect("weak_cross_thread_handle called outside of GC context"),
+            origin_tcb: std::sync::Arc::downgrade(
+                &crate::heap::current_thread_control_block()
+                    .expect("weak_cross_thread_handle called outside of GC context"),
+            ),
             origin_thread: std::thread::current().id(),
         }
     }

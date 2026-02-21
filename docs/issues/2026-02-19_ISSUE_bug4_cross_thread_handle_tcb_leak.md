@@ -1,6 +1,6 @@
 # [Bug]: Origin 執行緒終止後 GcHandle 持有無效的 Arc<ThreadControlBlock> 導致記憶體洩露
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 
@@ -148,3 +148,9 @@ pub struct GcHandle<T: Trace + 'static> {
 
 **Geohot (Exploit 觀點):**
 雖然不會直接導致漏洞，但長期執行的程式可能因為記憶體洩露而被耗盡資源。攻擊者可以通過構造大量 GcHandle 來加速記憶體洩露，導致 DoS。
+
+---
+
+## Resolution (2026-02-21)
+
+**Fixed** via 方案 3 (Weak + root migration): `GcHandle` and `WeakCrossThreadHandle` now hold `Weak<ThreadControlBlock>`. When the origin thread terminates, roots are migrated to a global orphan table in `ThreadLocalHeap::drop`; the TCB is dropped when ref count reaches 0. Handles falling back to the orphan table for unregister/clone/drop. GC marking extended to scan orphan roots.
