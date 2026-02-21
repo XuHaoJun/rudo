@@ -4,10 +4,12 @@
 
 ### By Status
 - **Fixed**: 58
+- **Open**: 1
 - **Invalid**: 4
 
 ### By Tags
 - **Verified**: 54
+- **Unverified**: 1
 - **Not Verified**: 2
 - **Not Reproduced**: 6
 
@@ -77,3 +79,4 @@
 | [2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md](./2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md) | mark_page_dirty_for_ptr 未處理大型物件導致 Vec<Gc<T>> 追蹤失敗 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug61_gcmutex_capture_gc_ptrs_try_lock.md](./2026-02-21_ISSUE_bug61_gcmutex_capture_gc_ptrs_try_lock.md) | GcMutex::capture_gc_ptrs_into() 使用 try_lock() 而非 lock()，與 GcRwLock 不一致 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md](./2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md) | GcHandle::resolve() 與 GcHandle::try_resolve() 缺少 dropping_state 檢查 | Fixed | Verified |
+| [2026-02-22_ISSUE_bug64_weak_clone_missing_dead_check.md](./2026-02-22_ISSUE_bug64_weak_clone_missing_dead_check.md) | Weak::clone() 缺少 dead_flag / dropping_state 檢查 | Open | Unverified |
