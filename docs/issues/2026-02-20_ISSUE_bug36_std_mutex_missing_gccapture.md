@@ -1,7 +1,7 @@
 # [Bug]: std::sync::Mutex 缺少 GcCapture 實作導致指標遺漏
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -156,3 +156,7 @@ impl<T: GcCapture + 'static> GcCapture for StdMutex<T> {
 - **bug33**: GcMutex 缺少 GcCapture - 相關但不同（GcMutex 是 rudo-gc 的類型）
 - **bug35**: std::sync::RwLock 有 GcCapture 但使用 try_read() - 相關問題
 - **本 bug**: std::sync::Mutex 完全缺少 GcCapture - 新發現
+
+---
+
+**Resolution:** Added `GcCapture` impl for `std::sync::Mutex<T>` in cell.rs, using blocking `lock()` to reliably capture inner GC pointers, consistent with `std::sync::RwLock` (bug35).

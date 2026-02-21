@@ -1,7 +1,7 @@
 # [Bug]: std::sync::RwLock 的 GcCapture 實作使用 try_read() 可能導致指標遺漏
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -172,3 +172,7 @@ fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
 - **bug34**: GcRwLock 使用 try_read() - 相同模式，不同類型
 - **bug33**: GcMutex 缺少 GcCapture - 相關問題
 - **bug28**: GcRwLock capture_gc_ptrs 返回空切片 - 相關問題
+
+---
+
+**Resolution:** Replaced `try_read()` with blocking `read()` in std::sync::RwLock GcCapture impl, matching bug34 fix for GcRwLock.

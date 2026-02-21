@@ -11,8 +11,9 @@ use crate::trace::Trace;
 use parking_lot::Mutex;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::sync::atomic::Ordering;
-use std::sync::RwLock;
+use std::sync::{Arc as StdArc, Mutex as StdMutex, RwLock};
 
 /// A memory location with interior mutability that triggers a write barrier.
 ///
@@ -516,6 +517,30 @@ impl<T: GcCapture + 'static> GcCapture for Box<T> {
     }
 }
 
+impl<T: GcCapture + 'static> GcCapture for StdArc<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        (**self).capture_gc_ptrs_into(ptrs);
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for Rc<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        (**self).capture_gc_ptrs_into(ptrs);
+    }
+}
+
 impl<T: GcCapture + ?Sized> GcCapture for GcCell<T> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
@@ -572,8 +597,24 @@ impl<T: GcCapture + 'static> GcCapture for RwLock<T> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Ok(value) = self.try_read() {
-            value.capture_gc_ptrs_into(ptrs);
+        // Use blocking read() to reliably capture all GC pointers, same as GcRwLock (bug34).
+        if let Ok(guard) = self.read() {
+            guard.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for StdMutex<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        // Use blocking lock() to reliably capture all GC pointers, same as RwLock (bug35).
+        if let Ok(guard) = self.lock() {
+            guard.capture_gc_ptrs_into(ptrs);
         }
     }
 }

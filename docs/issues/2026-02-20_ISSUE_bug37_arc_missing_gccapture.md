@@ -1,7 +1,7 @@
 # [Bug]: std::sync::Arc 缺少 GcCapture 實作導致指標遺漏
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -150,3 +150,7 @@ impl<T: GcCapture + 'static> GcCapture for StdArc<T> {
 - bug36: `std::sync::Mutex` 缺少 GcCapture - 相同模式，不同類型
 - bug35: `std::sync::RwLock` 使用 try_read() - 相關問題
 - bug34: `GcRwLock` 使用 try_read() - 相關問題
+
+---
+
+**Resolution:** Added `GcCapture` impl for `std::sync::Arc<T>` in cell.rs. Delegates to inner value via `(**self).capture_gc_ptrs_into(ptrs)`, same pattern as `Box<T>`.

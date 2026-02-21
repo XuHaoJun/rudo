@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::resolve() 缺少物件有效性驗證
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -170,3 +170,7 @@ pub fn resolve(&self) -> Gc<T> {
 這個問題與 bug #11（GcHandle::resolve() panic when origin terminated）不同：
 - bug11: 執行緒終止後調用 resolve() 會 panic
 - 本 bug: 物件無效時 resolve() 可能返回 use-after-free
+
+---
+
+**Resolution:** Added validity checks to `GcHandle::resolve()` and `try_resolve()`. `resolve()` now asserts `!is_under_construction()` and `!has_dead_flag()` before inc_ref. `try_resolve()` returns `None` if either flag is set. Also made `GcBox::is_under_construction()` pub(crate) for use in handles.

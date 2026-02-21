@@ -154,9 +154,18 @@ impl<T: Trace + 'static> GcHandle<T> {
             std::thread::current().id(),
         );
         // Take ownership of one ref for the returned Gc. The handle holds refs;
-        // resolving transfers one to the caller. SAFETY: verified on origin thread.
+        // resolving transfers one to the caller.
         unsafe {
-            (*self.ptr.as_ptr()).inc_ref();
+            let gc_box = &*self.ptr.as_ptr();
+            assert!(
+                !gc_box.is_under_construction(),
+                "GcHandle::resolve: object is under construction"
+            );
+            assert!(
+                !gc_box.has_dead_flag(),
+                "GcHandle::resolve: object has been dropped (dead flag set)"
+            );
+            gc_box.inc_ref();
             Gc::from_raw(self.ptr.as_ptr() as *const u8)
         }
     }
@@ -191,9 +200,12 @@ impl<T: Trace + 'static> GcHandle<T> {
         if std::thread::current().id() != self.origin_thread {
             return None;
         }
-        // Take ownership of one ref for the returned Gc. SAFETY: same as resolve().
         unsafe {
-            (*self.ptr.as_ptr()).inc_ref();
+            let gc_box = &*self.ptr.as_ptr();
+            if gc_box.is_under_construction() || gc_box.has_dead_flag() {
+                return None;
+            }
+            gc_box.inc_ref();
             Some(Gc::from_raw(self.ptr.as_ptr() as *const u8))
         }
     }

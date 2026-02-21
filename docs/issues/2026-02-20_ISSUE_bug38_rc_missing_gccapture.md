@@ -1,7 +1,7 @@
 # [Bug]: std::rc::Rc 缺少 GcCapture 實作導致 SATB 屏障失效
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -167,3 +167,7 @@ impl<T: GcCapture + 'static> GcCapture for Rc<T> {
 3. 實現任意記憶體讀寫
 
 儘管難度較高，但這是一個潛在的記憶體腐蝕向量。
+
+---
+
+**Resolution:** Added `GcCapture` impl for `std::rc::Rc<T>` in cell.rs. Delegates to inner value via `(**self).capture_gc_ptrs_into(ptrs)`, same pattern as `Box<T>` and `Arc<T>` (bug37).

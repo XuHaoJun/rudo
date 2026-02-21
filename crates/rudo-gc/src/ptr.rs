@@ -67,7 +67,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
 
     /// Check if the value is currently under construction.
     #[inline]
-    fn is_under_construction(&self) -> bool {
+    pub(crate) fn is_under_construction(&self) -> bool {
         (self.weak_count.load(Ordering::Relaxed) & Self::UNDER_CONSTRUCTION_FLAG) != 0
     }
 

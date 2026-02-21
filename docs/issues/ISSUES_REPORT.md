@@ -3,13 +3,13 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 32
-- **Open**: 24
+- **Fixed**: 37
+- **Open**: 20
 - **Invalid**: 3
 
 ### By Tags
-- **Verified**: 28
-- **Not Verified**: 25
+- **Verified**: 33
+- **Not Verified**: 21
 - **Not Reproduced**: 6
 
 ## All Issues
@@ -50,11 +50,11 @@
 | [2026-02-20_ISSUE_bug33_gcmutex_missing_gccapture.md](./2026-02-20_ISSUE_bug33_gcmutex_missing_gccapture.md) | GcMutex 缺少 GcCapture 實作導致 SATB 屏障失效 | Fixed | Verified |
 | [2026-02-20_ISSUE_bug33_try_inc_ref_from_zero_resurrection.md](./2026-02-20_ISSUE_bug33_try_inc_ref_from_zero_resurrection.md) | try_inc_ref_from_zero 允許在有 weak references 時復活已死亡物件 | Fixed | Verified |
 | [2026-02-20_ISSUE_bug34_gcrwlock_capture_try_read.md](./2026-02-20_ISSUE_bug34_gcrwlock_capture_try_read.md) | GcRwLock::capture_gc_ptrs_into 使用 try_read() 可能導致指標遺漏 | Fixed | Verified |
-| [2026-02-20_ISSUE_bug35_std_rwlock_capture_try_read.md](./2026-02-20_ISSUE_bug35_std_rwlock_capture_try_read.md) | std::sync::RwLock 的 GcCapture 實作使用 try_read() 可能導致指標遺漏 | Open | Not Verified |
-| [2026-02-20_ISSUE_bug36_std_mutex_missing_gccapture.md](./2026-02-20_ISSUE_bug36_std_mutex_missing_gccapture.md) | std::sync::Mutex 缺少 GcCapture 實作導致指標遺漏 | Open | Not Verified |
-| [2026-02-20_ISSUE_bug37_arc_missing_gccapture.md](./2026-02-20_ISSUE_bug37_arc_missing_gccapture.md) | std::sync::Arc 缺少 GcCapture 實作導致指標遺漏 | Open | Not Verified |
-| [2026-02-20_ISSUE_bug38_rc_missing_gccapture.md](./2026-02-20_ISSUE_bug38_rc_missing_gccapture.md) | std::rc::Rc 缺少 GcCapture 實作導致 SATB 屏障失效 | Open | Not Verified |
-| [2026-02-20_ISSUE_bug39_gchandle_resolve_missing_validity_check.md](./2026-02-20_ISSUE_bug39_gchandle_resolve_missing_validity_check.md) | GcHandle::resolve() 缺少物件有效性驗證 | Open | Not Verified |
+| [2026-02-20_ISSUE_bug35_std_rwlock_capture_try_read.md](./2026-02-20_ISSUE_bug35_std_rwlock_capture_try_read.md) | std::sync::RwLock 的 GcCapture 實作使用 try_read() 可能導致指標遺漏 | Fixed | Verified |
+| [2026-02-20_ISSUE_bug36_std_mutex_missing_gccapture.md](./2026-02-20_ISSUE_bug36_std_mutex_missing_gccapture.md) | std::sync::Mutex 缺少 GcCapture 實作導致指標遺漏 | Fixed | Verified |
+| [2026-02-20_ISSUE_bug37_arc_missing_gccapture.md](./2026-02-20_ISSUE_bug37_arc_missing_gccapture.md) | std::sync::Arc 缺少 GcCapture 實作導致指標遺漏 | Fixed | Verified |
+| [2026-02-20_ISSUE_bug38_rc_missing_gccapture.md](./2026-02-20_ISSUE_bug38_rc_missing_gccapture.md) | std::rc::Rc 缺少 GcCapture 實作導致 SATB 屏障失效 | Fixed | Verified |
+| [2026-02-20_ISSUE_bug39_gchandle_resolve_missing_validity_check.md](./2026-02-20_ISSUE_bug39_gchandle_resolve_missing_validity_check.md) | GcHandle::resolve() 缺少物件有效性驗證 | Fixed | Verified |
 | [2026-02-20_ISSUE_bug40_zst_singleton_ref_count.md](./2026-02-20_ISSUE_bug40_zst_singleton_ref_count.md) | ZST Singleton 初始化時 ref_count 為 2 而非 1 | Open | Not Verified |
 | [2026-02-20_ISSUE_bug41_gcbox_weak_upgrade_dropping_state.md](./2026-02-20_ISSUE_bug41_gcbox_weak_upgrade_dropping_state.md) | GcBoxWeakRef::upgrade() 未檢查 dropping_state 導致 Use-After-Free 風險 | Open | Not Verified |
 | [2026-02-20_ISSUE_bug42_weak_try_upgrade_missing_dropping_state.md](./2026-02-20_ISSUE_bug42_weak_try_upgrade_missing_dropping_state.md) | Weak::try_upgrade() 缺少 dropping_state 檢查導致 Use-After-Free 風險 | Open | Not Verified |
@@ -75,3 +75,4 @@
 | [2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md](./2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md) | Ephemeron<K,V> Trace 實作總是追蹤 value，導致記憶體無法正確回收 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md](./2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md) | Weak::is_alive() 缺少 dropping_state 檢查導致不一致行為 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug59_gcrwlock_write_guard_drop_missing_satb.md](./2026-02-21_ISSUE_bug59_gcrwlock_write_guard_drop_missing_satb.md) | GcRwLockWriteGuard 與 GcMutexGuard Drop 時缺少 SATB Barrier 標記 | Open | Not Verified |
+| [2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md](./2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md) | mark_page_dirty_for_ptr 未處理大型物件導致 Vec<Gc<T>> 追蹤失敗 | Open | Not Verified |
