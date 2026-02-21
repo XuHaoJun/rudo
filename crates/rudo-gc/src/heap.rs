@@ -2575,36 +2575,48 @@ pub fn simple_write_barrier(ptr: *const u8) {
             return;
         }
 
+        let page_addr = ptr_addr & page_mask();
+
         unsafe {
-            let header = ptr_to_page_header(ptr);
-
-            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
-                return;
-            }
-
-            let block_size = (*header.as_ptr()).block_size as usize;
-            let header_size = (*header.as_ptr()).header_size as usize;
-            let header_page_addr = header.as_ptr() as usize;
-
-            if ptr_addr < header_page_addr + header_size {
-                return;
-            }
-
-            let offset = ptr_addr - (header_page_addr + header_size);
-            let index = offset / block_size;
-            let obj_count = (*header.as_ptr()).obj_count as usize;
-
-            if index >= obj_count {
-                return;
-            }
-
-            // GEN_OLD early-exit
-            let gc_box_addr =
-                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-            let wc = (*gc_box_addr).weak_count_raw();
-            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
-                return;
-            }
+            let (header, index) =
+                if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
+                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + size {
+                        return;
+                    }
+                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    let wc = (*gc_box_addr).weak_count_raw();
+                    if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                        return;
+                    }
+                    (
+                        NonNull::new_unchecked(head_addr as *mut PageHeader),
+                        0_usize,
+                    )
+                } else {
+                    let h = ptr_to_page_header(ptr);
+                    if (*h.as_ptr()).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    let block_size = (*h.as_ptr()).block_size as usize;
+                    let header_size = (*h.as_ptr()).header_size as usize;
+                    let header_page_addr = h.as_ptr() as usize;
+                    if ptr_addr < header_page_addr + header_size {
+                        return;
+                    }
+                    let offset = ptr_addr - (header_page_addr + header_size);
+                    let index = offset / block_size;
+                    let obj_count = (*h.as_ptr()).obj_count as usize;
+                    if index >= obj_count {
+                        return;
+                    }
+                    let gc_box_addr =
+                        (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+                    let wc = (*gc_box_addr).weak_count_raw();
+                    if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                        return;
+                    }
+                    (h, index)
+                };
 
             (*header.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(header);
@@ -2636,62 +2648,100 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
             return;
         }
 
+        let page_addr = ptr_addr & page_mask();
+
         unsafe {
-            let header = ptr_to_page_header(ptr);
-            let h = header.as_ptr();
+            // Tail pages of multi-page large objects have no PageHeader; ptr_to_page_header
+            // would yield garbage. Check large_object_map first (see find_gc_box_from_ptr).
+            let (h, index) = if let Some(&(head_addr, size, h_size)) =
+                heap.large_object_map.get(&page_addr)
+            {
+                if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + size {
+                    return;
+                }
+                let h_ptr = head_addr as *mut PageHeader;
+                let owner = (*h_ptr).owner_thread;
+                assert!(
+                    owner == 0 || owner == current,
+                    "Thread safety violation: {context} called on GcCell allocated by a different \
+                     thread.\n\
+                     - Current thread ID: {current}\n\
+                     - Allocating thread ID: {owner}\n\
+                     \n\
+                     GcCell is not thread-safe. Gc objects and their fields must not be\n\
+                     accessed from tokio worker threads or other threads different from where\n\
+                     they were allocated.\n\
+                     \n\
+                     Solutions:\n\
+                     1. Use GcThreadSafeCell instead of GcCell for thread-safe interior mutability\n\
+                     2. Use GcHandle for cross-thread communication (see cross_thread module)\n\
+                     3. Dispatch mutations back to the main thread via channel\n\
+                     4. Use single-threaded Tokio runtime"
+                );
+                let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                let wc = (*gc_box_addr).weak_count_raw();
+                if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                    return;
+                }
+                (NonNull::new_unchecked(h_ptr), 0_usize)
+            } else {
+                let header = ptr_to_page_header(ptr);
+                let h = header.as_ptr();
 
-            if (*h).magic != MAGIC_GC_PAGE {
-                return;
-            }
+                if (*h).magic != MAGIC_GC_PAGE {
+                    return;
+                }
 
-            let owner = (*h).owner_thread;
-            assert!(
-                owner == 0 || owner == current,
-                "Thread safety violation: {context} called on GcCell allocated by a different \
-                 thread.\n\
-                 - Current thread ID: {current}\n\
-                 - Allocating thread ID: {owner}\n\
-                 \n\
-                 GcCell is not thread-safe. Gc objects and their fields must not be\n\
-                 accessed from tokio worker threads or other threads different from where\n\
-                 they were allocated.\n\
-                 \n\
-                 Solutions:\n\
-                 1. Use GcThreadSafeCell instead of GcCell for thread-safe interior mutability\n\
-                 2. Use GcHandle for cross-thread communication (see cross_thread module)\n\
-                 3. Dispatch mutations back to the main thread via channel\n\
-                 4. Use single-threaded Tokio runtime"
-            );
+                let owner = (*h).owner_thread;
+                assert!(
+                    owner == 0 || owner == current,
+                    "Thread safety violation: {context} called on GcCell allocated by a different \
+                     thread.\n\
+                     - Current thread ID: {current}\n\
+                     - Allocating thread ID: {owner}\n\
+                     \n\
+                     GcCell is not thread-safe. Gc objects and their fields must not be\n\
+                     accessed from tokio worker threads or other threads different from where\n\
+                     they were allocated.\n\
+                     \n\
+                     Solutions:\n\
+                     1. Use GcThreadSafeCell instead of GcCell for thread-safe interior mutability\n\
+                     2. Use GcHandle for cross-thread communication (see cross_thread module)\n\
+                     3. Dispatch mutations back to the main thread via channel\n\
+                     4. Use single-threaded Tokio runtime"
+                );
 
-            let block_size = (*h).block_size as usize;
-            let header_size = (*h).header_size as usize;
-            let header_page_addr = header.as_ptr() as usize;
+                let block_size = (*h).block_size as usize;
+                let header_size = (*h).header_size as usize;
+                let header_page_addr = h as usize;
 
-            if ptr_addr < header_page_addr + header_size {
-                return;
-            }
+                if ptr_addr < header_page_addr + header_size {
+                    return;
+                }
 
-            let offset = ptr_addr - (header_page_addr + header_size);
-            let index = offset / block_size;
-            let obj_count = (*h).obj_count as usize;
-            if index >= obj_count {
-                return;
-            }
+                let offset = ptr_addr - (header_page_addr + header_size);
+                let index = offset / block_size;
+                let obj_count = (*h).obj_count as usize;
+                if index >= obj_count {
+                    return;
+                }
 
-            // GEN_OLD early-exit: parent young → skip barrier
-            let gc_box_addr =
-                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-            let wc = (*gc_box_addr).weak_count_raw();
-            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
-                return;
-            }
+                // GEN_OLD early-exit: parent young → skip barrier
+                let gc_box_addr =
+                    (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+                let wc = (*gc_box_addr).weak_count_raw();
+                if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                    return;
+                }
+                (header, index)
+            };
 
-            (*h).set_dirty(index);
-            heap.add_to_dirty_pages(header);
+            (*h.as_ptr()).set_dirty(index);
+            heap.add_to_dirty_pages(h);
 
             if incremental_active {
                 std::sync::atomic::fence(Ordering::AcqRel);
-                heap.record_in_remembered_buffer(header);
+                heap.record_in_remembered_buffer(h);
             }
         }
     });
@@ -2715,35 +2765,48 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
             return;
         }
 
+        let page_addr = ptr_addr & page_mask();
+
         unsafe {
-            let header = ptr_to_page_header(ptr);
-
-            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
-                return;
-            }
-
-            let block_size = (*header.as_ptr()).block_size as usize;
-            let header_size = (*header.as_ptr()).header_size as usize;
-            let header_page_addr = header.as_ptr() as usize;
-
-            if ptr_addr < header_page_addr + header_size {
-                return;
-            }
-
-            let offset = ptr_addr - (header_page_addr + header_size);
-            let index = offset / block_size;
-            let obj_count = (*header.as_ptr()).obj_count as usize;
-            if index >= obj_count {
-                return;
-            }
-
-            // GEN_OLD early-exit: parent young → skip barrier (no set_dirty, no mutex)
-            let gc_box_addr =
-                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-            let wc = (*gc_box_addr).weak_count_raw();
-            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
-                return;
-            }
+            let (header, index) =
+                if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
+                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + size {
+                        return;
+                    }
+                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    let wc = (*gc_box_addr).weak_count_raw();
+                    if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                        return;
+                    }
+                    (
+                        NonNull::new_unchecked(head_addr as *mut PageHeader),
+                        0_usize,
+                    )
+                } else {
+                    let h = ptr_to_page_header(ptr);
+                    if (*h.as_ptr()).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    let block_size = (*h.as_ptr()).block_size as usize;
+                    let header_size = (*h.as_ptr()).header_size as usize;
+                    let header_page_addr = h.as_ptr() as usize;
+                    if ptr_addr < header_page_addr + header_size {
+                        return;
+                    }
+                    let offset = ptr_addr - (header_page_addr + header_size);
+                    let index = offset / block_size;
+                    let obj_count = (*h.as_ptr()).obj_count as usize;
+                    if index >= obj_count {
+                        return;
+                    }
+                    let gc_box_addr =
+                        (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+                    let wc = (*gc_box_addr).weak_count_raw();
+                    if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+                        return;
+                    }
+                    (h, index)
+                };
 
             (*header.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(header);

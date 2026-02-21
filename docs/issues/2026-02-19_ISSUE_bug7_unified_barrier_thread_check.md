@@ -1,6 +1,6 @@
 # [Bug]: unified_write_barrier 缺少執行緒所有權驗證
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Verified
 
 
@@ -200,4 +200,19 @@ unsafe fn validate_barrier_access(ptr: *const u8) -> (*mut PageHeader, bool) {
 1. 構造跨執行緒的 barrier 調用
 2. 破壞 heap 數據結構
 3. 可能實現任意記憶體寫入
+
+---
+
+## Resolution (2026-02-21)
+
+**Investigation:** The proposed fix (adding `owner == current` assert to `unified_write_barrier`) is incorrect.
+
+`unified_write_barrier` is used by:
+- `GcThreadSafeCell::trigger_write_barrier`
+- `GcRwLock::trigger_write_barrier`  
+- `GcMutex` (via GcCapture)
+
+These types are **designed for cross-thread access**. Docs: "GcThreadSafeCell uses internal synchronization to allow safe cross-thread access" and "Can mutate from any thread." Adding a thread-ownership assert would cause these types to panic when used correctly from a different thread than the allocator.
+
+`gc_cell_validate_and_barrier` has the thread check because it serves `GcCell`, which is **single-threaded only** and documents that restriction. The design intentionally uses different barrier paths: `GcCell` → thread check + barrier; `GcThreadSafeCell`/`GcRwLock`/`GcMutex` → barrier only, no thread check.
 

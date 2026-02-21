@@ -1,7 +1,7 @@
 # [Bug]: Weak::is_alive() 存在 TOCTOU 競爭條件可能導致 Use-After-Free
 
-**Status:** Open
-**Tags:** Not Reproduced
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -212,4 +212,10 @@ Weak 引用在 GC 環境中的實現需要特別小心。在傳統的 GC 實現�
 2. 控制 GC 時機
 3. 洩露記憶體佈局資訊
 4. 可能實現任意記憶體讀取（如果配合其他漏洞）
+
+---
+
+## Resolution (2026-02-21)
+
+**Fix:** Implemented `is_alive()` as `self.upgrade().is_some()` to avoid TOCTOU. The original implementation loaded `ptr` and then dereferenced to check `has_dead_flag()`; between these steps, GC could reclaim the object, causing use-after-free. By delegating to `upgrade()`, we reuse its atomic `compare_exchange` logic, which safely acquires a strong reference when the object is alive. The temporary `Gc` is dropped immediately, so the ref count returns to its prior state.
 

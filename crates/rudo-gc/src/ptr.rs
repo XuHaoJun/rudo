@@ -1665,12 +1665,10 @@ impl<T: Trace> Weak<T> {
     /// ```
     #[must_use]
     pub fn is_alive(&self) -> bool {
-        let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
-            return false;
-        };
-
-        // SAFETY: The pointer is valid because we have a weak reference
-        unsafe { !(*ptr.as_ptr()).has_dead_flag() }
+        // Delegate to upgrade() to avoid TOCTOU: between loading ptr and checking
+        // has_dead_flag(), GC could reclaim the object. upgrade() uses atomic
+        // compare_exchange to safely acquire a strong ref when the object is alive.
+        self.upgrade().is_some()
     }
 
     /// Casts this `Weak<T>` to a `Weak<U>`.

@@ -1,7 +1,7 @@
 # [Bug]: Multi-Page Large Object 的 GcCell Write Barrier 在 Tail Pages 上失效
 
-**Status:** Open
-**Tags:** Not Reproduced
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -186,4 +186,10 @@ struct LargeData {
 2. 控制 GC 時機
 3. 利用 barrier 失效實現記憶體佈局控制
 4. 最終可能實現任意記憶體讀寫
+
+---
+
+## Resolution (2026-02-21)
+
+**Fix:** Added `large_object_map` fallback in `gc_cell_validate_and_barrier`, `simple_write_barrier`, and `unified_write_barrier` (`heap.rs`). When `ptr` lies in a tail page of a multi-page large object, `ptr_to_page_header(ptr)` yields a page without a valid `PageHeader`; the magic check failed and the barrier returned early. The fix checks `heap.large_object_map.get(&page_addr)` first (as in `find_gc_box_from_ptr`). If the page is a tail page of a large object, we use the head page address from the map for the rest of the barrier logic. Regression test: `crates/rudo-gc/tests/bug3_write_barrier_multi_page.rs`.
 

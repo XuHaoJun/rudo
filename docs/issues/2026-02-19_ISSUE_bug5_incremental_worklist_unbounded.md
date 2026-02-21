@@ -1,6 +1,6 @@
 # [Bug]: Incremental Marking 增量標記階段 Overflow 時的 Worklist 無界成長
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Not Reproduced
 
 
@@ -155,3 +155,14 @@ pub fn mark_slice(&mut self) {
 
 **Geohot:**
 雖然不是直接的安全問題，但攻擊者可以通過構造特殊的指標結構來觸發過長的 STW 暫停，實現 DoS 攻擊。
+
+---
+
+## Resolution (2026-02-21)
+
+**Investigation:** The reported root cause—"no effective deduplication" and "objects may be added multiple times"—does not match the current implementation.
+
+- `GcVisitor::visit()` in `crates/rudo-gc/src/gc/gc.rs` (lines 2924–2926) checks `is_marked(idx)` before pushing: if the object is already marked, it returns early without pushing to the worklist.
+- `mark_root_for_snapshot` and `scan_page_for_marked_refs` also check `!is_marked` before pushing.
+- Consequently, each reachable object is pushed at most once. Worklist growth reflects the number of unique reachable objects, not duplicates.
+- The `WorklistUnbounded` fallback correctly triggers when `worklist_len > 10 * root_count`, and `execute_final_mark` drains the worklist in STW. Large graphs may cause long pauses by design, but this is a tradeoff, not a missing deduplication bug.

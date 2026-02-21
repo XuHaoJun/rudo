@@ -3,13 +3,14 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 12
-- **Open**: 46
+- **Fixed**: 14
+- **Open**: 42
+- **Invalid**: 2
 
 ### By Tags
-- **Verified**: 11
+- **Verified**: 13
 - **Not Verified**: 40
-- **Not Reproduced**: 7
+- **Not Reproduced**: 5
 
 ## All Issues
 
@@ -19,10 +20,10 @@
 | [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md](./2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md) | Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏 | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug4_cross_thread_handle_tcb_leak.md](./2026-02-19_ISSUE_bug4_cross_thread_handle_tcb_leak.md) | Origin 執行緒終止後 GcHandle 持有無效的 Arc<ThreadControlBlock> 導致記憶體洩露 | Fixed | Verified |
-| [2026-02-19_ISSUE_bug5_incremental_worklist_unbounded.md](./2026-02-19_ISSUE_bug5_incremental_worklist_unbounded.md) | Incremental Marking 增量標記階段 Overflow 時的 Worklist 無界成長 | Open | Not Reproduced |
-| [2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md](./2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md) | Multi-Page Large Object 的 GcCell Write Barrier 在 Tail Pages 上失效 | Open | Not Reproduced |
-| [2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md](./2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md) | unified_write_barrier 缺少執行緒所有權驗證 | Open | Verified |
-| [2026-02-19_ISSUE_bug8_weak_is_alive_toctou.md](./2026-02-19_ISSUE_bug8_weak_is_alive_toctou.md) | Weak::is_alive() 存在 TOCTOU 競爭條件可能導致 Use-After-Free | Open | Not Reproduced |
+| [2026-02-19_ISSUE_bug5_incremental_worklist_unbounded.md](./2026-02-19_ISSUE_bug5_incremental_worklist_unbounded.md) | Incremental Marking 增量標記階段 Overflow 時的 Worklist 無界成長 | Invalid | Not Reproduced |
+| [2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md](./2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md) | Multi-Page Large Object 的 GcCell Write Barrier 在 Tail Pages 上失效 | Fixed | Verified |
+| [2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md](./2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md) | unified_write_barrier 缺少執行緒所有權驗證 | Invalid | Verified |
+| [2026-02-19_ISSUE_bug8_weak_is_alive_toctou.md](./2026-02-19_ISSUE_bug8_weak_is_alive_toctou.md) | Weak::is_alive() 存在 TOCTOU 競爭條件可能導致 Use-After-Free | Fixed | Verified |
 | [2026-02-19_ISSUE_bug9_weak_is_alive_refcount.md](./2026-02-19_ISSUE_bug9_weak_is_alive_refcount.md) | Weak::is_alive() 不檢查 ref_count 導致不一致行為 | Open | Not Verified |
 | [2026-02-19_ISSUE_bug10_gcbox_weak_ref_upgrade_construction.md](./2026-02-19_ISSUE_bug10_gcbox_weak_ref_upgrade_construction.md) | GcBoxWeakRef::upgrade() 缺少 is_under_construction 檢查 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug11_gchandle_origin_thread_terminated.md](./2026-02-19_ISSUE_bug11_gchandle_origin_thread_terminated.md) | GcHandle::resolve() 在原始執行緒終止後 panic | Open | Verified |
