@@ -165,6 +165,10 @@ impl<T: Trace + 'static> GcHandle<T> {
                 !gc_box.has_dead_flag(),
                 "GcHandle::resolve: object has been dropped (dead flag set)"
             );
+            assert!(
+                gc_box.dropping_state() == 0,
+                "GcHandle::resolve: object is being dropped"
+            );
             gc_box.inc_ref();
             Gc::from_raw(self.ptr.as_ptr() as *const u8)
         }
@@ -202,7 +206,10 @@ impl<T: Trace + 'static> GcHandle<T> {
         }
         unsafe {
             let gc_box = &*self.ptr.as_ptr();
-            if gc_box.is_under_construction() || gc_box.has_dead_flag() {
+            if gc_box.is_under_construction()
+                || gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+            {
                 return None;
             }
             gc_box.inc_ref();

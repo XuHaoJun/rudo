@@ -3,13 +3,12 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 53
-- **Open**: 5
+- **Fixed**: 58
 - **Invalid**: 4
 
 ### By Tags
-- **Verified**: 50
-- **Not Verified**: 6
+- **Verified**: 54
+- **Not Verified**: 2
 - **Not Reproduced**: 6
 
 ## All Issues
@@ -73,8 +72,8 @@
 | [2026-02-21_ISSUE_bug55_asyncgchandle_downcast_ref_missing_dead_check.md](./2026-02-21_ISSUE_bug55_asyncgchandle_downcast_ref_missing_dead_check.md) | AsyncGcHandle::downcast_ref() 缺少 Dead Flag 檢查導致潛在 UAF | Fixed | Verified |
 | [2026-02-21_ISSUE_bug56_gchandle_clone_missing_dead_check.md](./2026-02-21_ISSUE_bug56_gchandle_clone_missing_dead_check.md) | GcHandle::clone() Missing Dead Flag Check 導致潛在記憶體不安全 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md](./2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md) | Ephemeron<K,V> Trace 實作總是追蹤 value，導致記憶體無法正確回收 | Fixed | Verified |
-| [2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md](./2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md) | Weak::is_alive() 缺少 dropping_state 檢查導致不一致行為 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug59_gcrwlock_write_guard_drop_missing_satb.md](./2026-02-21_ISSUE_bug59_gcrwlock_write_guard_drop_missing_satb.md) | GcRwLockWriteGuard 與 GcMutexGuard Drop 時缺少 SATB Barrier 標記 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md](./2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md) | mark_page_dirty_for_ptr 未處理大型物件導致 Vec<Gc<T>> 追蹤失敗 | Open | Not Verified |
-| [2026-02-21_ISSUE_bug61_gcmutex_capture_gc_ptrs_try_lock.md](./2026-02-21_ISSUE_bug61_gcmutex_capture_gc_ptrs_try_lock.md) | GcMutex::capture_gc_ptrs_into() 使用 try_lock() 而非 lock()，與 GcRwLock 不一致 | Open | Verified |
-| [2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md](./2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md) | GcHandle::resolve() 與 GcHandle::try_resolve() 缺少 dropping_state 檢查 | Open | Not Verified |
+| [2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md](./2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md) | Weak::is_alive() 缺少 dropping_state 檢查導致不一致行為 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug59_gcrwlock_write_guard_drop_missing_satb.md](./2026-02-21_ISSUE_bug59_gcrwlock_write_guard_drop_missing_satb.md) | GcRwLockWriteGuard 與 GcMutexGuard Drop 時缺少 SATB Barrier 標記 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md](./2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md) | mark_page_dirty_for_ptr 未處理大型物件導致 Vec<Gc<T>> 追蹤失敗 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug61_gcmutex_capture_gc_ptrs_try_lock.md](./2026-02-21_ISSUE_bug61_gcmutex_capture_gc_ptrs_try_lock.md) | GcMutex::capture_gc_ptrs_into() 使用 try_lock() 而非 lock()，與 GcRwLock 不一致 | Fixed | Verified |
+| [2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md](./2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md) | GcHandle::resolve() 與 GcHandle::try_resolve() 缺少 dropping_state 檢查 | Fixed | Verified |

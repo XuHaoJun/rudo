@@ -674,9 +674,11 @@ impl<T: GcCapture + ?Sized> GcCapture for GcMutex<T> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Some(guard) = self.inner.try_lock() {
-            guard.capture_gc_ptrs_into(ptrs);
-        }
+        // Use blocking lock() to reliably capture all GC pointers, consistent with
+        // GcRwLock::capture_gc_ptrs_into(). try_lock() would silently miss pointers
+        // when a writer holds the lock, potentially breaking SATB.
+        let guard = self.inner.lock();
+        guard.capture_gc_ptrs_into(ptrs);
     }
 }
 

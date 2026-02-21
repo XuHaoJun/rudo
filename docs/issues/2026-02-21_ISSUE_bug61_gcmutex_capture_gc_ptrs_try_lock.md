@@ -1,6 +1,6 @@
 # [Bug]: GcMutex::capture_gc_ptrs_into() 使用 try_lock() 而非 lock()，與 GcRwLock 不一致
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -109,3 +109,9 @@ fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
 - 攻擊者可以嘗試長期持有 GcMutex 來干擾 GC 的 SATB 掃描
 - 這可能導致某些應為 live 的對象被錯誤回收（理論上）
 - 實際影響取決於具體使用模式和時序
+
+---
+
+## Resolution
+
+`GcMutex::capture_gc_ptrs_into()` 已改為使用阻塞的 `lock()`，與 `GcRwLock::capture_gc_ptrs_into()` 行為一致，確保 SATB 掃描時能正確捕獲所有 GC 指標。

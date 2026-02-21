@@ -1,7 +1,7 @@
 # [Bug]: GcRwLockWriteGuard 與 GcMutexGuard Drop 時缺少 SATB Barrier 標記
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -191,3 +191,9 @@ impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
 此 bug 與 bug32 (`GcMutex::try_lock` missing barrier) 相關但不同：
 - bug32: try_lock 缺少 acquire 時的 barrier
 - 本 bug: guard drop 時缺少 SATB barrier 標記
+
+---
+
+## Resolution
+
+sync.rs 中 `GcRwLockWriteGuard` 與 `GcMutexGuard` 的 Drop 已實作 SATB barrier：當 incremental marking 啟動時，會 capture 內部 GC 指標並呼叫 `mark_object_black()`。與 GcThreadSafeRefMut 行為一致。

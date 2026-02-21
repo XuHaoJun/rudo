@@ -1,7 +1,7 @@
 # [Bug]: mark_page_dirty_for_ptr 未處理大型物件導致 Vec<Gc<T>> 追蹤失敗
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -142,3 +142,9 @@ pub unsafe fn mark_page_dirty_for_ptr(ptr: *const u8) {
 
 **Geohot (Exploit 觀點):**
 如果攻擊者能夠控制大型物件的分配和釋放，可能利用此漏洞進行記憶體洩露攻擊。但目前看來，這更像是一個正確性問題而非安全性漏洞。
+
+---
+
+## Resolution
+
+`mark_page_dirty_for_ptr()` 已於 heap.rs 支援大型物件：先檢查 `large_object_map`（thread-local 與 segment_manager 全域），若 ptr 在大型物件 value 範圍內，則將 head page 加入 dirty_pages。

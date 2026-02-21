@@ -3220,13 +3220,37 @@ pub unsafe fn mark_page_dirty_for_ptr(ptr: *const u8) {
     }
 
     let page_addr = ptr as usize & page_mask();
+    let ptr_addr = ptr as usize;
 
     HEAP.with(|local| {
         let heap = unsafe { &mut *local.tcb.heap.get() };
 
+        // Handle large objects: ptr may be in any page of a multi-page large object
+        if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
+            if ptr_addr >= head_addr + h_size && ptr_addr < head_addr + h_size + size {
+                let header = unsafe { NonNull::new_unchecked(head_addr as *mut PageHeader) };
+                unsafe { heap.add_to_dirty_pages(header) };
+            }
+            return;
+        }
+
         if heap.small_pages.contains(&page_addr) {
             let header = unsafe { ptr_to_page_header(ptr) };
             unsafe { heap.add_to_dirty_pages(header) };
+            return;
+        }
+
+        // Cross-thread: ptr may be in another thread's large object (segment_manager has global map)
+        if let Some(&(head_addr, size, h_size)) = segment_manager()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .large_object_map
+            .get(&page_addr)
+        {
+            if ptr_addr >= head_addr + h_size && ptr_addr < head_addr + h_size + size {
+                let header = unsafe { NonNull::new_unchecked(head_addr as *mut PageHeader) };
+                unsafe { heap.add_to_dirty_pages(header) };
+            }
         }
     });
 }

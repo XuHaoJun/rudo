@@ -1,7 +1,7 @@
 # [Bug]: Weak::is_alive() 缺少 dropping_state 檢查導致不一致行為
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -173,5 +173,11 @@ pub fn is_alive(&self) -> bool {
 1. 攻擊者可能利用 `is_alive()` 返回 `true` 但 `upgrade()` 返回 `None` 的時間窗口
 2. 在並發場景下，這種不一致可能導致難以預測的行為
 3. 攻擊者可能利用這一點構造依賴時序的複雜攻擊
+
+---
+
+## Resolution
+
+`Weak::is_alive()` 已透過委派給 `upgrade().is_some()` 實作。`upgrade()` 會檢查 `has_dead_flag()` 與 `dropping_state()`，因此當物件為 dead 或處於 dropping 時，`is_alive()` 會回傳 `false`，與 `upgrade()` 行為一致。
 
 (End of file - total 186 lines)

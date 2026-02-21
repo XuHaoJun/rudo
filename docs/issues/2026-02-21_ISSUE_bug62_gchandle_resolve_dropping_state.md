@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::resolve() 與 GcHandle::try_resolve() 缺少 dropping_state 檢查
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -196,3 +196,9 @@ pub fn try_resolve(&self) -> Option<Gc<T>> {
 4. 利用新取得的 Gc<T> 訪問已釋放的記憶體
 
 這與傳統的 double-free 或 use-after-free 漏洞類似，可以導致記憶體 corruption 甚至 code execution。
+
+---
+
+## Resolution
+
+`GcHandle::resolve()` 與 `GcHandle::try_resolve()` 已新增 `dropping_state()` 檢查：resolve 在 dropping_state != 0 時 panic，try_resolve 在 dropping_state != 0 時回傳 None。
