@@ -1,7 +1,7 @@
 # [Bug]: GC_REQUESTED Relaxed Ordering Causes Missed GC Handshake
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -113,3 +113,16 @@ for tcb in &registry.threads {
 - 阻止 GC 執行
 - 導致記憶體無限增長（DoS）
 - 在極端情況下可能與其他 bug 組合造成記憶體腐敗
+
+---
+
+## Resolution
+
+**2026-02-21** — Changed `Ordering::Relaxed` to `Ordering::Release` for GC handshake stores:
+
+- **heap.rs** `request_gc_handshake()`: `GC_REQUESTED.store(true, Release)`, `tcb.gc_requested.store(true, Release)`
+- **heap.rs** `resume_all_threads()`: `tcb.gc_requested.store(false, Release)`, `GC_REQUESTED.store(false, Release)`
+- **heap.rs** `clear_gc_request()`: `tcb.gc_requested.store(false, Release)`, `GC_REQUESTED.store(false, Release)`
+- **gc.rs** non-collector path: `GC_REQUESTED.store(false, Release)`
+
+Mutator threads load these flags with `Acquire`; Release stores create the required synchronizes-with edges so all threads observe the GC request and clear.

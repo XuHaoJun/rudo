@@ -1,7 +1,7 @@
 # [Bug]: GcRwLock::capture_gc_ptrs_into 使用 try_read() 可能導致指標遺漏
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -178,3 +178,7 @@ fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
 1. 阻止 GC 正確掃描物件
 2. 導致記憶體洩漏（物件被錯誤保留）
 3. 在極端情況下可能導致不一致的 GC 狀態
+
+---
+
+**Resolution:** Replaced `try_read()` with blocking `read()` in `GcRwLock::capture_gc_ptrs_into()`. Now always captures inner GC pointers even when a writer holds the lock, ensuring SATB invariance.

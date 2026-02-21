@@ -1,7 +1,7 @@
 # [Bug]: GcMutex::try_lock() 缺少 Write Barrier 導致 SATB 不變性破壞
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

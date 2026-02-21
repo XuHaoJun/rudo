@@ -1,7 +1,7 @@
 # [Bug]: GcMutex 缺少 GcCapture 實作導致 SATB 屏障失效
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -153,3 +153,7 @@ impl<T: GcCapture + ?Sized> GcCapture for GcMutex<T> {
 4. 佔用已回收物件的記憶體布局，實現 use-after-free
 
 這與 bug32 (`GcMutex::try_lock` 缺少 write barrier) 是不同的問題 - bug32 是缺少 write barrier，本 issue 是缺少 GcCapture 實作。
+
+---
+
+**Resolution:** GcMutex already has `GcCapture` implementation at `sync.rs:665-680`, added as part of bug28. Uses `try_lock()` + `capture_gc_ptrs_into()` same as GcRwLock.

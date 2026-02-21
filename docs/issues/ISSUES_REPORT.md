@@ -3,13 +3,13 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 26
-- **Open**: 30
+- **Fixed**: 32
+- **Open**: 24
 - **Invalid**: 3
 
 ### By Tags
-- **Verified**: 22
-- **Not Verified**: 31
+- **Verified**: 28
+- **Not Verified**: 25
 - **Not Reproduced**: 6
 
 ## All Issues
@@ -44,12 +44,12 @@
 | [2026-02-19_ISSUE_bug27_weak_upgrade_toctou.md](./2026-02-19_ISSUE_bug27_weak_upgrade_toctou.md) | Weak::upgrade() ref_count Relaxed 載入導致 TOCTOU Use-After-Free | Fixed | Verified |
 | [2026-02-19_ISSUE_bug28_gcrwlock_capture_gc_ptrs_empty_slice.md](./2026-02-19_ISSUE_bug28_gcrwlock_capture_gc_ptrs_empty_slice.md) | GcRwLock::capture_gc_ptrs() 返回空切片導致 GC 遺漏內部指標 | Fixed | Verified |
 | [2026-02-20_ISSUE_bug29_gchandle_clone_unregister_race.md](./2026-02-20_ISSUE_bug29_gchandle_clone_unregister_race.md) | GcHandle clone()/unregister() Race 導致物件在 Root 移除後仍被視為 Root | Fixed | Verified |
-| [2026-02-20_ISSUE_bug30_gc_requested_relaxed_ordering.md](./2026-02-20_ISSUE_bug30_gc_requested_relaxed_ordering.md) | GC_REQUESTED Relaxed Ordering Causes Missed GC Handshake | Open | Not Verified |
-| [2026-02-20_ISSUE_bug31_weak_clone_toctou.md](./2026-02-20_ISSUE_bug31_weak_clone_toctou.md) | Weak::clone has TOCTOU race causing potential use-after-free | Open | Not Verified |
-| [2026-02-20_ISSUE_bug32_gcmutex_try_lock_missing_barrier.md](./2026-02-20_ISSUE_bug32_gcmutex_try_lock_missing_barrier.md) | GcMutex::try_lock() 缺少 Write Barrier 導致 SATB 不變性破壞 | Open | Not Verified |
-| [2026-02-20_ISSUE_bug33_gcmutex_missing_gccapture.md](./2026-02-20_ISSUE_bug33_gcmutex_missing_gccapture.md) | GcMutex 缺少 GcCapture 實作導致 SATB 屏障失效 | Open | Not Verified |
-| [2026-02-20_ISSUE_bug33_try_inc_ref_from_zero_resurrection.md](./2026-02-20_ISSUE_bug33_try_inc_ref_from_zero_resurrection.md) | try_inc_ref_from_zero 允許在有 weak references 時復活已死亡物件 | Open | Not Verified |
-| [2026-02-20_ISSUE_bug34_gcrwlock_capture_try_read.md](./2026-02-20_ISSUE_bug34_gcrwlock_capture_try_read.md) | GcRwLock::capture_gc_ptrs_into 使用 try_read() 可能導致指標遺漏 | Open | Not Verified |
+| [2026-02-20_ISSUE_bug30_gc_requested_relaxed_ordering.md](./2026-02-20_ISSUE_bug30_gc_requested_relaxed_ordering.md) | GC_REQUESTED Relaxed Ordering Causes Missed GC Handshake | Fixed | Verified |
+| [2026-02-20_ISSUE_bug31_weak_clone_toctou.md](./2026-02-20_ISSUE_bug31_weak_clone_toctou.md) | Weak::clone has TOCTOU race causing potential use-after-free | Fixed | Verified |
+| [2026-02-20_ISSUE_bug32_gcmutex_try_lock_missing_barrier.md](./2026-02-20_ISSUE_bug32_gcmutex_try_lock_missing_barrier.md) | GcMutex::try_lock() 缺少 Write Barrier 導致 SATB 不變性破壞 | Fixed | Verified |
+| [2026-02-20_ISSUE_bug33_gcmutex_missing_gccapture.md](./2026-02-20_ISSUE_bug33_gcmutex_missing_gccapture.md) | GcMutex 缺少 GcCapture 實作導致 SATB 屏障失效 | Fixed | Verified |
+| [2026-02-20_ISSUE_bug33_try_inc_ref_from_zero_resurrection.md](./2026-02-20_ISSUE_bug33_try_inc_ref_from_zero_resurrection.md) | try_inc_ref_from_zero 允許在有 weak references 時復活已死亡物件 | Fixed | Verified |
+| [2026-02-20_ISSUE_bug34_gcrwlock_capture_try_read.md](./2026-02-20_ISSUE_bug34_gcrwlock_capture_try_read.md) | GcRwLock::capture_gc_ptrs_into 使用 try_read() 可能導致指標遺漏 | Fixed | Verified |
 | [2026-02-20_ISSUE_bug35_std_rwlock_capture_try_read.md](./2026-02-20_ISSUE_bug35_std_rwlock_capture_try_read.md) | std::sync::RwLock 的 GcCapture 實作使用 try_read() 可能導致指標遺漏 | Open | Not Verified |
 | [2026-02-20_ISSUE_bug36_std_mutex_missing_gccapture.md](./2026-02-20_ISSUE_bug36_std_mutex_missing_gccapture.md) | std::sync::Mutex 缺少 GcCapture 實作導致指標遺漏 | Open | Not Verified |
 | [2026-02-20_ISSUE_bug37_arc_missing_gccapture.md](./2026-02-20_ISSUE_bug37_arc_missing_gccapture.md) | std::sync::Arc 缺少 GcCapture 實作導致指標遺漏 | Open | Not Verified |

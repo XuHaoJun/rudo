@@ -218,9 +218,9 @@ impl<T: Trace + ?Sized> GcBox<T> {
             let weak_count_raw = self.weak_count.load(Ordering::Acquire);
 
             let flags = weak_count_raw & Self::FLAGS_MASK;
-            let weak_count = weak_count_raw & !Self::FLAGS_MASK;
 
-            if flags != 0 && weak_count == 0 {
+            // Never resurrect a dead object; DEAD_FLAG means value was dropped.
+            if (flags & Self::DEAD_FLAG) != 0 {
                 return false;
             }
 
@@ -1758,25 +1758,30 @@ impl<T: Trace> Weak<T> {
 
 impl<T: Trace> Clone for Weak<T> {
     fn clone(&self) -> Self {
-        let ptr = self.ptr.load(Ordering::Relaxed);
-        if ptr.is_null() {
+        let ptr = self.ptr.load(Ordering::Acquire);
+        let Some(ptr) = ptr.as_option() else {
             return Self {
                 ptr: AtomicNullable::null(),
             };
-        }
+        };
         let ptr_addr = ptr.as_ptr() as usize;
         let alignment = std::mem::align_of::<GcBox<T>>();
-        if ptr_addr % alignment != 0 {
+        if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
             return Self {
                 ptr: AtomicNullable::null(),
             };
         }
-        let gc_box_ptr = ptr.as_ptr();
+        // Validate pointer is still in heap before dereferencing (avoids TOCTOU with sweep).
+        if !is_gc_box_pointer_valid(ptr_addr) {
+            return Self {
+                ptr: AtomicNullable::null(),
+            };
+        }
         unsafe {
-            (*gc_box_ptr).inc_weak();
+            (*ptr.as_ptr()).inc_weak();
         }
         Self {
-            ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(gc_box_ptr) }),
+            ptr: AtomicNullable::new(ptr),
         }
     }
 }

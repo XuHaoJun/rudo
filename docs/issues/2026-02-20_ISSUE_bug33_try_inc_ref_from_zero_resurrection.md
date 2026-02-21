@@ -1,7 +1,7 @@
 # [Bug]: try_inc_ref_from_zero 允許在有 weak references 時復活已死亡物件
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -169,3 +169,7 @@ if flags != 0 {
 6. 讀取殘餘的敏感數據（如果value有內部指標指向其他敏感數據）
 
 這是一個經典的TOCTOU + 邏輯缺陷組合漏洞。
+
+---
+
+**Resolution:** Replaced the incorrect `flags != 0 && weak_count == 0` condition with an explicit `(flags & DEAD_FLAG) != 0` check. Now `try_inc_ref_from_zero()` always rejects resurrection when `DEAD_FLAG` is set, regardless of weak_count.

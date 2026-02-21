@@ -1,7 +1,7 @@
 # [Bug]: Weak::clone has TOCTOU race causing potential use-after-free
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -166,3 +166,16 @@ This is exploitable in theory. If an attacker can control the timing, they could
 1. Create a GC object with a Weak reference
 2. Use-after-free to read/write the freed memory before it's reallocated
 3. The alignment check (`ptr_addr % alignment != 0`) is weak - it only catches obviously invalid pointers, not freed-but-reallocated ones
+
+---
+
+## Resolution
+
+**2026-02-21** — Fixed TOCTOU by validating before dereference and using Acquire:
+
+- Load ptr with `Ordering::Acquire` (sync with any store clearing the pointer).
+- Add `ptr_addr < MIN_VALID_HEAP_ADDRESS` check.
+- Add `is_gc_box_pointer_valid(ptr_addr)` before dereferencing — same pattern as `Weak::drop`. If invalid (object swept), return a dangling `Weak` (null ptr) instead of inc_weak.
+- Use `ptr.as_option()` for null handling.
+
+When the object was already collected, clone now returns a Weak that cannot upgrade, avoiding UAF.

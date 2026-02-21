@@ -619,7 +619,7 @@ pub fn collect_full() {
     } else {
         // We're not the collector - wake up any threads waiting in rendezvous
         // and perform single-threaded collection
-        crate::heap::GC_REQUESTED.store(false, Ordering::Relaxed);
+        crate::heap::GC_REQUESTED.store(false, Ordering::Release);
         wake_waiting_threads();
         perform_single_threaded_collect_full();
     }

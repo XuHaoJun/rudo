@@ -493,6 +493,8 @@ impl<T: ?Sized> GcMutex<T> {
     /// Returns `Some` with a mutex guard if the lock is not held,
     /// or `None` if the lock is currently held by another thread.
     ///
+    /// Triggers generational and SATB write barriers on acquisition, same as [`lock()`](Self::lock).
+    ///
     /// # Examples
     ///
     /// ```
@@ -512,9 +514,12 @@ impl<T: ?Sized> GcMutex<T> {
     where
         T: GcCapture,
     {
-        self.inner.try_lock().map(|guard| GcMutexGuard {
-            guard,
-            _marker: PhantomData,
+        self.inner.try_lock().map(|guard| {
+            self.trigger_write_barrier();
+            GcMutexGuard {
+                guard,
+                _marker: PhantomData,
+            }
         })
     }
 
@@ -641,9 +646,10 @@ impl<T: GcCapture + ?Sized> GcCapture for GcRwLock<T> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Some(value) = self.inner.try_read() {
-            value.capture_gc_ptrs_into(ptrs);
-        }
+        // Use blocking read() to reliably capture all GC pointers. try_read() would
+        // silently miss pointers when a writer holds the lock, breaking SATB.
+        let guard = self.inner.read();
+        guard.capture_gc_ptrs_into(ptrs);
     }
 }
 

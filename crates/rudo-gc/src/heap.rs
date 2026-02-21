@@ -653,7 +653,7 @@ pub fn resume_all_threads() {
     let mut woken_count = 0;
     for tcb in &registry.threads {
         if tcb.state.load(Ordering::Acquire) == THREAD_STATE_SAFEPOINT {
-            tcb.gc_requested.store(false, Ordering::Relaxed);
+            tcb.gc_requested.store(false, Ordering::Release);
             tcb.park_cond.notify_all();
             tcb.state.store(THREAD_STATE_EXECUTING, Ordering::Release);
             woken_count += 1;
@@ -667,8 +667,8 @@ pub fn resume_all_threads() {
         .fetch_add(woken_count, std::sync::atomic::Ordering::SeqCst);
     drop(registry);
 
-    // Clear global flag
-    GC_REQUESTED.store(false, Ordering::Relaxed);
+    // Clear global flag. Release so mutator threads' Acquire loads see the clear.
+    GC_REQUESTED.store(false, Ordering::Release);
 }
 
 /// Request all threads to stop at the next safe point.
@@ -682,11 +682,12 @@ pub fn request_gc_handshake() -> bool {
     let registry = thread_registry().lock().unwrap();
 
     // Set GC_REQUESTED flag first (before locking registry)
-    GC_REQUESTED.store(true, Ordering::Relaxed);
+    // Release ordering so mutator threads' Acquire loads see the request.
+    GC_REQUESTED.store(true, Ordering::Release);
 
     // Set per-thread gc_requested flag for all threads
     for tcb in &registry.threads {
-        tcb.gc_requested.store(true, Ordering::Relaxed);
+        tcb.gc_requested.store(true, Ordering::Release);
     }
 
     let active = registry.active_count.load(Ordering::Acquire);
@@ -751,10 +752,10 @@ pub fn wait_for_gc_complete() {
 pub fn clear_gc_request() {
     let registry = thread_registry().lock().unwrap();
     for tcb in &registry.threads {
-        tcb.gc_requested.store(false, Ordering::Relaxed);
+        tcb.gc_requested.store(false, Ordering::Release);
     }
     drop(registry);
-    GC_REQUESTED.store(false, Ordering::Relaxed);
+    GC_REQUESTED.store(false, Ordering::Release);
 }
 
 /// Get the list of all thread control blocks for scanning.
