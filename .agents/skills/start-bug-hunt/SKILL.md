@@ -26,6 +26,7 @@ Structured bug hunting workflow with parallel-world expert collaboration. Output
 
 - Analyze code, reproduce failure, or trace from symptoms.
 - Formulate clear expected vs actual behavior.
+- **CRITICAL STOPPING CONDITION**: If no bug is found during the analysis, **STOP THE WORKFLOW IMMEDIATELY**. Do not proceed to the next steps, do not create any issues, and report directly to the user that no bugs were found.
 
 ### Step 2: Check for Duplicates
 
