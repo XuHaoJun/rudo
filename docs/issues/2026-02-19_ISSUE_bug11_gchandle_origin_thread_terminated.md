@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::resolve() 在原始執行緒終止後 panic
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 
@@ -151,3 +151,9 @@ pub enum ResolveError {
 1. 等待目標執行緒終止
 2. 嘗試調用 resolve() 觸發 panic
 3. 觀察 panic 訊息可能洩露執行緒 ID 資訊
+
+---
+
+## Resolution (2026-02-21)
+
+**Fix (方案 1):** Improved documentation and panic messages. `resolve()` still panics when called from a non-origin thread (including when the origin has terminated), but the panic message now explicitly suggests using `try_resolve()` for fallible resolution. Docs for `resolve()`, `try_resolve()`, `is_valid()`, and `WeakCrossThreadHandle` were updated to clarify when to use `try_resolve()` (e.g., handles received after `join()` on the origin thread). No API change—`try_resolve()` already returns `None` in this case.

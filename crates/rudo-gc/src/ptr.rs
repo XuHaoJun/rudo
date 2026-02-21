@@ -319,6 +319,13 @@ impl<T: Trace + ?Sized> GcBox<T> {
         self.weak_count
             .fetch_or(Self::GEN_OLD_FLAG, Ordering::Relaxed);
     }
+
+    /// Clear `GEN_OLD_FLAG`. Used when deallocating so reused slots don't inherit stale state.
+    #[inline]
+    pub(crate) fn clear_gen_old(&self) {
+        self.weak_count
+            .fetch_and(!Self::GEN_OLD_FLAG, Ordering::Relaxed);
+    }
 }
 
 impl<T: Trace> GcBox<T> {

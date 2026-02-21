@@ -88,8 +88,8 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// Returns `true` if the underlying object is still alive.
     ///
     /// For strong handles this is `true` while the handle is registered.
-    /// Returns `false` if the handle was unregistered or if the origin thread's
-    /// heap was torn down (in which case [`resolve()`] would panic).
+    /// Returns `false` if the handle was unregistered. Note: when the origin
+    /// thread has terminated, [`resolve()`] will panic (use [`try_resolve()`]).
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.handle_id != HandleId::INVALID
@@ -124,8 +124,9 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// the case where the origin thread has already terminated, since the current
     /// thread can never match a terminated thread's ID.
     ///
-    /// When thread affinity is uncertain (e.g., callbacks that may run on different
-    /// threads), use [`try_resolve()`] instead to get `None` instead of panicking.
+    /// **When the origin thread may have terminated** (e.g., handles passed to a
+    /// main thread after a worker joins), use [`try_resolve()`] instead to get
+    /// `None` without panicking.
     ///
     /// # Example
     ///
@@ -147,8 +148,8 @@ impl<T: Trace + 'static> GcHandle<T> {
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,
-            "GcHandle::resolve() must be called on the origin thread \
-             (origin={:?}, current={:?})",
+            "GcHandle::resolve() must be called on the origin thread (origin={:?}, current={:?}). \
+             If the origin thread has terminated, use try_resolve() instead to get None.",
             self.origin_thread,
             std::thread::current().id(),
         );
@@ -166,7 +167,8 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// - Called from a thread other than the origin thread, or
     /// - The origin thread has already terminated.
     ///
-    /// Use this instead of [`resolve()`] when thread affinity is uncertain.
+    /// Use this instead of [`resolve()`] when the origin thread may have terminated
+    /// (e.g., handle received after `join()` on the origin thread).
     ///
     /// # Example
     ///
@@ -349,14 +351,16 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     ///
     /// # Panics
     ///
-    /// Panics if called from a thread other than the origin thread,
-    /// because `T` may be `!Send`.
+    /// Panics if called from a thread other than the origin thread (including
+    /// when the origin thread has terminated). Use [`try_resolve()`] for
+    /// fallible resolution.
     #[track_caller]
     pub fn resolve(&self) -> Option<Gc<T>> {
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,
-            "WeakCrossThreadHandle::resolve() must be called on the origin thread"
+            "WeakCrossThreadHandle::resolve() must be called on the origin thread. \
+             If the origin thread has terminated, use try_resolve() instead."
         );
         // Weak handle does not prevent collection. Check liveness first.
         self.weak.upgrade()
@@ -364,6 +368,8 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
 
     /// Tries to resolve, returning `None` if called from wrong thread
     /// or if the object has been collected.
+    ///
+    /// Use this when the origin thread may have terminated.
     #[must_use]
     pub fn try_resolve(&self) -> Option<Gc<T>> {
         if std::thread::current().id() != self.origin_thread {
@@ -396,14 +402,15 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     ///
     /// # Panics
     ///
-    /// Panics if called from a thread other than the origin thread,
-    /// because `T` may be `!Send`.
+    /// Panics if called from a thread other than the origin thread (including
+    /// when it has terminated). Prefer [`try_resolve()`] when origin may be dead.
     #[track_caller]
     pub fn try_upgrade(&self) -> Option<Gc<T>> {
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,
-            "WeakCrossThreadHandle::try_upgrade() must be called on the origin thread"
+            "WeakCrossThreadHandle::try_upgrade() must be called on the origin thread. \
+             If the origin thread has terminated, use try_resolve() instead."
         );
         self.weak.try_upgrade()
     }

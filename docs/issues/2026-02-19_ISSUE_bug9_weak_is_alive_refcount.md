@@ -1,7 +1,7 @@
 # [Bug]: Weak::is_alive() 不檢查 ref_count 導致不一致行為
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -134,3 +134,9 @@ pub fn is_alive(&self) -> bool {
 1. 依賴 `is_alive()` 返回 true 來假設物件有效
 2. 實際上 `upgrade()` 會返回 None
 3. 可能導致邏輯錯誤而非記憶體錯誤
+
+---
+
+## Resolution (2026-02-21)
+
+**Fix:** Already resolved by Bug 8 fix. `is_alive()` now delegates to `self.upgrade().is_some()`. Since `upgrade()` returns `None` when `ref_count == 0`, `is_alive()` and `upgrade()` are inherently consistent. No code changes required.

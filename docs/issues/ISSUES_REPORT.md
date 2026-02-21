@@ -3,13 +3,13 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 14
-- **Open**: 42
+- **Fixed**: 18
+- **Open**: 38
 - **Invalid**: 2
 
 ### By Tags
-- **Verified**: 13
-- **Not Verified**: 40
+- **Verified**: 15
+- **Not Verified**: 38
 - **Not Reproduced**: 5
 
 ## All Issues
@@ -24,15 +24,15 @@
 | [2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md](./2026-02-19_ISSUE_bug6_multi_page_gccell_barrier.md) | Multi-Page Large Object 的 GcCell Write Barrier 在 Tail Pages 上失效 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md](./2026-02-19_ISSUE_bug7_unified_barrier_thread_check.md) | unified_write_barrier 缺少執行緒所有權驗證 | Invalid | Verified |
 | [2026-02-19_ISSUE_bug8_weak_is_alive_toctou.md](./2026-02-19_ISSUE_bug8_weak_is_alive_toctou.md) | Weak::is_alive() 存在 TOCTOU 競爭條件可能導致 Use-After-Free | Fixed | Verified |
-| [2026-02-19_ISSUE_bug9_weak_is_alive_refcount.md](./2026-02-19_ISSUE_bug9_weak_is_alive_refcount.md) | Weak::is_alive() 不檢查 ref_count 導致不一致行為 | Open | Not Verified |
+| [2026-02-19_ISSUE_bug9_weak_is_alive_refcount.md](./2026-02-19_ISSUE_bug9_weak_is_alive_refcount.md) | Weak::is_alive() 不檢查 ref_count 導致不一致行為 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug10_gcbox_weak_ref_upgrade_construction.md](./2026-02-19_ISSUE_bug10_gcbox_weak_ref_upgrade_construction.md) | GcBoxWeakRef::upgrade() 缺少 is_under_construction 檢查 | Fixed | Verified |
-| [2026-02-19_ISSUE_bug11_gchandle_origin_thread_terminated.md](./2026-02-19_ISSUE_bug11_gchandle_origin_thread_terminated.md) | GcHandle::resolve() 在原始執行緒終止後 panic | Open | Verified |
+| [2026-02-19_ISSUE_bug11_gchandle_origin_thread_terminated.md](./2026-02-19_ISSUE_bug11_gchandle_origin_thread_terminated.md) | GcHandle::resolve() 在原始執行緒終止後 panic | Fixed | Verified |
 | [2026-02-19_ISSUE_bug12_generational_barrier_docs_inconsistent.md](./2026-02-19_ISSUE_bug12_generational_barrier_docs_inconsistent.md) | is_generational_barrier_active() 與文檔不一致 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug13_dead_code_write_barrier.md](./2026-02-19_ISSUE_bug13_dead_code_write_barrier.md) | GcCell::write_barrier() 是永遠不會被調用的死代碼 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug14_gcthreadsafecell_satb_overflow_ignored.md](./2026-02-19_ISSUE_bug14_gcthreadsafecell_satb_overflow_ignored.md) | GcThreadSafeCell::borrow_mut() 忽略 record_satb_old_value 返回值導致 SATB 不變性破壞 | Fixed | Verified |
-| [2026-02-19_ISSUE_bug15_gcthreadsaferefmut_drop_uaf.md](./2026-02-19_ISSUE_bug15_gcthreadsaferefmut_drop_uaf.md) | GcThreadSafeRefMut::drop() 可能於並髮標記期間導致 UAF | Open | Not Verified |
+| [2026-02-19_ISSUE_bug15_gcthreadsaferefmut_drop_uaf.md](./2026-02-19_ISSUE_bug15_gcthreadsaferefmut_drop_uaf.md) | GcThreadSafeRefMut::drop() 可能於並髮標記期間導致 UAF | Fixed | Verified |
 | [2026-02-19_ISSUE_bug16_scan_page_redundant_index.md](./2026-02-19_ISSUE_bug16_scan_page_redundant_index.md) | scan_page_for_marked_refs 冗餘的物件索引計算 | Fixed | Verified |
-| [2026-02-19_ISSUE_bug17_gen_old_flag_not_cleared.md](./2026-02-19_ISSUE_bug17_gen_old_flag_not_cleared.md) | GEN_OLD_FLAG 在物件釋放時未被清除，導致重新配置後產生錯誤的 barrier 行為 | Open | Not Reproduced |
+| [2026-02-19_ISSUE_bug17_gen_old_flag_not_cleared.md](./2026-02-19_ISSUE_bug17_gen_old_flag_not_cleared.md) | GEN_OLD_FLAG 在物件釋放時未被清除，導致重新配置後產生錯誤的 barrier 行為 | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug18_gcrwlock_gcmutex_drop_missing_satb.md](./2026-02-19_ISSUE_bug18_gcrwlock_gcmutex_drop_missing_satb.md) | GcRwLockWriteGuard 與 GcMutexGuard 缺少 Drop 時的 SATB Barrier，導致修改後的 GC 指針可能未被標記 | Open | Not Verified |
 | [2026-02-19_ISSUE_bug19_gcscope_spawn_bounds_check.md](./2026-02-19_ISSUE_bug19_gcscope_spawn_bounds_check.md) | GcScope::spawn Missing Bounds Check Causes Buffer Overflow | Open | Not Verified |
 | [2026-02-19_ISSUE_bug20_cross_thread_satb_buffer_unbounded.md](./2026-02-19_ISSUE_bug20_cross_thread_satb_buffer_unbounded.md) | Cross-Thread SATB Buffer Unbounded Growth Potential | Open | Not Verified |

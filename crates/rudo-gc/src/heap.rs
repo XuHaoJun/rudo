@@ -2515,6 +2515,9 @@ impl LocalHeap {
                                 unsafe { ((*gc_box_ptr).drop_fn)(obj_ptr) };
                             }
 
+                            // Clear GEN_OLD_FLAG so reused slots don't inherit stale barrier state.
+                            unsafe { (*gc_box_ptr).clear_gen_old() }
+
                             // Add back to free list
                             unsafe {
                                 let mut next_head = (*header).free_list_head();

@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeRefMut::drop() 可能於並髮標記期間導致 UAF
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -120,3 +120,9 @@ fn main() {
 
 **Geohot (Exploit 觀點):**
 這是一個經典的 TOCTOU (Time-of-Check to Time-of-Use) 漏洞。攻擊者可能透過精心設計的時序來觸發這個 race condition，特別是在即時系統或即時效能要求高的環境中。雖然利用難度較高，但一旦成功可以實現任意記憶體讀寫。建議添加時間戳記或版本號來檢測物件是否在標記期間被回收。
+
+---
+
+## Resolution (2026-02-21)
+
+**Fix (建議方案 4):** Added `is_allocated(idx)` check in `mark_object_black()` before marking. When `GcThreadSafeRefMut::drop` runs and calls `mark_object_black` on pointers from the cell, the referenced object may have been swept already (race with GC). Without the check, `set_mark` would touch page metadata for a freed slot, risking UAF if the page was reused. The new check skips marking when `!is_allocated(idx)`, ensuring we never modify metadata for swept objects.

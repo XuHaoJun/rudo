@@ -1,6 +1,6 @@
 # [Bug]: GEN_OLD_FLAG 在物件釋放時未被清除，導致重新配置後產生錯誤的 barrier 行為
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Not Reproduced
 
 
@@ -145,3 +145,9 @@ pub unsafe fn allocate(&mut self, size: usize, ..) -> Option<NonNull<u8>> {
 3. 進行記憶體佈局預測攻擊
 
 建議添加額外的安全檢查，例如在 barrier 中驗證物件是否真的處於 OLD 世代。
+
+---
+
+## Resolution (2026-02-21)
+
+**Fix:** Clear `GEN_OLD_FLAG` in `LocalHeap::dealloc()` before adding the object to the free list. Added `GcBox::clear_gen_old()` in ptr.rs and call it from the small-object dealloc path. Ensures reused slots start with a clean `weak_count`, preventing incorrect generational barrier early-exit.

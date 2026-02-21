@@ -916,14 +916,22 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
 /// Get the object index for a pointer and mark it black.
 ///
 /// Returns the index if successful, None otherwise.
+///
+/// Skips marking if the object has been swept (`!is_allocated`), preventing
+/// use-after-free when `GcThreadSafeRefMut::drop` runs concurrently with GC sweep.
 #[inline]
 #[allow(clippy::missing_safety_doc)]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
     if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
         let header = crate::heap::ptr_to_page_header(ptr);
-        if !(*header.as_ptr()).is_marked(idx) {
-            (*header.as_ptr()).set_mark(idx);
+        let h = header.as_ptr();
+        // Skip if object was swept; avoids UAF when Drop runs during/concurrent with sweep.
+        if !(*h).is_allocated(idx) {
+            return None;
+        }
+        if !(*h).is_marked(idx) {
+            (*h).set_mark(idx);
             return Some(idx);
         }
     }
