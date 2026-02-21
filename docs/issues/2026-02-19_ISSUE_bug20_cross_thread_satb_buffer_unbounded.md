@@ -1,7 +1,7 @@
 # [Bug]: Cross-Thread SATB Buffer Unbounded Growth Potential
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Not Reproduced
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -121,3 +121,9 @@ pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) {
 
 **Geohot (Exploit 觀點):**
 從攻擊者的角度來看，這是一個潛在的 DoS 攻擊向量。攻擊者可以通過觸發大量跨執行緒 mutation 來消耗系統記憶體，導致服務癱瘓。特別是在多租戶環境中，一個客戶端的攻擊可能會影響到其他客戶端。
+
+---
+
+## Resolution Note
+
+**Fix applied (2025-02):** Added `MAX_CROSS_THREAD_SATB_SIZE` (1M entries) and bounds check in `push_cross_thread_satb`. When the buffer reaches the limit, `request_fallback(FallbackReason::SatbBufferOverflow)` is called and the push is skipped, preventing unbounded growth. Refactored `record_satb_old_value` to use `push_cross_thread_satb` so both call paths share the same bounded logic.

@@ -22,6 +22,10 @@ use sys_alloc::{Mmap, MmapOptions};
 use crate::handles::{AsyncScopeData, AsyncScopeEntry, LocalHandles};
 use crate::ptr::GcBox;
 
+/// Maximum entries in the cross-thread SATB buffer before requesting fallback.
+/// Prevents unbounded memory growth when many threads mutate shared GC objects.
+const MAX_CROSS_THREAD_SATB_SIZE: usize = 1024 * 1024;
+
 /// Global SATB buffer for cross-thread mutations.
 /// When a mutation occurs on a different thread than the allocating thread,
 /// the SATB old value is recorded here instead of the thread-local buffer.
@@ -1816,9 +1820,7 @@ impl LocalHeap {
         let allocating_thread_id = unsafe { get_allocating_thread_id(gc_box.as_ptr() as usize) };
 
         if current_thread_id != allocating_thread_id && allocating_thread_id != 0 {
-            CROSS_THREAD_SATB_BUFFER
-                .lock()
-                .push(gc_box.as_ptr() as usize);
+            Self::push_cross_thread_satb(gc_box);
             return true;
         }
 
@@ -1843,10 +1845,15 @@ impl LocalHeap {
 
     /// Push a GC pointer to the cross-thread SATB buffer.
     /// Used when recording SATB old values from threads without a GC heap.
+    /// Requests fallback when buffer exceeds capacity to prevent unbounded growth.
     pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) {
-        CROSS_THREAD_SATB_BUFFER
-            .lock()
-            .push(gc_ptr.as_ptr() as usize);
+        let mut buffer = CROSS_THREAD_SATB_BUFFER.lock();
+        if buffer.len() >= MAX_CROSS_THREAD_SATB_SIZE {
+            crate::gc::incremental::IncrementalMarkState::global()
+                .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
+            return;
+        }
+        buffer.push(gc_ptr.as_ptr() as usize);
     }
 
     fn satb_buffer_overflowed(&mut self) -> bool {

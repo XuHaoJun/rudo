@@ -1,7 +1,7 @@
 # [Bug]: GcScope::spawn Missing Bounds Check Causes Buffer Overflow
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -128,3 +128,9 @@ validate_gc_in_current_heap(tracked.ptr as *const u8);
 
 **Geohot (Exploit 觀點):**
 從攻擊者的角度來看，這個 bug 提供了一個 Controlled Write Primitive。攻擊者可以通過控制 `tracked` 向量的大小，選擇性地覆蓋陣列後面的記憶體。雖然 `HandleBlock` 是動態分配的，但相鄰的記憶體区域可能包含關鍵的 GC 資料結構（如其他 GcBox 指標或元資料）。在某些情況下，這可能導致任意指標寫入，進而實現更嚴重的攻擊。
+
+---
+
+## Resolution Note
+
+**Fix applied (2025-02):** Added bounds check in `GcScope::spawn` immediately after `fetch_add(1, Ordering::Relaxed)`: if `used >= HANDLE_BLOCK_SIZE`, panic with a clear message. Also removed the unused `F` type parameter from the `spawn` signature that was causing inference failures. Added regression test `tests/bug19_gcscope_spawn_bounds_check.rs` that verifies panic when tracking 257 objects.

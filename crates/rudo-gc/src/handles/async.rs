@@ -1037,9 +1037,8 @@ impl GcScope {
     /// }
     /// ```
     #[inline]
-    pub async fn spawn<F, R>(&self, f: impl FnOnce(Vec<AsyncGcHandle>) -> R) -> R::Output
+    pub async fn spawn<R>(&self, f: impl FnOnce(Vec<AsyncGcHandle>) -> R) -> R::Output
     where
-        F: std::future::Future<Output = R>,
         R: std::future::Future,
     {
         let tcb = crate::heap::current_thread_control_block()
@@ -1053,6 +1052,11 @@ impl GcScope {
             .iter()
             .map(|tracked| {
                 let used = unsafe { &*scope.data.used.get() }.fetch_add(1, Ordering::Relaxed);
+                if used >= HANDLE_BLOCK_SIZE {
+                    panic!(
+                        "GcScope::spawn: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})"
+                    );
+                }
 
                 validate_gc_in_current_heap(tracked.ptr as *const u8);
 

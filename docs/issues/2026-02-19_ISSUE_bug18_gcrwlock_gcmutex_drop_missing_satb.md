@@ -1,7 +1,7 @@
 # [Bug]: GcRwLockWriteGuard 與 GcMutexGuard 缺少 Drop 時的 SATB Barrier，導致修改後的 GC 指針可能未被標記
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -188,3 +188,9 @@ impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
 4. 實現記憶體佈局控制
 
 這為(use-after-free) 攻擊開闢了可能性。
+
+---
+
+## Resolution Note
+
+**Fix applied (2025-02):** Added SATB barrier logic to `GcRwLockWriteGuard` and `GcMutexGuard` drop implementations, mirroring `GcThreadSafeRefMut`. When incremental marking is active, both guards now call `capture_gc_ptrs_into` on the inner value and mark each captured pointer via `mark_object_black`, ensuring modifications made while holding the lock are visible to the GC. This required adding a `T: GcCapture` bound to the write guard types and to `write()`, `try_write()`, `lock()`, and `try_lock()`; no-op `GcCapture` impls were added for primitives (i32, u32, etc.), `str`, and `String` in the crate.

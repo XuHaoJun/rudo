@@ -3,14 +3,14 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 18
-- **Open**: 38
+- **Fixed**: 21
+- **Open**: 36
 - **Invalid**: 2
 
 ### By Tags
-- **Verified**: 15
-- **Not Verified**: 38
-- **Not Reproduced**: 5
+- **Verified**: 17
+- **Not Verified**: 36
+- **Not Reproduced**: 6
 
 ## All Issues
 
@@ -33,9 +33,9 @@
 | [2026-02-19_ISSUE_bug15_gcthreadsaferefmut_drop_uaf.md](./2026-02-19_ISSUE_bug15_gcthreadsaferefmut_drop_uaf.md) | GcThreadSafeRefMut::drop() 可能於並髮標記期間導致 UAF | Fixed | Verified |
 | [2026-02-19_ISSUE_bug16_scan_page_redundant_index.md](./2026-02-19_ISSUE_bug16_scan_page_redundant_index.md) | scan_page_for_marked_refs 冗餘的物件索引計算 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug17_gen_old_flag_not_cleared.md](./2026-02-19_ISSUE_bug17_gen_old_flag_not_cleared.md) | GEN_OLD_FLAG 在物件釋放時未被清除，導致重新配置後產生錯誤的 barrier 行為 | Fixed | Not Reproduced |
-| [2026-02-19_ISSUE_bug18_gcrwlock_gcmutex_drop_missing_satb.md](./2026-02-19_ISSUE_bug18_gcrwlock_gcmutex_drop_missing_satb.md) | GcRwLockWriteGuard 與 GcMutexGuard 缺少 Drop 時的 SATB Barrier，導致修改後的 GC 指針可能未被標記 | Open | Not Verified |
-| [2026-02-19_ISSUE_bug19_gcscope_spawn_bounds_check.md](./2026-02-19_ISSUE_bug19_gcscope_spawn_bounds_check.md) | GcScope::spawn Missing Bounds Check Causes Buffer Overflow | Open | Not Verified |
-| [2026-02-19_ISSUE_bug20_cross_thread_satb_buffer_unbounded.md](./2026-02-19_ISSUE_bug20_cross_thread_satb_buffer_unbounded.md) | Cross-Thread SATB Buffer Unbounded Growth Potential | Open | Not Verified |
+| [2026-02-19_ISSUE_bug18_gcrwlock_gcmutex_drop_missing_satb.md](./2026-02-19_ISSUE_bug18_gcrwlock_gcmutex_drop_missing_satb.md) | GcRwLockWriteGuard 與 GcMutexGuard 缺少 Drop 時的 SATB Barrier，導致修改後的 GC 指針可能未被標記 | Fixed | Verified |
+| [2026-02-19_ISSUE_bug19_gcscope_spawn_bounds_check.md](./2026-02-19_ISSUE_bug19_gcscope_spawn_bounds_check.md) | GcScope::spawn Missing Bounds Check Causes Buffer Overflow | Fixed | Verified |
+| [2026-02-19_ISSUE_bug20_cross_thread_satb_buffer_unbounded.md](./2026-02-19_ISSUE_bug20_cross_thread_satb_buffer_unbounded.md) | Cross-Thread SATB Buffer Unbounded Growth Potential | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug21_scan_page_redundant_index_check.md](./2026-02-19_ISSUE_bug21_scan_page_redundant_index_check.md) | Redundant Index Check in scan_page_for_marked_refs | Fixed | Verified |
 | [2026-02-19_ISSUE_bug22_hashmap_gccapture_iterator_invalidation.md](./2026-02-19_ISSUE_bug22_hashmap_gccapture_iterator_invalidation.md) | HashMap GcCapture Potential Iterator Invalidation | Open | Not Verified |
 | [2026-02-19_ISSUE_bug23_gcthreadsafecell_gccapture_data_race.md](./2026-02-19_ISSUE_bug23_gcthreadsafecell_gccapture_data_race.md) | GcThreadSafeCell GcCapture Implementation Data Race | Open | Not Verified |
@@ -74,3 +74,4 @@
 | [2026-02-21_ISSUE_bug56_gchandle_clone_missing_dead_check.md](./2026-02-21_ISSUE_bug56_gchandle_clone_missing_dead_check.md) | GcHandle::clone() Missing Dead Flag Check 導致潛在記憶體不安全 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md](./2026-02-21_ISSUE_bug57_ephemeron_trace_always_traces_value.md) | Ephemeron<K,V> Trace 實作總是追蹤 value，導致記憶體無法正確回收 | Open | Not Verified |
 | [2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md](./2026-02-21_ISSUE_bug58_weak_is_alive_missing_dropping_state.md) | Weak::is_alive() 缺少 dropping_state 檢查導致不一致行為 | Open | Not Verified |
+| [2026-02-21_ISSUE_bug59_gcrwlock_write_guard_drop_missing_satb.md](./2026-02-21_ISSUE_bug59_gcrwlock_write_guard_drop_missing_satb.md) | GcRwLockWriteGuard 與 GcMutexGuard Drop 時缺少 SATB Barrier 標記 | Open | Not Verified |

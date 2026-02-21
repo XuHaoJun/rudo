@@ -624,6 +624,84 @@ macro_rules! impl_gc_capture {
     };
 }
 
+// Primitives: no-op GcCapture so GcRwLock/GcMutex guards can require T: GcCapture on drop.
+impl GcCapture for i8 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for i16 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for i32 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for i64 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for i128 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for u8 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for u16 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for u32 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for u64 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for u128 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for usize {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for isize {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for bool {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for f32 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for f64 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for char {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for () {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for str {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for String {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] { &[] }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+
 // SAFETY: GcCell is Trace if T is Trace.
 // It just traces the inner value.
 //
