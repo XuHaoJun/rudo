@@ -145,6 +145,10 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// ```
     #[track_caller]
     pub fn resolve(&self) -> Gc<T> {
+        assert!(
+            self.handle_id != HandleId::INVALID,
+            "GcHandle::resolve: handle has been unregistered"
+        );
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,
@@ -201,6 +205,9 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// ```
     #[must_use]
     pub fn try_resolve(&self) -> Option<Gc<T>> {
+        if self.handle_id == HandleId::INVALID {
+            return None;
+        }
         if std::thread::current().id() != self.origin_thread {
             return None;
         }
