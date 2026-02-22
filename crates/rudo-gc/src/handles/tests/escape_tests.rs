@@ -39,8 +39,7 @@ fn test_gc_from_raw_does_not_increment_refcount() {
     );
 
     drop(gc);
-    assert_eq!(Gc::ref_count(&gc2).get(), 1);
-
+    // gc2 points to freed memory (from_raw did not inc_ref); ref_count would panic per docs.
     drop(gc2);
 }
 

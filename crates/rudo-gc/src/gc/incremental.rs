@@ -471,9 +471,7 @@ pub fn write_barrier_needed() -> bool {
 
 pub fn is_generational_barrier_active() -> bool {
     let state = IncrementalMarkState::global();
-    state.enabled.load(Ordering::Relaxed)
-        && !state.fallback_requested()
-        && is_incremental_marking_active()
+    state.enabled.load(Ordering::Relaxed) && !state.fallback_requested()
 }
 
 #[allow(clippy::significant_drop_tightening)]
@@ -670,6 +668,12 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
             dirty_scanned += scan_page_for_marked_refs(page_ptr, state);
         }
     }
+    // Scan overflow pages added by write barriers during snapshot (bug45)
+    for page_ptr in heap.drain_dirty_pages_overflow() {
+        unsafe {
+            dirty_scanned += scan_page_for_marked_refs(page_ptr, state);
+        }
+    }
     heap.clear_dirty_pages_snapshot();
     state
         .stats()
@@ -767,17 +771,13 @@ unsafe fn scan_page_for_marked_refs(
         if (*header).is_allocated(i) && !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
             refs_found += 1;
-            if let Some(idx) = crate::heap::ptr_to_object_index(obj_ptr.cast()) {
-                if !(*header).is_marked(idx) {
-                    (*header).set_mark(idx);
-                    #[allow(clippy::cast_ptr_alignment)]
-                    #[allow(clippy::unnecessary_cast)]
-                    #[allow(clippy::ptr_as_ptr)]
-                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                    if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
-                        state.push_work(gc_box);
-                    }
-                }
+            (*header).set_mark(i);
+            #[allow(clippy::cast_ptr_alignment)]
+            #[allow(clippy::unnecessary_cast)]
+            #[allow(clippy::ptr_as_ptr)]
+            let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+            if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
+                state.push_work(gc_box);
             }
         }
     }
@@ -841,6 +841,12 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
 
         let snapshot_count = heap.take_dirty_pages_snapshot();
         for page_ptr in heap.dirty_pages_iter() {
+            unsafe {
+                scan_page_for_unmarked_refs(page_ptr, state.stats());
+            }
+        }
+        // Scan overflow pages added during snapshot (bug45)
+        for page_ptr in heap.drain_dirty_pages_overflow() {
             unsafe {
                 scan_page_for_unmarked_refs(page_ptr, state.stats());
             }
@@ -922,14 +928,22 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
 /// Get the object index for a pointer and mark it black.
 ///
 /// Returns the index if successful, None otherwise.
+///
+/// Skips marking if the object has been swept (`!is_allocated`), preventing
+/// use-after-free when `GcThreadSafeRefMut::drop` runs concurrently with GC sweep.
 #[inline]
 #[allow(clippy::missing_safety_doc)]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
     if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
         let header = crate::heap::ptr_to_page_header(ptr);
-        if !(*header.as_ptr()).is_marked(idx) {
-            (*header.as_ptr()).set_mark(idx);
+        let h = header.as_ptr();
+        // Skip if object was swept; avoids UAF when Drop runs during/concurrent with sweep.
+        if !(*h).is_allocated(idx) {
+            return None;
+        }
+        if !(*h).is_marked(idx) {
+            (*h).set_mark(idx);
             return Some(idx);
         }
     }

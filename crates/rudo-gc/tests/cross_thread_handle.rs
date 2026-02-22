@@ -154,6 +154,31 @@ fn test_drop_from_foreign_thread() {
     assert_eq!(resolved.value, 42);
 }
 
+/// Test that cloning an unregistered handle panics (Bug 29 - clone/unregister TOCTOU fix).
+#[test]
+#[should_panic(expected = "cannot clone an unregistered GcHandle")]
+fn test_clone_unregistered_handle_panics() {
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let mut handle = gc.cross_thread_handle();
+    handle.unregister();
+    let _ = handle.clone();
+}
+
+/// Test clone-then-unregister: cloned handle keeps object alive (expected behavior).
+#[test]
+fn test_clone_then_unregister_cloned_keeps_alive() {
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let handle = gc.cross_thread_handle();
+    let cloned = handle.clone();
+    drop(gc);
+    let mut handle = handle;
+    handle.unregister();
+    drop(handle);
+    rudo_gc::collect_full();
+    let resolved = cloned.resolve();
+    assert_eq!(resolved.value, 42);
+}
+
 /// Test `is_valid()` checks.
 #[test]
 fn test_is_valid_checks() {
@@ -410,18 +435,15 @@ fn test_cross_thread_handle_survives_major_gc() {
     let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
     let handle = gc.cross_thread_handle();
 
-    // Drop the original reference
+    // Drop the original reference. The handle holds a ref, so the value is NOT dropped yet.
     drop(gc);
 
-    // Verify original was collected
+    // Object should NOT be dropped yet - handle keeps it alive via ref count
     assert_eq!(
         DROP_COUNT.load(Ordering::SeqCst),
-        1,
-        "Original Gc reference should have been dropped"
+        0,
+        "Object should not be dropped while handle holds ref"
     );
-
-    // Reset for next check
-    DROP_COUNT.store(0, Ordering::SeqCst);
 
     // Allocate >10MB to force major GC (triggers actual collection)
     let mut allocations = Vec::with_capacity(1024);
@@ -481,7 +503,7 @@ fn test_cross_thread_handle_thread_exit_before_gc() {
     //
     // SAFETY: At this point:
     // - The spawned thread has already stored the handle and exited
-    // - The handle holds Arc<TCB>, so cross_thread_roots is valid
+    // - The handle's roots were migrated to the orphan table; handle holds Weak<TCB>
     // - The handle incremented ref count at creation (see cross_thread_handle())
     // - Dropping `gc` only drops our local Gc<T> wrapper, not the GcBox ref count
     // - The object cannot be collected because the handle root keeps it alive

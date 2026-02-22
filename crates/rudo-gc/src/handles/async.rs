@@ -1037,9 +1037,8 @@ impl GcScope {
     /// }
     /// ```
     #[inline]
-    pub async fn spawn<F, R>(&self, f: impl FnOnce(Vec<AsyncGcHandle>) -> R) -> R::Output
+    pub async fn spawn<R>(&self, f: impl FnOnce(Vec<AsyncGcHandle>) -> R) -> R::Output
     where
-        F: std::future::Future<Output = R>,
         R: std::future::Future,
     {
         let tcb = crate::heap::current_thread_control_block()
@@ -1053,6 +1052,9 @@ impl GcScope {
             .iter()
             .map(|tracked| {
                 let used = unsafe { &*scope.data.used.get() }.fetch_add(1, Ordering::Relaxed);
+                if used >= HANDLE_BLOCK_SIZE {
+                    panic!("GcScope::spawn: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})");
+                }
 
                 validate_gc_in_current_heap(tracked.ptr as *const u8);
 
@@ -1176,7 +1178,8 @@ impl AsyncGcHandle {
     ///
     /// # Returns
     ///
-    /// `Some(&T)` if the handle contains the specified type, `None` otherwise.
+    /// `Some(&T)` if the handle contains the specified type and the object is alive,
+    /// `None` if the type does not match or the object is dead or in dropping state.
     ///
     /// # Example
     ///
@@ -1207,7 +1210,13 @@ impl AsyncGcHandle {
         if self.type_id == TypeId::of::<T>() {
             let slot = unsafe { &*self.slot };
             let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
-            Some(unsafe { &*gc_box_ptr }.value())
+            unsafe {
+                let gc_box = &*gc_box_ptr;
+                if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 {
+                    return None;
+                }
+                Some(gc_box.value())
+            }
         } else {
             None
         }

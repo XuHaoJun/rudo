@@ -14,6 +14,8 @@
 #![allow(clippy::missing_const_for_fn)]
 
 use rudo_gc::set_suspicious_sweep_detection;
+#[cfg(feature = "test-util")]
+use rudo_gc::test_util::{clear_test_roots, internal_ptr, register_test_root};
 use rudo_gc::{collect, collect_full, Gc, GcCell, Trace};
 use std::cell::RefCell;
 
@@ -310,12 +312,20 @@ fn test_repeated_minor_collections() {
 
 /// Test that dirty page tracking works correctly across multiple pages.
 #[test]
+#[cfg_attr(not(feature = "test-util"), ignore)]
 fn test_dirty_pages_across_multiple_pages() {
     set_suspicious_sweep_detection(false);
+    clear_test_roots();
     // Create several old objects that may be on different pages
     let mut old_objects: Vec<Gc<Node<i32>>> = Vec::new();
     for i in 0..100 {
         old_objects.push(Gc::new(Node::new(i)));
+    }
+
+    // Root old objects BEFORE collect_full (Vec buffer not on stack)
+    #[cfg(feature = "test-util")]
+    for old in &old_objects {
+        register_test_root(internal_ptr(old));
     }
 
     collect_full();
@@ -324,6 +334,12 @@ fn test_dirty_pages_across_multiple_pages() {
     let mut young_objects: Vec<Gc<Node<i32>>> = Vec::new();
     for i in 0..100 {
         young_objects.push(Gc::new(Node::new(i * 1000)));
+    }
+
+    // Root young objects before minor GC
+    #[cfg(feature = "test-util")]
+    for young in &young_objects {
+        register_test_root(internal_ptr(young));
     }
 
     // Establish old-to-young references
@@ -346,5 +362,6 @@ fn test_dirty_pages_across_multiple_pages() {
     for (i, young) in young_objects.iter().enumerate() {
         assert_eq!(*young.value.borrow(), (i * 1000) as i32);
     }
+    clear_test_roots();
     set_suspicious_sweep_detection(true);
 }

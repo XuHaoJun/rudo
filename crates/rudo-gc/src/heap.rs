@@ -12,6 +12,7 @@ use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 use std::sync::Arc;
+use std::thread::ThreadId;
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
@@ -20,6 +21,10 @@ use sys_alloc::{Mmap, MmapOptions};
 
 use crate::handles::{AsyncScopeData, AsyncScopeEntry, LocalHandles};
 use crate::ptr::GcBox;
+
+/// Maximum entries in the cross-thread SATB buffer before requesting fallback.
+/// Prevents unbounded memory growth when many threads mutate shared GC objects.
+const MAX_CROSS_THREAD_SATB_SIZE: usize = 1024 * 1024;
 
 /// Global SATB buffer for cross-thread mutations.
 /// When a mutation occurs on a different thread than the allocating thread,
@@ -134,6 +139,93 @@ impl HandleId {
     #[allow(dead_code)]
     #[allow(clippy::use_self)]
     pub(crate) const INVALID: HandleId = Self(u64::MAX);
+}
+
+/// Orphaned cross-thread roots. When a thread terminates with outstanding `GcHandles`,
+/// its roots are migrated here so the TCB can be dropped. Key: (`origin_thread`, `handle_id`).
+/// Stores pointer as `usize` for `Send`/`Sync` (`GcBox` is not necessarily Send).
+static ORPHANED_CROSS_THREAD_ROOTS: OnceLock<
+    parking_lot::Mutex<HashMap<(ThreadId, HandleId), usize>>,
+> = OnceLock::new();
+
+fn orphaned_cross_thread_roots() -> &'static parking_lot::Mutex<HashMap<(ThreadId, HandleId), usize>>
+{
+    ORPHANED_CROSS_THREAD_ROOTS.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
+}
+
+/// Global counter for orphan handle IDs when cloning handles whose origin thread has terminated.
+static ORPHAN_HANDLE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Migrate cross-thread roots from a terminating thread's TCB to the orphan table.
+/// Called from `ThreadLocalHeap::drop` before unregistering, so the TCB can be dropped.
+pub fn migrate_roots_to_orphan(tcb: &ThreadControlBlock, thread_id: ThreadId) {
+    let mut roots = tcb
+        .cross_thread_roots
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if roots.strong.is_empty() {
+        return;
+    }
+    let drained: Vec<_> = roots
+        .strong
+        .drain()
+        .map(|(k, v)| (k, v.as_ptr() as usize))
+        .collect();
+    drop(roots);
+
+    let mut orphan = orphaned_cross_thread_roots().lock();
+    for (handle_id, ptr) in drained {
+        orphan.insert((thread_id, handle_id), ptr);
+    }
+}
+
+/// Get all orphaned cross-thread roots for GC marking.
+#[must_use]
+pub fn get_orphaned_cross_thread_roots() -> Vec<*const GcBox<()>> {
+    let guard = orphaned_cross_thread_roots().lock();
+    guard
+        .values()
+        .map(|&addr| addr as *const GcBox<()>)
+        .collect()
+}
+
+/// Remove an orphan root (when `GcHandle` is dropped and TCB is already gone).
+/// Returns the pointer address if it was found and removed (not used by callers).
+#[must_use]
+pub fn remove_orphan_root(thread_id: ThreadId, handle_id: HandleId) -> Option<usize> {
+    let mut orphan = orphaned_cross_thread_roots().lock();
+    orphan.remove(&(thread_id, handle_id))
+}
+
+/// Insert an orphan root (when cloning a `GcHandle` whose origin thread has terminated).
+pub fn insert_orphan_root(thread_id: ThreadId, handle_id: HandleId, ptr: NonNull<GcBox<()>>) {
+    let mut orphan = orphaned_cross_thread_roots().lock();
+    orphan.insert((thread_id, handle_id), ptr.as_ptr() as usize);
+}
+
+/// Clone an orphan root atomically. Verifies source exists, allocates new ID, inserts.
+/// Returns (`new_handle_id`, true) on success, (`HandleId::INVALID`, false) if source was removed.
+#[must_use]
+pub fn clone_orphan_root(
+    thread_id: ThreadId,
+    source_handle_id: HandleId,
+    ptr: NonNull<GcBox<()>>,
+) -> (HandleId, bool) {
+    let mut orphan = orphaned_cross_thread_roots().lock();
+    if !orphan.contains_key(&(thread_id, source_handle_id)) {
+        return (HandleId::INVALID, false);
+    }
+    let new_id = allocate_orphan_handle_id();
+    orphan.insert((thread_id, new_id), ptr.as_ptr() as usize);
+    drop(orphan);
+    (new_id, true)
+}
+
+/// Allocate a new handle ID for orphaned roots (when cloning a handle whose TCB is gone).
+#[must_use]
+pub fn allocate_orphan_handle_id() -> HandleId {
+    let id = ORPHAN_HANDLE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    HandleId(id)
 }
 
 // ============================================================================
@@ -561,7 +653,7 @@ pub fn resume_all_threads() {
     let mut woken_count = 0;
     for tcb in &registry.threads {
         if tcb.state.load(Ordering::Acquire) == THREAD_STATE_SAFEPOINT {
-            tcb.gc_requested.store(false, Ordering::Relaxed);
+            tcb.gc_requested.store(false, Ordering::Release);
             tcb.park_cond.notify_all();
             tcb.state.store(THREAD_STATE_EXECUTING, Ordering::Release);
             woken_count += 1;
@@ -575,8 +667,8 @@ pub fn resume_all_threads() {
         .fetch_add(woken_count, std::sync::atomic::Ordering::SeqCst);
     drop(registry);
 
-    // Clear global flag
-    GC_REQUESTED.store(false, Ordering::Relaxed);
+    // Clear global flag. Release so mutator threads' Acquire loads see the clear.
+    GC_REQUESTED.store(false, Ordering::Release);
 }
 
 /// Request all threads to stop at the next safe point.
@@ -590,11 +682,12 @@ pub fn request_gc_handshake() -> bool {
     let registry = thread_registry().lock().unwrap();
 
     // Set GC_REQUESTED flag first (before locking registry)
-    GC_REQUESTED.store(true, Ordering::Relaxed);
+    // Release ordering so mutator threads' Acquire loads see the request.
+    GC_REQUESTED.store(true, Ordering::Release);
 
     // Set per-thread gc_requested flag for all threads
     for tcb in &registry.threads {
-        tcb.gc_requested.store(true, Ordering::Relaxed);
+        tcb.gc_requested.store(true, Ordering::Release);
     }
 
     let active = registry.active_count.load(Ordering::Acquire);
@@ -659,10 +752,10 @@ pub fn wait_for_gc_complete() {
 pub fn clear_gc_request() {
     let registry = thread_registry().lock().unwrap();
     for tcb in &registry.threads {
-        tcb.gc_requested.store(false, Ordering::Relaxed);
+        tcb.gc_requested.store(false, Ordering::Release);
     }
     drop(registry);
-    GC_REQUESTED.store(false, Ordering::Relaxed);
+    GC_REQUESTED.store(false, Ordering::Release);
 }
 
 /// Get the list of all thread control blocks for scanning.
@@ -1665,6 +1758,17 @@ impl LocalHeap {
         self.dirty_pages_snapshot.iter().copied()
     }
 
+    /// Drain pages added to `dirty_pages` after `take_dirty_pages_snapshot()`.
+    ///
+    /// Write barriers may add pages during the scan; these would be missed if we
+    /// only scan the snapshot. Call this after scanning the snapshot and scan
+    /// the returned pages too (bug45).
+    #[inline]
+    pub fn drain_dirty_pages_overflow(&self) -> Vec<NonNull<PageHeader>> {
+        let mut guard = self.dirty_pages.lock();
+        std::mem::take(&mut *guard)
+    }
+
     /// Clear the snapshot and update statistics.
     ///
     /// # Contract
@@ -1746,9 +1850,7 @@ impl LocalHeap {
         let allocating_thread_id = unsafe { get_allocating_thread_id(gc_box.as_ptr() as usize) };
 
         if current_thread_id != allocating_thread_id && allocating_thread_id != 0 {
-            CROSS_THREAD_SATB_BUFFER
-                .lock()
-                .push(gc_box.as_ptr() as usize);
+            Self::push_cross_thread_satb(gc_box);
             return true;
         }
 
@@ -1773,10 +1875,15 @@ impl LocalHeap {
 
     /// Push a GC pointer to the cross-thread SATB buffer.
     /// Used when recording SATB old values from threads without a GC heap.
+    /// Requests fallback when buffer exceeds capacity to prevent unbounded growth.
     pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) {
-        CROSS_THREAD_SATB_BUFFER
-            .lock()
-            .push(gc_ptr.as_ptr() as usize);
+        let mut buffer = CROSS_THREAD_SATB_BUFFER.lock();
+        if buffer.len() >= MAX_CROSS_THREAD_SATB_SIZE {
+            crate::gc::incremental::IncrementalMarkState::global()
+                .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
+            return;
+        }
+        buffer.push(gc_ptr.as_ptr() as usize);
     }
 
     fn satb_buffer_overflowed(&mut self) -> bool {
@@ -2445,6 +2552,9 @@ impl LocalHeap {
                                 unsafe { ((*gc_box_ptr).drop_fn)(obj_ptr) };
                             }
 
+                            // Clear GEN_OLD_FLAG so reused slots don't inherit stale barrier state.
+                            unsafe { (*gc_box_ptr).clear_gen_old() }
+
                             // Add back to free list
                             unsafe {
                                 let mut next_head = (*header).free_list_head();
@@ -2505,36 +2615,46 @@ pub fn simple_write_barrier(ptr: *const u8) {
             return;
         }
 
+        let page_addr = ptr_addr & page_mask();
+
         unsafe {
-            let header = ptr_to_page_header(ptr);
-
-            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
-                return;
-            }
-
-            let block_size = (*header.as_ptr()).block_size as usize;
-            let header_size = (*header.as_ptr()).header_size as usize;
-            let header_page_addr = header.as_ptr() as usize;
-
-            if ptr_addr < header_page_addr + header_size {
-                return;
-            }
-
-            let offset = ptr_addr - (header_page_addr + header_size);
-            let index = offset / block_size;
-            let obj_count = (*header.as_ptr()).obj_count as usize;
-
-            if index >= obj_count {
-                return;
-            }
-
-            // GEN_OLD early-exit
-            let gc_box_addr =
-                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-            let wc = (*gc_box_addr).weak_count_raw();
-            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
-                return;
-            }
+            let (header, index) =
+                if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
+                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + size {
+                        return;
+                    }
+                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    if !(*gc_box_addr).has_gen_old_flag() {
+                        return;
+                    }
+                    (
+                        NonNull::new_unchecked(head_addr as *mut PageHeader),
+                        0_usize,
+                    )
+                } else {
+                    let h = ptr_to_page_header(ptr);
+                    if (*h.as_ptr()).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    let block_size = (*h.as_ptr()).block_size as usize;
+                    let header_size = (*h.as_ptr()).header_size as usize;
+                    let header_page_addr = h.as_ptr() as usize;
+                    if ptr_addr < header_page_addr + header_size {
+                        return;
+                    }
+                    let offset = ptr_addr - (header_page_addr + header_size);
+                    let index = offset / block_size;
+                    let obj_count = (*h.as_ptr()).obj_count as usize;
+                    if index >= obj_count {
+                        return;
+                    }
+                    let gc_box_addr =
+                        (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+                    if !(*gc_box_addr).has_gen_old_flag() {
+                        return;
+                    }
+                    (h, index)
+                };
 
             (*header.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(header);
@@ -2566,62 +2686,98 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
             return;
         }
 
+        let page_addr = ptr_addr & page_mask();
+
         unsafe {
-            let header = ptr_to_page_header(ptr);
-            let h = header.as_ptr();
+            // Tail pages of multi-page large objects have no PageHeader; ptr_to_page_header
+            // would yield garbage. Check large_object_map first (see find_gc_box_from_ptr).
+            let (h, index) = if let Some(&(head_addr, size, h_size)) =
+                heap.large_object_map.get(&page_addr)
+            {
+                if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + size {
+                    return;
+                }
+                let h_ptr = head_addr as *mut PageHeader;
+                let owner = (*h_ptr).owner_thread;
+                assert!(
+                    owner == 0 || owner == current,
+                    "Thread safety violation: {context} called on GcCell allocated by a different \
+                     thread.\n\
+                     - Current thread ID: {current}\n\
+                     - Allocating thread ID: {owner}\n\
+                     \n\
+                     GcCell is not thread-safe. Gc objects and their fields must not be\n\
+                     accessed from tokio worker threads or other threads different from where\n\
+                     they were allocated.\n\
+                     \n\
+                     Solutions:\n\
+                     1. Use GcThreadSafeCell instead of GcCell for thread-safe interior mutability\n\
+                     2. Use GcHandle for cross-thread communication (see cross_thread module)\n\
+                     3. Dispatch mutations back to the main thread via channel\n\
+                     4. Use single-threaded Tokio runtime"
+                );
+                let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                if !(*gc_box_addr).has_gen_old_flag() {
+                    return;
+                }
+                (NonNull::new_unchecked(h_ptr), 0_usize)
+            } else {
+                let header = ptr_to_page_header(ptr);
+                let h = header.as_ptr();
 
-            if (*h).magic != MAGIC_GC_PAGE {
-                return;
-            }
+                if (*h).magic != MAGIC_GC_PAGE {
+                    return;
+                }
 
-            let owner = (*h).owner_thread;
-            assert!(
-                owner == 0 || owner == current,
-                "Thread safety violation: {context} called on GcCell allocated by a different \
-                 thread.\n\
-                 - Current thread ID: {current}\n\
-                 - Allocating thread ID: {owner}\n\
-                 \n\
-                 GcCell is not thread-safe. Gc objects and their fields must not be\n\
-                 accessed from tokio worker threads or other threads different from where\n\
-                 they were allocated.\n\
-                 \n\
-                 Solutions:\n\
-                 1. Use GcThreadSafeCell instead of GcCell for thread-safe interior mutability\n\
-                 2. Use GcHandle for cross-thread communication (see cross_thread module)\n\
-                 3. Dispatch mutations back to the main thread via channel\n\
-                 4. Use single-threaded Tokio runtime"
-            );
+                let owner = (*h).owner_thread;
+                assert!(
+                    owner == 0 || owner == current,
+                    "Thread safety violation: {context} called on GcCell allocated by a different \
+                     thread.\n\
+                     - Current thread ID: {current}\n\
+                     - Allocating thread ID: {owner}\n\
+                     \n\
+                     GcCell is not thread-safe. Gc objects and their fields must not be\n\
+                     accessed from tokio worker threads or other threads different from where\n\
+                     they were allocated.\n\
+                     \n\
+                     Solutions:\n\
+                     1. Use GcThreadSafeCell instead of GcCell for thread-safe interior mutability\n\
+                     2. Use GcHandle for cross-thread communication (see cross_thread module)\n\
+                     3. Dispatch mutations back to the main thread via channel\n\
+                     4. Use single-threaded Tokio runtime"
+                );
 
-            let block_size = (*h).block_size as usize;
-            let header_size = (*h).header_size as usize;
-            let header_page_addr = header.as_ptr() as usize;
+                let block_size = (*h).block_size as usize;
+                let header_size = (*h).header_size as usize;
+                let header_page_addr = h as usize;
 
-            if ptr_addr < header_page_addr + header_size {
-                return;
-            }
+                if ptr_addr < header_page_addr + header_size {
+                    return;
+                }
 
-            let offset = ptr_addr - (header_page_addr + header_size);
-            let index = offset / block_size;
-            let obj_count = (*h).obj_count as usize;
-            if index >= obj_count {
-                return;
-            }
+                let offset = ptr_addr - (header_page_addr + header_size);
+                let index = offset / block_size;
+                let obj_count = (*h).obj_count as usize;
+                if index >= obj_count {
+                    return;
+                }
 
-            // GEN_OLD early-exit: parent young → skip barrier
-            let gc_box_addr =
-                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-            let wc = (*gc_box_addr).weak_count_raw();
-            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
-                return;
-            }
+                // GEN_OLD early-exit: parent young → skip barrier
+                let gc_box_addr =
+                    (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+                if !(*gc_box_addr).has_gen_old_flag() {
+                    return;
+                }
+                (header, index)
+            };
 
-            (*h).set_dirty(index);
-            heap.add_to_dirty_pages(header);
+            (*h.as_ptr()).set_dirty(index);
+            heap.add_to_dirty_pages(h);
 
             if incremental_active {
                 std::sync::atomic::fence(Ordering::AcqRel);
-                heap.record_in_remembered_buffer(header);
+                heap.record_in_remembered_buffer(h);
             }
         }
     });
@@ -2645,35 +2801,46 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
             return;
         }
 
+        let page_addr = ptr_addr & page_mask();
+
         unsafe {
-            let header = ptr_to_page_header(ptr);
-
-            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
-                return;
-            }
-
-            let block_size = (*header.as_ptr()).block_size as usize;
-            let header_size = (*header.as_ptr()).header_size as usize;
-            let header_page_addr = header.as_ptr() as usize;
-
-            if ptr_addr < header_page_addr + header_size {
-                return;
-            }
-
-            let offset = ptr_addr - (header_page_addr + header_size);
-            let index = offset / block_size;
-            let obj_count = (*header.as_ptr()).obj_count as usize;
-            if index >= obj_count {
-                return;
-            }
-
-            // GEN_OLD early-exit: parent young → skip barrier (no set_dirty, no mutex)
-            let gc_box_addr =
-                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-            let wc = (*gc_box_addr).weak_count_raw();
-            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
-                return;
-            }
+            let (header, index) =
+                if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
+                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + size {
+                        return;
+                    }
+                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    if !(*gc_box_addr).has_gen_old_flag() {
+                        return;
+                    }
+                    (
+                        NonNull::new_unchecked(head_addr as *mut PageHeader),
+                        0_usize,
+                    )
+                } else {
+                    let h = ptr_to_page_header(ptr);
+                    if (*h.as_ptr()).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    let block_size = (*h.as_ptr()).block_size as usize;
+                    let header_size = (*h.as_ptr()).header_size as usize;
+                    let header_page_addr = h.as_ptr() as usize;
+                    if ptr_addr < header_page_addr + header_size {
+                        return;
+                    }
+                    let offset = ptr_addr - (header_page_addr + header_size);
+                    let index = offset / block_size;
+                    let obj_count = (*h.as_ptr()).obj_count as usize;
+                    if index >= obj_count {
+                        return;
+                    }
+                    let gc_box_addr =
+                        (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+                    if !(*gc_box_addr).has_gen_old_flag() {
+                        return;
+                    }
+                    (h, index)
+                };
 
             (*header.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(header);
@@ -2736,8 +2903,7 @@ pub fn incremental_write_barrier(ptr: *const u8) {
             // GEN_OLD early-exit
             let gc_box_addr =
                 (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-            let wc = (*gc_box_addr).weak_count_raw();
-            if (wc & GcBox::<()>::GEN_OLD_FLAG) == 0 {
+            if !(*gc_box_addr).has_gen_old_flag() {
                 return;
             }
 
@@ -2961,7 +3127,12 @@ impl ThreadLocalHeap {
 
 impl Drop for ThreadLocalHeap {
     fn drop(&mut self) {
-        let mut registry = thread_registry().lock().unwrap();
+        let thread_id = std::thread::current().id();
+        migrate_roots_to_orphan(&self.tcb, thread_id);
+
+        let mut registry = thread_registry()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if self.tcb.state.load(Ordering::SeqCst) == THREAD_STATE_EXECUTING {
             registry.active_count.fetch_sub(1, Ordering::SeqCst);
         }
@@ -3049,13 +3220,37 @@ pub unsafe fn mark_page_dirty_for_ptr(ptr: *const u8) {
     }
 
     let page_addr = ptr as usize & page_mask();
+    let ptr_addr = ptr as usize;
 
     HEAP.with(|local| {
         let heap = unsafe { &mut *local.tcb.heap.get() };
 
+        // Handle large objects: ptr may be in any page of a multi-page large object
+        if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
+            if ptr_addr >= head_addr + h_size && ptr_addr < head_addr + h_size + size {
+                let header = unsafe { NonNull::new_unchecked(head_addr as *mut PageHeader) };
+                unsafe { heap.add_to_dirty_pages(header) };
+            }
+            return;
+        }
+
         if heap.small_pages.contains(&page_addr) {
             let header = unsafe { ptr_to_page_header(ptr) };
             unsafe { heap.add_to_dirty_pages(header) };
+            return;
+        }
+
+        // Cross-thread: ptr may be in another thread's large object (segment_manager has global map)
+        if let Some(&(head_addr, size, h_size)) = segment_manager()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .large_object_map
+            .get(&page_addr)
+        {
+            if ptr_addr >= head_addr + h_size && ptr_addr < head_addr + h_size + size {
+                let header = unsafe { NonNull::new_unchecked(head_addr as *mut PageHeader) };
+                unsafe { heap.add_to_dirty_pages(header) };
+            }
         }
     });
 }
