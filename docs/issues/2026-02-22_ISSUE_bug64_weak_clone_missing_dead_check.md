@@ -1,7 +1,7 @@
 # [Bug]: Weak::clone() 缺少 dead_flag / dropping_state 檢查
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -187,4 +187,36 @@ impl<T: Trace> Clone for Weak<T> {
 1. 繞過 GC 的安全檢查
 2. 創建對已釋放物件的 weak 引用
 3. 導致記憶體管理不一致
+
+---
+
+## ✅ 驗證記錄 (Verification Record)
+
+**Date:** 2026-02-22
+**Verified by:** Code analysis
+
+**Verification Details:**
+Confirmed bug exists in current codebase at `ptr.rs:1817-1844`:
+
+```rust
+impl<T: Trace> Clone for Weak<T> {
+    fn clone(&self) -> Self {
+        let ptr = self.ptr.load(Ordering::Acquire);
+        // ... pointer validation ...
+        
+        // 缺少: has_dead_flag() 和 dropping_state() 檢查！
+        
+        unsafe {
+            (*ptr.as_ptr()).inc_weak();  // 直接增加計數，沒有驗證物件狀態
+        }
+        // ...
+    }
+}
+```
+
+對比 `Weak::upgrade()` (ptr.rs:1550-1600) 有正確的檢查：
+- Line 1564: `if gc_box.has_dead_flag()` 
+- Line 1568: `if gc_box.dropping_state() != 0`
+
+**Status:** Bug confirmed. Issue remains Open, marked as Verified.
 
