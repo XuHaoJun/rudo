@@ -4,7 +4,7 @@
 
 ### By Status
 - **Fixed**: 58
-- **Open**: 5
+- **Open**: 6
 - **Invalid**: 4
 
 ### By Tags
@@ -84,3 +84,4 @@
 | [2026-02-22_ISSUE_bug68_gc_as_weak_missing_dead_check.md](./2026-02-22_ISSUE_bug68_gc_as_weak_missing_dead_check.md) | Gc::as_weak() 缺少 dead_flag / dropping_state 檢查 | Open | Unverified |
 | [2026-02-22_ISSUE_bug70_asynchandle_to_gc_missing_dead_check.md](./2026-02-22_ISSUE_bug70_asynchandle_to_gc_missing_dead_check.md) | AsyncHandle::to_gc 缺少 dead_flag / dropping_state 檢查，與 Handle::to_gc 行為不一致 | Open | Unverified |
 | [2026-02-22_ISSUE_bug71_write_barrier_gen_old_flag_page_generation_mismatch.md](./2026-02-22_ISSUE_bug71_write_barrier_gen_old_flag_page_generation_mismatch.md) | Write Barrier 僅檢查 per-object GEN_OLD_FLAG 忽略 Page Generation 導致 OLD→YOUNG 引用遺漏 | Open | Not Verified |
+| [2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md](./2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md) | GcHandle::resolve() / try_resolve() 未檢查 handle_id 是否已失效導致 UB | Open | Verified |
