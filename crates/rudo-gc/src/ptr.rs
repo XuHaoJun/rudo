@@ -434,17 +434,18 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return None;
             }
 
+            // BUGFIX: Check dropping_state BEFORE try_inc_ref_from_zero
+            // Object is being dropped - do not allow new strong refs (UAF prevention)
+            if gc_box.dropping_state() != 0 {
+                return None;
+            }
+
             // Try atomic transition from 0 to 1 (resurrection)
             if gc_box.try_inc_ref_from_zero() {
                 return Some(Gc {
                     ptr: AtomicNullable::new(ptr),
                     _marker: PhantomData,
                 });
-            }
-
-            // Object is being dropped - do not allow new strong refs (UAF prevention)
-            if gc_box.dropping_state() != 0 {
-                return None;
             }
 
             gc_box.inc_ref();
