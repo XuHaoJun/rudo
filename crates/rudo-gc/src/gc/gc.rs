@@ -1226,7 +1226,7 @@ unsafe fn mark_and_push_to_worker_queue(
                 }
             }
         }
-        let worker_idx = ptr as usize % num_workers;
+        let worker_idx = gc_box.as_ptr() as usize % num_workers;
         worker_queues[worker_idx].push(gc_box.as_ptr());
     }
 }
