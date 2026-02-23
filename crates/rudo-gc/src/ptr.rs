@@ -1097,7 +1097,10 @@ impl<T: Trace> Gc<T> {
         }
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
-            if (*gc_box_ptr).has_dead_flag() || (*gc_box_ptr).dropping_state() != 0 {
+            if (*gc_box_ptr).has_dead_flag()
+                || (*gc_box_ptr).dropping_state() != 0
+                || (*gc_box_ptr).is_under_construction()
+            {
                 return None;
             }
         }
@@ -1368,8 +1371,10 @@ impl<T: Trace> Clone for Gc<T> {
         // Check flags before incrementing ref_count; must match Deref/try_deref semantics.
         unsafe {
             assert!(
-                !(*gc_box_ptr).has_dead_flag() && (*gc_box_ptr).dropping_state() == 0,
-                "Gc::clone: cannot clone a dead or dropping Gc"
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::clone: cannot clone a dead, dropping, or under construction Gc"
             );
             (*gc_box_ptr).inc_ref();
         }

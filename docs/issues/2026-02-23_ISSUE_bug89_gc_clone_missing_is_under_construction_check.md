@@ -1,7 +1,7 @@
 # [Bug]: Gc::clone() 缺少 is_under_construction 檢查 - 與其他操作不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

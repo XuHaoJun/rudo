@@ -294,8 +294,10 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
         unsafe {
             let gc_box = &*self.ptr.as_ptr();
             assert!(
-                !gc_box.has_dead_flag() && gc_box.dropping_state() == 0,
-                "GcHandle::clone: cannot clone a dead or dropping GcHandle"
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle"
             );
             gc_box.inc_ref();
         };
