@@ -1,7 +1,7 @@
 # [Bug]: Write Barrier 僅檢查 per-object GEN_OLD_FLAG 忽略 Page Generation 導致 OLD→YOUNG 引用遺漏
 
 **Status:** Open
-**Tags:** Not Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -153,3 +153,40 @@ heap.add_to_dirty_pages(h);
 1. 強制觸發舊生代頁面中的新物件分配
 2. 利用這個 barrier 缺陷實現 young object 的提前回收
 3. 配合其他漏洞可能實現記憶體操縱
+
+---
+
+## ✅ 驗證記錄 (Verification Record)
+
+**驗證日期:** 2026-02-23
+**驗證人員:** opencode
+
+### 驗證結果
+
+已確認 bug 存在於 `crates/rudo-gc/src/heap.rs:2769-2771`:
+
+```rust
+// GEN_OLD early-exit: parent young → skip barrier
+let gc_box_addr =
+    (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+if !(*gc_box_addr).has_gen_old_flag() {
+    return;  // BUG: 沒有檢查 page generation!
+}
+```
+
+問題確認：
+1. 程式碼僅檢查 `has_gen_old_flag()` (per-object flag)
+2. 沒有檢查 page header 的 `generation > 0`
+3. 當物件在新分配的 OLD 頁面中（page gen > 0）但尚未經歷 GC 存活下來時，沒有 GEN_OLD_FLAG
+4. 此時對該物件進行 OLD→YOUNG 寫入會錯誤地跳過 barrier
+
+### 影響確認
+
+此 bug 會導致：
+- 年輕代物件可能被錯誤回收
+- 造成 use-after-free
+- 記憶體安全問題
+
+### 修復建議確認
+
+issue 中的修復建議正確：應該先檢查 page generation，再檢查 per-object flag。
