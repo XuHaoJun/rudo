@@ -85,3 +85,4 @@
 | [2026-02-22_ISSUE_bug70_asynchandle_to_gc_missing_dead_check.md](./2026-02-22_ISSUE_bug70_asynchandle_to_gc_missing_dead_check.md) | AsyncHandle::to_gc 缺少 dead_flag / dropping_state 檢查，與 Handle::to_gc 行為不一致 | Open | Unverified |
 | [2026-02-22_ISSUE_bug71_write_barrier_gen_old_flag_page_generation_mismatch.md](./2026-02-22_ISSUE_bug71_write_barrier_gen_old_flag_page_generation_mismatch.md) | Write Barrier 僅檢查 per-object GEN_OLD_FLAG 忽略 Page Generation 導致 OLD→YOUNG 引用遺漏 | Open | Not Verified |
 | [2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md](./2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md) | GcHandle::resolve() / try_resolve() 未檢查 handle_id 是否已失效導致 UB | Open | Verified |
+| [2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md](./2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md) | Gc::clone() 缺少 is_under_construction 檢查 - 與其他操作不一致 | Open | Unverified |
