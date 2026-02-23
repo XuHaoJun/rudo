@@ -308,10 +308,17 @@ impl AsyncHandleScope {
     #[inline]
     pub fn handle<T: Trace + 'static>(&self, gc: &Gc<T>) -> AsyncHandle<T> {
         let used = unsafe { &*self.data.used.get() };
-        let idx = used.fetch_add(1, Ordering::Relaxed);
-        if idx >= HANDLE_BLOCK_SIZE {
-            panic!("AsyncHandleScope: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})");
-        }
+        let idx = loop {
+            let current = used.load(Ordering::Acquire);
+            if current >= HANDLE_BLOCK_SIZE {
+                panic!("AsyncHandleScope: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})");
+            }
+            if let Ok(idx) =
+                used.compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
+            {
+                break idx;
+            }
+        };
 
         let gc_ptr = Gc::internal_ptr(gc);
         validate_gc_in_current_heap(gc_ptr);
@@ -1051,16 +1058,29 @@ impl GcScope {
         let handles: Vec<AsyncGcHandle> = tracked
             .iter()
             .map(|tracked| {
-                let used = unsafe { &*scope.data.used.get() }.fetch_add(1, Ordering::Relaxed);
-                if used >= HANDLE_BLOCK_SIZE {
-                    panic!("GcScope::spawn: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})");
-                }
+                let used = unsafe { &*scope.data.used.get() };
+                let idx = loop {
+                    let current = used.load(Ordering::Acquire);
+                    if current >= HANDLE_BLOCK_SIZE {
+                        panic!(
+                            "GcScope::spawn: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})"
+                        );
+                    }
+                    if let Ok(idx) = used.compare_exchange(
+                        current,
+                        current + 1,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        break idx;
+                    }
+                };
 
                 validate_gc_in_current_heap(tracked.ptr as *const u8);
 
                 let slot_ptr = unsafe {
                     let slots_ptr = scope.data.block.slots.get() as *mut HandleSlot;
-                    slots_ptr.add(used)
+                    slots_ptr.add(idx)
                 };
 
                 unsafe {
