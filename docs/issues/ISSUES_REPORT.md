@@ -87,3 +87,4 @@
 | [2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md](./2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md) | GcHandle::resolve() / try_resolve() 未檢查 handle_id 是否已失效導致 UB | Open | Verified |
 | [2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md](./2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md) | Gc::clone() 缺少 is_under_construction 檢查 - 與其他操作不一致 | Open | Unverified |
 | [2026-02-23_ISSUE_bug90_async_handle_slot_allocation_race.md](./2026-02-23_ISSUE_bug90_async_handle_slot_allocation_race.md) | AsyncHandleScope slot allocation race condition - TOCTOU between fetch_add and bounds check | Open | Unverified |
+| [2026-02-24_ISSUE_bug91_gcbox_inc_weak_race_condition.md](./2026-02-24_ISSUE_bug91_gcbox_inc_weak_race_condition.md) | GcBox::inc_weak 使用 load+store 導致並發調用時 weak_count 丢失更新 | Open | Unverified |
