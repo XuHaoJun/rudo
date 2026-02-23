@@ -588,8 +588,9 @@ impl<T: GcCapture + 'static> GcCapture for RefCell<T> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        let value = self.borrow();
-        value.capture_gc_ptrs_into(ptrs);
+        if let Ok(value) = self.try_borrow() {
+            value.capture_gc_ptrs_into(ptrs);
+        }
     }
 }
 
