@@ -457,9 +457,49 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
     }
 
     /// Clone the weak reference.
+    #[allow(clippy::manual_let_else)]
     pub(crate) fn clone(&self) -> Self {
-        let ptr = self.ptr.load(Ordering::Acquire).as_option().unwrap();
+        let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
+            return Self {
+                ptr: AtomicNullable::null(),
+            };
+        };
+
+        let ptr_addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
+            return Self {
+                ptr: AtomicNullable::null(),
+            };
+        }
+
+        if !is_gc_box_pointer_valid(ptr_addr) {
+            return Self {
+                ptr: AtomicNullable::null(),
+            };
+        }
+
         unsafe {
+            let gc_box = &*ptr.as_ptr();
+
+            if gc_box.is_under_construction() {
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+
+            if gc_box.has_dead_flag() {
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+
+            if gc_box.dropping_state() != 0 {
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+
             (*ptr.as_ptr()).inc_weak();
         }
         Self {
