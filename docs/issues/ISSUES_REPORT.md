@@ -4,12 +4,12 @@
 
 ### By Status
 - **Fixed**: 58
-- **Open**: 9
+- **Open**: 10
 - **Invalid**: 4
 
 ### By Tags
 - **Verified**: 55
-- **Unverified**: 5
+- **Unverified**: 6
 - **Not Verified**: 2
 - **Not Reproduced**: 6
 
@@ -17,7 +17,9 @@
 
 | Issue | Title | Status | Tags |
 |---|---|---|---|
-| [2026-02-24_ISSUE_bug99_async_gchandle_downcast_ref_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug99_async_gchandle_downcast_ref_missing_is_under_construction_check.md) | AsyncGcHandle::downcast_ref() 缺少 is_under_construction 檢查 - Bug55 修復不完整 | Open | Unverified |
+| [2026-02-24_ISSUE_bug103_gchandle_inc_ref_toctou_race.md](./2026-02-24_ISSUE_bug103_gchandle_inc_ref_toctou_race.md) | GcHandle/GcBoxWeakRef inc_ref TOCTOU Race - 檢查與遞增非原子操作導致 Use-After-Free | Open | Unverified |
+| [2026-02-24_ISSUE_bug102_async_handle_get_missing_checks.md](./2026-02-24_ISSUE_bug102_async_handle_get_missing_checks.md) | AsyncHandle::get 缺少 is_under_construction 檢查 | Open | Unverified |
+| [2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md](./2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md) | sync.rs trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Open | Unverified |
 | [2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md](./2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md) | Incremental Marking 啟用時 Generational Barrier 被禁用 | Open | Unverified |
 | [2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md](./2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md) | AsyncHandle::to_gc 缺少 reference count 遞增 | Open | Unverified |
 | [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Fixed | Not Reproduced |
