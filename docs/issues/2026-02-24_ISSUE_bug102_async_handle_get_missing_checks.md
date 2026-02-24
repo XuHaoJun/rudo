@@ -1,6 +1,6 @@
 # [Bug]: AsyncHandle::get() missing dead/dropping/construction checks
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

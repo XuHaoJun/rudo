@@ -584,7 +584,16 @@ impl<T: Trace + 'static> AsyncHandle<T> {
 
         let slot = unsafe { &*self.slot };
         let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
-        unsafe { &*gc_box_ptr }.value()
+        unsafe {
+            let gc_box = &*gc_box_ptr;
+            assert!(
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "AsyncHandle::get: cannot access a dead, dropping, or under construction Gc"
+            );
+            gc_box.value()
+        }
     }
 
     /// Gets a reference to the underlying data without scope validation.
@@ -661,8 +670,16 @@ impl<T: Trace + 'static> AsyncHandle<T> {
     #[inline]
     pub fn to_gc(self) -> Gc<T> {
         unsafe {
-            let ptr = (*self.slot).as_ptr() as *const u8;
-            Gc::from_raw(ptr)
+            let gc_box_ptr = (*self.slot).as_ptr() as *const GcBox<T>;
+            let gc_box = &*gc_box_ptr;
+            assert!(
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "AsyncHandle::to_gc: cannot convert a dead, dropping, or under construction Gc"
+            );
+            gc_box.inc_ref();
+            Gc::from_raw(gc_box_ptr as *const u8)
         }
     }
 }
