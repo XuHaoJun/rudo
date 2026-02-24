@@ -371,7 +371,9 @@ impl<T: GcCapture + ?Sized> DerefMut for GcRwLockWriteGuard<'_, T> {
 /// ensuring modifications made while holding the lock are visible to the GC.
 impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
-        if crate::gc::incremental::is_incremental_marking_active() {
+        if is_generational_barrier_active()
+            || crate::gc::incremental::is_incremental_marking_active()
+        {
             let mut ptrs = Vec::with_capacity(32);
             self.guard.capture_gc_ptrs_into(&mut ptrs);
             for gc_ptr in ptrs {
@@ -607,7 +609,9 @@ impl<T: GcCapture + ?Sized> DerefMut for GcMutexGuard<'_, T> {
 /// ensuring modifications made while holding the lock are visible to the GC.
 impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
     fn drop(&mut self) {
-        if crate::gc::incremental::is_incremental_marking_active() {
+        if is_generational_barrier_active()
+            || crate::gc::incremental::is_incremental_marking_active()
+        {
             let mut ptrs = Vec::with_capacity(32);
             self.guard.capture_gc_ptrs_into(&mut ptrs);
             for gc_ptr in ptrs {

@@ -1882,6 +1882,22 @@ impl<T: Trace> Clone for Weak<T> {
             };
         }
         unsafe {
+            let gc_box = &*ptr.as_ptr();
+            if gc_box.is_under_construction() {
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+            if gc_box.has_dead_flag() {
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+            if gc_box.dropping_state() != 0 {
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
             (*ptr.as_ptr()).inc_weak();
         }
         Self {
