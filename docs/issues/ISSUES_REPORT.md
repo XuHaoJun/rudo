@@ -4,12 +4,12 @@
 
 ### By Status
 - **Fixed**: 58
-- **Open**: 7
+- **Open**: 8
 - **Invalid**: 4
 
 ### By Tags
 - **Verified**: 55
-- **Unverified**: 3
+- **Unverified**: 4
 - **Not Verified**: 2
 - **Not Reproduced**: 6
 
@@ -17,6 +17,7 @@
 
 | Issue | Title | Status | Tags |
 |---|---|---|---|
+| [2026-02-24_ISSUE_bug96_ephemeron_gccapture_missing_key_alive_check.md](./2026-02-24_ISSUE_bug96_ephemeron_gccapture_missing_key_alive_check.md) | Ephemeron GcCapture 實現不一致 - 未檢查 key 是否存活 | Open | Unverified |
 | [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md](./2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md) | Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏 | Fixed | Not Reproduced |
