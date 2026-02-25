@@ -1,6 +1,6 @@
 # [Bug]: GcThreadSafeRefMut::drop 缺少 Generational Barrier 檢查
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

@@ -1168,7 +1168,9 @@ impl<T: GcCapture + ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
 
 impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
     fn drop(&mut self) {
-        if crate::gc::incremental::is_incremental_marking_active() {
+        if crate::gc::incremental::is_generational_barrier_active()
+            || crate::gc::incremental::is_incremental_marking_active()
+        {
             let mut ptrs = Vec::with_capacity(32);
             (*self.inner).capture_gc_ptrs_into(&mut ptrs);
 
