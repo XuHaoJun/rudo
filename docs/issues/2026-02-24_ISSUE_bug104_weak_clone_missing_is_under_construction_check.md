@@ -1,7 +1,7 @@
 # [Bug]: Weak::clone() 和 GcBoxWeakRef::clone() 缺少 is_under_construction 檢查 - Bug64/69 修復不完整
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Reproduced
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -179,3 +179,11 @@ pub(crate) fn clone(&self) -> Self {
 - bug89: Gc::clone 缺少 is_under_construction 檢查 (已修復)
 - bug94: Gc::deref 缺少 is_under_construction 檢查
 - bug99: AsyncGcHandle::downcast_ref 缺少 is_under_construction 檢查
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Invalid.
+
+`Weak::clone()` and `GcBoxWeakRef::clone()` intentionally do NOT check `is_under_construction`. `Gc::new_cyclic_weak` passes a `Weak` to the closure while the object is under construction; the closure may legitimately clone it (e.g. `ref1: GcCell::new(Some(weak.clone())), ref2: GcCell::new(Some(weak))` in `test_new_cyclic_weak_multiple_refs`). Adding the check would break this API. No code changes.

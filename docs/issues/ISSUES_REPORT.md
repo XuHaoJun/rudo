@@ -3,16 +3,16 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 98
-- **Open**: 20
-- **Invalid**: 4
+- **Fixed**: 102
+- **Open**: 15
+- **Invalid**: 5
 - **Verified**: 1
 
 ### By Tags
-- **Verified**: 96
-- **Not Verified**: 3
-- **Not Reproduced**: 6
-- **Unverified**: 18
+- **Verified**: 100
+- **Not Verified**: 2
+- **Not Reproduced**: 7
+- **Unverified**: 14
 
 ## All Issues
 
@@ -118,12 +118,12 @@
 | [2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md](./2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md) | is_generational_barrier_active() returns false when incremental marking disabled, breaking GcRwLock/GcThreadSafeCell barriers | Fixed | Verified |
 | [2026-02-24_ISSUE_bug99_async_gchandle_downcast_ref_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug99_async_gchandle_downcast_ref_missing_is_under_construction_check.md) | AsyncGcHandle::downcast_ref() 缺少 is_under_construction 檢查 - Bug55 修復不完整 | Fixed | Verified |
 | [2026-02-24_ISSUE_bug100_gc_cross_thread_handle_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug100_gc_cross_thread_handle_missing_is_under_construction_check.md) | Gc::cross_thread_handle() 缺少 is_under_construction 檢查 - Bug92 修復不完整 | Fixed | Verified |
-| [2026-02-24_ISSUE_bug100_trigger_write_barrier_toctou.md](./2026-02-24_ISSUE_bug100_trigger_write_barrier_toctou.md) | trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Open | Not Verified |
-| [2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md](./2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md) | sync.rs trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Open | Unverified |
+| [2026-02-24_ISSUE_bug100_trigger_write_barrier_toctou.md](./2026-02-24_ISSUE_bug100_trigger_write_barrier_toctou.md) | trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Fixed | Verified |
+| [2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md](./2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md) | sync.rs trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Fixed | Verified |
 | [2026-02-24_ISSUE_bug102_async_handle_get_missing_checks.md](./2026-02-24_ISSUE_bug102_async_handle_get_missing_checks.md) | AsyncHandle::get() missing dead/dropping/construction checks | Fixed | Verified |
-| [2026-02-24_ISSUE_bug103_gchandle_inc_ref_toctou_race.md](./2026-02-24_ISSUE_bug103_gchandle_inc_ref_toctou_race.md) | GcHandle/GcBoxWeakRef inc_ref TOCTOU Race - 檢查與遞增非原子操作導致 Use-After-Free | Open | Unverified |
-| [2026-02-24_ISSUE_bug104_weak_clone_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug104_weak_clone_missing_is_under_construction_check.md) | Weak::clone() 和 GcBoxWeakRef::clone() 缺少 is_under_construction 檢查 - Bug64/69 修復不完整 | Open | Unverified |
-| [2026-02-24_ISSUE_bug105_gcbox_as_weak_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug105_gcbox_as_weak_missing_is_under_construction_check.md) | GcBox::as_weak() 缺少 is_under_construction 檢查 - 內部方法缺少一致性檢查 | Open | Unverified |
+| [2026-02-24_ISSUE_bug103_gchandle_inc_ref_toctou_race.md](./2026-02-24_ISSUE_bug103_gchandle_inc_ref_toctou_race.md) | GcHandle/GcBoxWeakRef inc_ref TOCTOU Race - 檢查與遞增非原子操作導致 Use-After-Free | Fixed | Verified |
+| [2026-02-24_ISSUE_bug104_weak_clone_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug104_weak_clone_missing_is_under_construction_check.md) | Weak::clone() 和 GcBoxWeakRef::clone() 缺少 is_under_construction 檢查 - Bug64/69 修復不完整 | Invalid | Not Reproduced |
+| [2026-02-24_ISSUE_bug105_gcbox_as_weak_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug105_gcbox_as_weak_missing_is_under_construction_check.md) | GcBox::as_weak() 缺少 is_under_construction 檢查 - 內部方法缺少一致性檢查 | Fixed | Verified |
 | [2026-02-25_ISSUE_bug106_ephemeron_upgrade_toctou.md](./2026-02-25_ISSUE_bug106_ephemeron_upgrade_toctou.md) | Ephemeron::upgrade() TOCTOU race condition - key alive check and value clone not atomic | Open | Unverified |
 | [2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md](./2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md) | GcRwLockWriteGuard/GcMutexGuard Drop 缺少 Generational Barrier 檢查 | Open | Unverified |
 | [2026-02-25_ISSUE_bug108_gcboxweakref_clone_missing_safety_checks.md](./2026-02-25_ISSUE_bug108_gcboxweakref_clone_missing_safety_checks.md) | GcBoxWeakRef::clone 缺少安全檢查導致潛在 Use-After-Free | Open | Unverified |

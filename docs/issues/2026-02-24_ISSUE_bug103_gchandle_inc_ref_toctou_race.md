@@ -1,7 +1,7 @@
 # [Bug]: GcHandle/GcBoxWeakRef inc_ref TOCTOU Race - 檢查與遞增非原子操作導致 Use-After-Free
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -285,4 +285,14 @@ pub fn resolve(&self) -> Gc<T> {
 
 此 bug 是 bug56/bug62 等修復的延伸問題。雖然已添加 `has_dead_flag()` 和 `dropping_state()` 檢查，但檢查與 `inc_ref()` 之間存在 TOCTOU 競爭視窗，可能導致 use-after-free。
 
-修復需要將狀態檢查與 ref_count 遞增合併為原子操作，或使用其他同步機制保護整個 critical section。
+修復需要將狀態檢查與 ref_count 遞增合併為原子操作，或使用其他同步機制保護整個 critical section.
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+1. **GcHandle** (resolve, try_resolve, clone): Already protected — holds `cross_thread_roots` lock during check+inc_ref; unregister does remove-then-dec_ref, so lock ordering prevents TOCTOU.
+
+2. **GcBoxWeakRef** (upgrade, try_upgrade): Added `GcBox::try_inc_ref_if_nonzero()` — atomic fetch_update that only increments when `ref_count > 0`. Replaced `inc_ref()` with `try_inc_ref_if_nonzero()` in both upgrade paths; returns `None` when ref_count was 0 (object being dropped by another thread).

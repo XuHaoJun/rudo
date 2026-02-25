@@ -1,7 +1,7 @@
 # [Bug]: sync.rs trigger_write_barrier TOCTOU - is_incremental_marking_active called twice
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -128,3 +128,11 @@ fn trigger_write_barrier(&self) {
 
 **相關 Bug:**
 - bug100: cell.rs GcCell::trigger_write_barrier TOCTOU (相同模式，不同位置)
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Cached `is_incremental_marking_active()` and `is_generational_barrier_active()` in local variables before the if block in both `GcRwLock::trigger_write_barrier` and `GcMutex::trigger_write_barrier` (sync.rs). Eliminates TOCTOU between check and use.

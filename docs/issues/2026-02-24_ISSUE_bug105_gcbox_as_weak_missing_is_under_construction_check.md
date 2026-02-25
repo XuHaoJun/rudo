@@ -1,7 +1,7 @@
 # [Bug]: GcBox::as_weak() 缺少 is_under_construction 檢查 - 內部方法缺少一致性檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -163,3 +163,12 @@ pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
 - bug94: Gc::deref/try_deref 缺少 is_under_construction 檢查
 - bug95: Gc::ref_count/weak_count 缺少 is_under_construction 檢查
 - bug104: Weak::clone/GcBoxWeakRef::clone 缺少 is_under_construction 檢查
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+1. **GcBox::as_weak()**: Added `is_under_construction()` check; returns null `GcBoxWeakRef` when object is under construction.
+2. **Gc::as_weak()** (pub(crate)): Added `is_under_construction()` to the existing dead/dropping check; returns null when under construction.

@@ -127,6 +127,23 @@ impl<T: Trace + ?Sized> GcBox<T> {
             .ok();
     }
 
+    /// Try to increment `ref_count` only if it is currently > 0.
+    /// Returns true if successful, false if `ref_count` was 0 (object is being dropped).
+    /// Used by weak upgrade to avoid TOCTOU: prevents `inc_ref` on object that
+    /// another thread has just dropped (`ref_count` 1->0).
+    #[inline]
+    pub(crate) fn try_inc_ref_if_nonzero(&self) -> bool {
+        self.ref_count
+            .fetch_update(Ordering::Acquire, Ordering::Acquire, |c| {
+                if c > 0 && c < usize::MAX {
+                    Some(c + 1)
+                } else {
+                    None
+                }
+            })
+            .is_ok()
+    }
+
     /// Decrement the reference count. Returns true if count reached zero.
     /// Uses `AcqRel` ordering to synchronize with other threads.
     /// Takes a raw pointer to avoid Miri's stacked borrows issues with `&self` casting.
@@ -395,9 +412,13 @@ impl<T: Trace> GcBox<T> {
     /// Create a weak reference to this `GcBox`.
     #[allow(dead_code)]
     pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
-        // Increment the weak count to track this weak reference.
         // SAFETY: self is a valid GcBox pointer.
         unsafe {
+            if self.is_under_construction() {
+                return GcBoxWeakRef {
+                    ptr: AtomicNullable::null(),
+                };
+            }
             (*NonNull::from(self).as_ptr()).inc_weak();
         }
         GcBoxWeakRef::new(NonNull::from(self))
@@ -463,7 +484,11 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 });
             }
 
-            gc_box.inc_ref();
+            // ref_count > 0: use atomic try_inc_ref_if_nonzero to avoid TOCTOU with
+            // concurrent dec_ref (another thread could drop last ref between check and inc_ref)
+            if !gc_box.try_inc_ref_if_nonzero() {
+                return None;
+            }
             Some(Gc {
                 ptr: AtomicNullable::new(ptr),
                 _marker: PhantomData,
@@ -578,19 +603,12 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 });
             }
 
-            // ref_count > 0, check again if still alive
-            if gc_box.is_dead_or_unrooted() {
+            // ref_count > 0: use atomic try_inc_ref_if_nonzero to avoid TOCTOU with
+            // concurrent dec_ref (another thread could drop last ref between check and inc_ref)
+            if !gc_box.try_inc_ref_if_nonzero() {
                 return None;
             }
-
-            // Check for overflow (for consistency with public Weak<T>::try_upgrade)
-            let current_count = gc_box.ref_count.load(Ordering::Acquire);
-            if current_count == usize::MAX {
-                return None;
-            }
-
-            // Object is alive and has strong refs - increment normally
-            gc_box.inc_ref();
+            crate::gc::notify_created_gc();
             Some(Gc {
                 ptr: AtomicNullable::new(ptr),
                 _marker: PhantomData,
@@ -1302,7 +1320,10 @@ impl<T: Trace> Gc<T> {
         };
         unsafe {
             let gc_box = &*ptr.as_ptr();
-            if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 {
+            if gc_box.is_under_construction()
+                || gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+            {
                 return GcBoxWeakRef {
                     ptr: AtomicNullable::null(),
                 };

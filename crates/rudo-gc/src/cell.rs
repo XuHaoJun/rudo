@@ -1125,13 +1125,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     fn trigger_write_barrier(&self) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        if crate::gc::incremental::is_generational_barrier_active()
-            || crate::gc::incremental::is_incremental_marking_active()
-        {
-            crate::heap::unified_write_barrier(
-                ptr,
-                crate::gc::incremental::is_incremental_marking_active(),
-            );
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        if generational_active || incremental_active {
+            crate::heap::unified_write_barrier(ptr, incremental_active);
         }
     }
 
