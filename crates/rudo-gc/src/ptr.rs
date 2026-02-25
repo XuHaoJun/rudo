@@ -276,7 +276,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
             let count = current & !Self::FLAGS_MASK;
 
             if count == 0 {
-                return true;
+                return false;
             } else if count == 1 {
                 // Attempt to set to just flags
                 match self.weak_count.compare_exchange_weak(

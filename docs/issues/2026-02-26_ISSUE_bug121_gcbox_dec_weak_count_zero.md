@@ -1,7 +1,7 @@
 # [Bug]: GcBox::dec_weak 當 weak_count 為 0 時錯誤地返回 true - 與 Weak::drop 行為不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -134,5 +134,11 @@ pub fn dec_weak(&self) -> bool {
 
 ## 修復狀態
 
-- [ ] 已修復
-- [x] 未修復
+- [x] 已修復
+- [ ] 未修復
+
+## 修復內容
+
+在 `crates/rudo-gc/src/ptr.rs` 的 `GcBox::dec_weak()` 函數中：
+- 將 `if count == 0 { return true; }` 改為 `if count == 0 { return false; }`
+- 修復位置：第 278-279 行
