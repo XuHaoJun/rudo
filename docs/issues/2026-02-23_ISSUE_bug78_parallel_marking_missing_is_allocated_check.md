@@ -1,7 +1,7 @@
 # [Bug]: Parallel Marking 缺少 is_allocated 檢查 - 可能標記錯誤物件
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -134,3 +134,16 @@ Parallel marking 與 lazy sweep 的並發需要特別小心。當 slot 被重用
 1. 阻止 GC 回收特定物件（透過錯誤標記）
 2. 造成記憶體洩漏
 3. 破壞 heap metadata 導致後續分配問題
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Added `is_allocated(idx)` check before marking in all three locations:
+- `gc/gc.rs` `mark_and_push_to_worker_queue`: return early if `!is_allocated(idx)` (skip mark and push)
+- `gc/marker.rs` `worker_mark_loop`: `continue` if `!is_allocated(idx)`
+- `gc/marker.rs` `worker_mark_loop_with_registry`: `continue` if `!is_allocated(idx)`
+
+Matches the pattern used in `mark_object_black` and `mark_new_object_black` (incremental.rs). Prevents marking swept/reused slots when lazy sweep and parallel marking run concurrently.

@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::resolve() / try_resolve() 未檢查 handle_id 是否已失效
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -145,3 +145,11 @@ pub fn try_resolve(&self) -> Option<Gc<T>> {
 2. 觸發 unregister()（或 handle 被 drop）
 3. 快速呼叫 resolve() 
 4. 如果記憶體已被重用，可能讀取到攻擊者控制的資料
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed.
+
+The current `GcHandle::resolve()` (lines 148-151) asserts `self.handle_id != HandleId::INVALID` before dereferencing. `GcHandle::try_resolve()` (lines 208-210) returns `None` when `handle_id == HandleId::INVALID`. Both methods validate handle validity before accessing the pointer.

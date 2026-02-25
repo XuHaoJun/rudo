@@ -1,6 +1,6 @@
 # [Bug]: GcBoxWeakRef::upgrade ref_count leak due to TOCTOU between try_inc_ref_from_zero and dropping_state check
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -135,3 +135,11 @@ pub(crate) fn upgrade(&self) -> Option<Gc<T>> {
 
 **Geohot (Exploit 觀點):**
 這種 TOCTOU race 很難利用，因為需要精確的時序控制。但理論上可以通過精確控制線程調度來觸發，導致目標程式 memory leak。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed.
+
+The `GcBoxWeakRef::upgrade()` implementation in `ptr.rs` (lines 421–456) already checks `dropping_state()` **before** calling `try_inc_ref_from_zero()`. The order matches the suggested fix: `is_under_construction` → `has_dead_flag` → `dropping_state` → `try_inc_ref_from_zero`. No code changes required.

@@ -1,7 +1,7 @@
 # [Bug]: Handle::get() / AsyncHandle::get() 缺少 dead_flag / dropping_state 檢查導致潛在 UAF
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -132,3 +132,13 @@ Handle scope 存活的意義是 handle slot 有效，但並不保證底層物件
 
 **Geohot (Exploit 觀點):**
 這是一個經典的 Use-After-Free 模式。攻擊者可能利用這個漏洞在物件被回收後仍然存取其記憶體。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Added `has_dead_flag()`, `dropping_state() == 0`, and `!is_under_construction()` checks to `Handle::get()` in `handles/mod.rs`. The method now panics with a descriptive message when the object is dead, dropping, or under construction, matching `AsyncHandle::get()` behavior. (`AsyncHandle::get()` already had these checks.)
+
+Fixed `test_escapeable_handlescope_escape` and `miri_escapeable_handle_scope_escape`: the tests were creating `gc` inside a block and dropping it before using the escaped handle, causing UAF. The fix keeps `gc` alive for the duration of escaped handle use.

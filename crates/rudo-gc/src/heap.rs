@@ -2628,10 +2628,7 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     if (*h_ptr).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
                         return;
                     }
-                    (
-                        NonNull::new_unchecked(h_ptr),
-                        0_usize,
-                    )
+                    (NonNull::new_unchecked(h_ptr), 0_usize)
                 } else {
                     let h = ptr_to_page_header(ptr);
                     if (*h.as_ptr()).magic != MAGIC_GC_PAGE {
@@ -2693,18 +2690,18 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
             // Tail pages of multi-page large objects have no PageHeader; ptr_to_page_header
             // would yield garbage. Check large_object_map first (see find_gc_box_from_ptr).
             let (h, index) = if let Some(&(head_addr, size, h_size)) =
-                    heap.large_object_map.get(&page_addr)
-                {
-                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + size {
-                        return;
-                    }
-                    let h_ptr = head_addr as *mut PageHeader;
-                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
-                    // Skip barrier only if page is young AND object has no gen_old_flag (bug71).
-                    if (*h_ptr).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
-                        return;
-                    }
-                    let owner = (*h_ptr).owner_thread;
+                heap.large_object_map.get(&page_addr)
+            {
+                if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + size {
+                    return;
+                }
+                let h_ptr = head_addr as *mut PageHeader;
+                let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                // Skip barrier only if page is young AND object has no gen_old_flag (bug71).
+                if (*h_ptr).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
+                    return;
+                }
+                let owner = (*h_ptr).owner_thread;
                 assert!(
                     owner == 0 || owner == current,
                     "Thread safety violation: {context} called on GcCell allocated by a different \
@@ -2816,10 +2813,7 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     if (*h_ptr).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
                         return;
                     }
-                    (
-                        NonNull::new_unchecked(h_ptr),
-                        0_usize,
-                    )
+                    (NonNull::new_unchecked(h_ptr), 0_usize)
                 } else {
                     let h = ptr_to_page_header(ptr);
                     if (*h.as_ptr()).magic != MAGIC_GC_PAGE {

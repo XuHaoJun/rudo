@@ -1221,6 +1221,9 @@ unsafe fn mark_and_push_to_worker_queue(
         let header = crate::heap::ptr_to_page_header(ptr_addr);
         if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box.as_ptr().cast()) {
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return;
+                }
                 if !(*header.as_ptr()).is_marked(idx) {
                     (*header.as_ptr()).set_mark(idx);
                 }
@@ -2520,6 +2523,7 @@ unsafe fn lazy_sweep_page(
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
                 let mut current_free = (*header).free_list_head();
                 obj_cast.write_unaligned(current_free);
+                let mut did_reclaim = false;
                 loop {
                     let old = current_free.unwrap_or(u16::MAX);
                     match (*header).free_list_head.compare_exchange(
@@ -2562,8 +2566,9 @@ unsafe fn lazy_sweep_page(
                                 } else {
                                     current_free = next_head;
                                 }
-                                continue;
+                                break; // Slot was concurrently allocated; skip to next slot
                             }
+                            did_reclaim = true;
                             break;
                         }
                         Err(actual) => {
@@ -2577,8 +2582,10 @@ unsafe fn lazy_sweep_page(
                     }
                 }
 
-                (*header).clear_allocated(i);
-                reclaimed += 1;
+                if did_reclaim {
+                    (*header).clear_allocated(i);
+                    reclaimed += 1;
+                }
             }
         } else {
             (*header).clear_mark(i);
@@ -2638,6 +2645,7 @@ unsafe fn lazy_sweep_page_all_dead(
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
                 let mut current_free = (*header).free_list_head();
                 obj_cast.write_unaligned(current_free);
+                let mut did_reclaim = false;
                 loop {
                     let old = current_free.unwrap_or(u16::MAX);
                     match (*header).free_list_head.compare_exchange(
@@ -2680,8 +2688,9 @@ unsafe fn lazy_sweep_page_all_dead(
                                 } else {
                                     current_free = next_head;
                                 }
-                                continue;
+                                break; // Slot was concurrently allocated; skip to next slot
                             }
+                            did_reclaim = true;
                             break;
                         }
                         Err(actual) => {
@@ -2695,8 +2704,10 @@ unsafe fn lazy_sweep_page_all_dead(
                     }
                 }
 
-                (*header).clear_allocated(i);
-                reclaimed += 1;
+                if did_reclaim {
+                    (*header).clear_allocated(i);
+                    reclaimed += 1;
+                }
             }
             (*header).clear_mark(i);
         }

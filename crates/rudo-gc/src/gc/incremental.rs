@@ -302,12 +302,38 @@ impl IncrementalMarkState {
     }
 
     pub fn transition_to(&self, new_phase: MarkPhase) -> bool {
-        let current = self.phase();
-        if !self.is_valid_transition(current, new_phase) {
+        let current = self.phase.load(Ordering::SeqCst);
+        let current_phase = MarkPhase::from_usize(current).unwrap_or(MarkPhase::Idle);
+        if !self.is_valid_transition(current_phase, new_phase) {
             return false;
         }
-        self.set_phase(new_phase);
-        true
+        // Use CAS to make the transition atomic (bug73: avoid TOCTOU race).
+        if self
+            .phase
+            .compare_exchange(
+                current,
+                new_phase as usize,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            #[cfg(feature = "tracing")]
+            {
+                let phase_str = match new_phase {
+                    MarkPhase::Idle => "idle",
+                    MarkPhase::Snapshot => "snapshot",
+                    MarkPhase::Marking => "marking",
+                    MarkPhase::FinalMark => "final_mark",
+                    MarkPhase::Sweeping => "sweeping",
+                };
+                let objects_marked = self.stats.objects_marked.load(Ordering::Relaxed);
+                crate::gc::tracing::log_phase_transition(phase_str, objects_marked);
+            }
+            true
+        } else {
+            false
+        }
     }
 
     #[allow(clippy::unused_self)]

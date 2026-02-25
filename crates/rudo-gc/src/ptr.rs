@@ -2141,10 +2141,7 @@ impl<K: Trace + 'static, V: Trace + 'static> Clone for Ephemeron<K, V> {
     fn clone(&self) -> Self {
         Self {
             key: self.key.clone(),
-            value: Gc::try_clone(&self.value).unwrap_or_else(|| Gc {
-                ptr: AtomicNullable::null(),
-                _marker: PhantomData,
-            }),
+            value: Gc::clone(&self.value),
         }
     }
 }

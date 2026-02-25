@@ -297,11 +297,18 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
     /// The handle must be valid (the scope it belongs to must not have been dropped).
     /// This is guaranteed by the lifetime system when used correctly.
     #[inline]
+    #[track_caller]
     pub fn get(&self) -> &T {
         unsafe {
             let slot = &*self.slot;
             let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
             let gc_box = &*gc_box_ptr;
+            assert!(
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "Handle::get: cannot access a dead, dropping, or under construction Gc"
+            );
             gc_box.value()
         }
     }

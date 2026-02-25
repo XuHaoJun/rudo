@@ -146,10 +146,10 @@ fn test_escapeable_handlescope_escape() {
 
     with_heap_and_tcb(|_, tcb| {
         let outer = HandleScope::new(tcb);
+        let gc = Gc::new(123i32); // Keep gc alive so escaped handle stays valid (bug74)
 
         let escaped_handle = {
             let escape_scope = EscapeableHandleScope::new(tcb);
-            let gc = Gc::new(123i32);
             let inner_handle = escape_scope.handle(&gc);
             escape_scope.escape(&outer, inner_handle)
         };

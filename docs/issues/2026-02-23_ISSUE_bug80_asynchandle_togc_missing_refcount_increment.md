@@ -1,6 +1,6 @@
 # [Bug]: AsyncHandle::to_gc 缺少 ref count 增量導致 Use-After-Free
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -161,3 +161,15 @@ pub fn to_gc(self) -> Gc<T> {
 5. 使用原本的 Gc 讀寫新物件的內容
 
 這種類型的 Use-After-Free 是常見的記憶體腐敗攻擊向量。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed.
+
+The current `AsyncHandle::to_gc` implementation in `handles/async.rs` (lines 671–686) correctly:
+1. Calls `gc_box.inc_ref()` before `Gc::from_raw` to increment ref count
+2. Checks `has_dead_flag()`, `dropping_state()`, and `is_under_construction()` (bug70 fix)
+
+The `test_async_handle_to_gc_basic` test in `handles/tests/escape_tests.rs` verifies ref_count is 2 after `to_gc` (gc + gc1 each hold a ref). No code changes required.

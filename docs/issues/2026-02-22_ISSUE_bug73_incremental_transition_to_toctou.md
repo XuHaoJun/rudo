@@ -1,7 +1,7 @@
 # [Bug]: IncrementalMarkState::transition_to has TOCTOU Race Condition
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -118,3 +118,11 @@ pub fn transition_to(&self, new_phase: MarkPhase) -> bool {
 - 造成 use-after-free
 
 攻擊需要精確時序控制，但配合其他 bug 可能更容易觸發。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Replaced the non-atomic load-check-store sequence in `IncrementalMarkState::transition_to()` with a single `compare_exchange` operation. The phase transition is now atomic: we load the current value, validate the transition, then CAS to the new phase only if the stored value still matches our read. If another thread changed the phase in between, the CAS fails and we return `false`. Tracing side effects run only after a successful CAS.

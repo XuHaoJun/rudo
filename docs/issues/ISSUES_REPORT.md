@@ -3,16 +3,16 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 70
-- **Open**: 46
+- **Fixed**: 78
+- **Open**: 39
 - **Invalid**: 4
 - **Verified**: 2
 
 ### By Tags
-- **Verified**: 76
-- **Not Verified**: 5
+- **Verified**: 81
+- **Not Verified**: 4
 - **Not Reproduced**: 6
-- **Unverified**: 35
+- **Unverified**: 32
 
 ## All Issues
 
@@ -89,15 +89,15 @@
 | [2026-02-22_ISSUE_bug69_gcboxweakref_clone_missing_dead_check.md](./2026-02-22_ISSUE_bug69_gcboxweakref_clone_missing_dead_check.md) | GcBoxWeakRef::clone() 缺少 dead_flag / dropping_state 檢查 | Fixed | Verified |
 | [2026-02-22_ISSUE_bug70_asynchandle_to_gc_missing_dead_check.md](./2026-02-22_ISSUE_bug70_asynchandle_to_gc_missing_dead_check.md) | AsyncHandle::to_gc 缺少 dead_flag / dropping_state 檢查，與 Handle::to_gc 行為不一致 | Fixed | Verified |
 | [2026-02-22_ISSUE_bug71_write_barrier_gen_old_flag_page_generation_mismatch.md](./2026-02-22_ISSUE_bug71_write_barrier_gen_old_flag_page_generation_mismatch.md) | Write Barrier 僅檢查 per-object GEN_OLD_FLAG 忽略 Page Generation 導致 OLD→YOUNG 引用遺漏 | Fixed | Verified |
-| [2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md](./2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md) | GcHandle::resolve() / try_resolve() 未檢查 handle_id 是否已失效 | Open | Verified |
-| [2026-02-22_ISSUE_bug73_incremental_transition_to_toctou.md](./2026-02-22_ISSUE_bug73_incremental_transition_to_toctou.md) | IncrementalMarkState::transition_to has TOCTOU Race Condition | Open | Not Verified |
-| [2026-02-22_ISSUE_bug74_handle_get_missing_dead_check.md](./2026-02-22_ISSUE_bug74_handle_get_missing_dead_check.md) | Handle::get() / AsyncHandle::get() 缺少 dead_flag / dropping_state 檢查導致潛在 UAF | Open | Unverified |
-| [2026-02-22_ISSUE_bug75_gcboxweakref_upgrade_refcount_leak.md](./2026-02-22_ISSUE_bug75_gcboxweakref_upgrade_refcount_leak.md) | GcBoxWeakRef::upgrade ref_count leak due to TOCTOU between try_inc_ref_from_zero and dropping_state check | Open | Verified |
-| [2026-02-22_ISSUE_bug76_ephemeron_clone_null_value.md](./2026-02-22_ISSUE_bug76_ephemeron_clone_null_value.md) | Ephemeron::clone() creates null value Gc when original value is dead/dropping | Open | Unverified |
-| [2026-02-23_ISSUE_bug77_lazy_sweep_infinite_loop.md](./2026-02-23_ISSUE_bug77_lazy_sweep_infinite_loop.md) | Lazy Sweep 發生無窮迴圈 - is_allocated 為 true 時 continue 導致無限循環 | Open | Unverified |
-| [2026-02-23_ISSUE_bug78_parallel_marking_missing_is_allocated_check.md](./2026-02-23_ISSUE_bug78_parallel_marking_missing_is_allocated_check.md) | Parallel Marking 缺少 is_allocated 檢查 - 可能標記錯誤物件 | Open | Unverified |
+| [2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md](./2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md) | GcHandle::resolve() / try_resolve() 未檢查 handle_id 是否已失效 | Fixed | Verified |
+| [2026-02-22_ISSUE_bug73_incremental_transition_to_toctou.md](./2026-02-22_ISSUE_bug73_incremental_transition_to_toctou.md) | IncrementalMarkState::transition_to has TOCTOU Race Condition | Fixed | Verified |
+| [2026-02-22_ISSUE_bug74_handle_get_missing_dead_check.md](./2026-02-22_ISSUE_bug74_handle_get_missing_dead_check.md) | Handle::get() / AsyncHandle::get() 缺少 dead_flag / dropping_state 檢查導致潛在 UAF | Fixed | Verified |
+| [2026-02-22_ISSUE_bug75_gcboxweakref_upgrade_refcount_leak.md](./2026-02-22_ISSUE_bug75_gcboxweakref_upgrade_refcount_leak.md) | GcBoxWeakRef::upgrade ref_count leak due to TOCTOU between try_inc_ref_from_zero and dropping_state check | Fixed | Verified |
+| [2026-02-22_ISSUE_bug76_ephemeron_clone_null_value.md](./2026-02-22_ISSUE_bug76_ephemeron_clone_null_value.md) | Ephemeron::clone() creates null value Gc when original value is dead/dropping | Fixed | Verified |
+| [2026-02-23_ISSUE_bug77_lazy_sweep_infinite_loop.md](./2026-02-23_ISSUE_bug77_lazy_sweep_infinite_loop.md) | Lazy Sweep 發生無窮迴圈 - is_allocated 為 true 時 continue 導致無限循環 | Fixed | Verified |
+| [2026-02-23_ISSUE_bug78_parallel_marking_missing_is_allocated_check.md](./2026-02-23_ISSUE_bug78_parallel_marking_missing_is_allocated_check.md) | Parallel Marking 缺少 is_allocated 檢查 - 可能標記錯誤物件 | Fixed | Verified |
 | [2026-02-23_ISSUE_bug79_vecdeque_linkedlist_missing_gccapture.md](./2026-02-23_ISSUE_bug79_vecdeque_linkedlist_missing_gccapture.md) | VecDeque 與 LinkedList 缺少 GcCapture 實作導致指標遺漏 | Fixed | Verified |
-| [2026-02-23_ISSUE_bug80_asynchandle_togc_missing_refcount_increment.md](./2026-02-23_ISSUE_bug80_asynchandle_togc_missing_refcount_increment.md) | AsyncHandle::to_gc 缺少 ref count 增量導致 Use-After-Free | Open | Verified |
+| [2026-02-23_ISSUE_bug80_asynchandle_togc_missing_refcount_increment.md](./2026-02-23_ISSUE_bug80_asynchandle_togc_missing_refcount_increment.md) | AsyncHandle::to_gc 缺少 ref count 增量導致 Use-After-Free | Fixed | Verified |
 | [2026-02-23_ISSUE_bug81_async_handle_to_gc_uaf.md](./2026-02-23_ISSUE_bug81_async_handle_to_gc_uaf.md) | AsyncHandle::to_gc 缺少 ref count 增量與 dead check 導致 UAF | Open | Verified |
 | [2026-02-23_ISSUE_bug82_binaryheap_missing_gccapture.md](./2026-02-23_ISSUE_bug82_binaryheap_missing_gccapture.md) | BinaryHeap 缺少 GcCapture 實作導致指標遺漏 | Open | Unverified |
 | [2026-02-23_ISSUE_bug83_gchandle_resolve_toctou_race.md](./2026-02-23_ISSUE_bug83_gchandle_resolve_toctou_race.md) | GcHandle resolve/clone 存在 TOCTOU Race Condition 導致 Use-After-Free | Open | Unverified |
@@ -140,3 +140,4 @@
 | [2026-02-25_ISSUE_bug118_write_guard_drop_toctou.md](./2026-02-25_ISSUE_bug118_write_guard_drop_toctou.md) | Write Guard Drop TOCTOU - 檢查 barrier 狀態與調用 mark_object_black 之间状态可能改变 | Open | Unverified |
 | [2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md](./2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md) | GcBoxWeakRef::upgrade TOCTOU - dropping_state 檢查與 try_inc_ref_from_zero CAS 之間的 Race 導致 Use-After-Free | Open | Unverified |
 | [2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md](./2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md) | GcBoxWeakRef::try_upgrade TOCTOU - is_dead_or_unrooted 檢查與 inc_ref人之間的 Race 導致 Use-After-Free | Open | Unverified |
+| [2026-02-26_ISSUE_bug121_gcbox_dec_weak_count_zero.md](./2026-02-26_ISSUE_bug121_gcbox_dec_weak_count_zero.md) | GcBox::dec_weak 當 weak_count 為 0 時錯誤地返回 true - 與 Weak::drop 行為不一致 | Open | Unverified |

@@ -1,7 +1,7 @@
 # [Bug]: Lazy Sweep 發生無窮迴圈 - is_allocated 為 true 時 continue 導致無限循環
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -105,3 +105,11 @@ Lazy sweep 的設計目標是減少 GC pause 時間，但當有多執行並發 a
 
 **Geohot (Exploit 觀點):**
 這是一個 DoS（拒絕服務）向量。攻擊者可以嘗試觸發精確的時序條件來使 GC 完全卡死。雖然不會導致記憶體錯誤，但可以有效癱瘓服務。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+In both `lazy_sweep_page` and `lazy_sweep_page_all_dead`, changed `continue` to `break` when `is_allocated(i)` is true after CAS success (slot was concurrently allocated). Added `did_reclaim` flag so we only call `clear_allocated` and increment `reclaimed` when we actually added the slot to the free list; when we skip due to concurrent allocation we exit the inner loop and advance to the next slot without corrupting state.

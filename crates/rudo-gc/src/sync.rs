@@ -66,8 +66,7 @@ fn record_satb_old_values<T: GcCapture + ?Sized>(value: &T) {
     if crate::heap::try_with_heap(|heap| {
         for gc_ptr in &gc_ptrs {
             if !heap.record_satb_old_value(*gc_ptr) {
-                IncrementalMarkState::global()
-                    .request_fallback(FallbackReason::SatbBufferOverflow);
+                IncrementalMarkState::global().request_fallback(FallbackReason::SatbBufferOverflow);
                 break;
             }
         }
