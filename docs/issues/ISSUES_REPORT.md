@@ -3,13 +3,13 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 58
-- **Open**: 12
+- **Fixed**: 59
+- **Open**: 11
 - **Invalid**: 4
 
 ### By Tags
-- **Verified**: 55
-- **Unverified**: 6
+- **Verified**: 56
+- **Unverified**: 5
 - **Not Verified**: 3
 - **Not Reproduced**: 6
 
@@ -23,7 +23,7 @@
 | [2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md](./2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md) | Incremental Marking 啟用時 Generational Barrier 被禁用 | Open | Unverified |
 | [2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md](./2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md) | AsyncHandle::to_gc 缺少 reference count 遞增 | Open | Unverified |
 | [2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md](./2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md) | GcRwLockWriteGuard/GcMutexGuard Drop 缺少 Generational Barrier 檢查 | Open | Unverified |
-| [2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md](./2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md) | mark_new_object_black 缺少 is_allocated 檢查，與 mark_object_black 行為不一致 | Open | Not Verified |
+| [2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md](./2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md) | mark_new_object_black 缺少 is_allocated 檢查，與 mark_object_black 行為不一致 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md](./2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md) | Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏 | Fixed | Not Reproduced |

@@ -1,7 +1,7 @@
 # [Bug]: mark_new_object_black 缺少 is_allocated 檢查，與 mark_object_black 行為不一致
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

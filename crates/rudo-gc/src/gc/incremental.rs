@@ -916,6 +916,9 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
     unsafe {
         if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
             let header = crate::heap::ptr_to_page_header(ptr);
+            if !(*header.as_ptr()).is_allocated(idx) {
+                return false;
+            }
             if !(*header.as_ptr()).is_marked(idx) {
                 (*header.as_ptr()).set_mark(idx);
                 return true;
