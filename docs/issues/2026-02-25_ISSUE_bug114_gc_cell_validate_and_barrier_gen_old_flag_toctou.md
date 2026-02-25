@@ -98,11 +98,27 @@ if !has_gen_old {
 
 ## 🗣️ 內部討論紀錄 (Internal Discussion Record)
 
+## 新增探索分析 (2026-02-26)
+
+透過 start-bug-hunt 技能進行代碼庫探索，確認以下發現：
+
+### 探索發現摘要
+1. `GcCell::borrow_mut()` 中 `is_incremental_marking_active()` 被調用三次 - 對應 bug 110
+2. `gc_cell_validate_and_barrier` 中 GEN_OLD_FLAG 檢查 TOCTOU - 本 bug 114
+3. `GcThreadSafeCell::borrow_mut()` 中重複調用 - 對應 bugs 111, 116
+
+所有發現皆為 TOCTOU (Time-of-Check-Time-of-Use) 競爭條件，發生於增量標記階段的 write barrier 中。
+
+### 驗證狀態
+- **代碼位置確認**: `heap.rs:2766-2782` 確認存在此 TOCTOU
+- **觸發條件**: 需要並發執行 mutator 和 GC，同時精確控制時序
+- **潛在影響**: 可能導致 barrier 對已釋放物件執行操作
+
 **R. Kent Dybvig (GC 架構觀點):**
 此 TOCTOU 可能導致 barrier 對已回收的物件執行操作。如果物件槽位被重用且 flag 被清除，barrier 可能記錄一個無效的頁面到 dirty_pages 或 remembered_buffer，導致後續掃描時出現未定義行為。
 
 **Rustacean (Soundness 觀點):**
 這是並發安全問題。在檢查和使用之間沒有同步，導致可觀察的競爭行為。使用 Relaxed ordering 讀取 flag 增加了問題的複雜性。
 
-**Geohot (Exploit 觀點):**
+**Geohot (Exploit 攻擊觀點):**
 在高負載並發環境中，攻擊者可能嘗試在檢查和執行之間觸發 GC 回收，利用 TOCTOU 繞過 barrier 機制。
