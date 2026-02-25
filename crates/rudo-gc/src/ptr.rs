@@ -482,12 +482,9 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
         unsafe {
             let gc_box = &*ptr.as_ptr();
 
-            if gc_box.is_under_construction() {
-                return Self {
-                    ptr: AtomicNullable::null(),
-                };
-            }
-
+            // Note: We do NOT check is_under_construction here. Gc::new_cyclic_weak
+            // passes a Weak to the closure while the object is under construction;
+            // the closure may legitimately clone it (e.g. to store in ref1 and ref2).
             if gc_box.has_dead_flag() {
                 return Self {
                     ptr: AtomicNullable::null(),
@@ -1883,11 +1880,9 @@ impl<T: Trace> Clone for Weak<T> {
         }
         unsafe {
             let gc_box = &*ptr.as_ptr();
-            if gc_box.is_under_construction() {
-                return Self {
-                    ptr: AtomicNullable::null(),
-                };
-            }
+            // Note: We do NOT check is_under_construction here. Gc::new_cyclic_weak
+            // passes a Weak to the closure while the object is under construction;
+            // the closure may legitimately clone it (e.g. to store in ref1 and ref2).
             if gc_box.has_dead_flag() {
                 return Self {
                     ptr: AtomicNullable::null(),

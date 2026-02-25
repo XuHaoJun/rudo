@@ -72,7 +72,18 @@ fn test_async_handle_to_gc_basic() {
     let handle = scope.handle(&gc);
 
     let gc1 = handle.to_gc();
-    assert_eq!(Gc::ref_count(&gc1).get(), 1);
+    assert_eq!(
+        Gc::ref_count(&gc1).get(),
+        2,
+        "to_gc inc_refs so gc + gc1 each hold a ref"
+    );
+
+    drop(gc);
+    assert_eq!(
+        Gc::ref_count(&gc1).get(),
+        1,
+        "escaped Gc survives original drop"
+    );
 
     drop(gc1);
     drop(scope);
