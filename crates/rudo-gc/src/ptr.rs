@@ -478,6 +478,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
             // Try atomic transition from 0 to 1 (resurrection)
             if gc_box.try_inc_ref_from_zero() {
+                // Second check: verify object wasn't dropped between check and CAS
+                if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                    // Undo the increment and return None
+                    let _ = gc_box;
+                    crate::ptr::GcBox::dec_ref(ptr.as_ptr());
+                    return None;
+                }
                 return Some(Gc {
                     ptr: AtomicNullable::new(ptr),
                     _marker: PhantomData,
@@ -596,6 +603,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
             // Try atomic transition from 0 to 1 (same as regular upgrade)
             if gc_box.try_inc_ref_from_zero() {
+                // Second check: verify object wasn't dropped between check and CAS
+                if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                    // Undo the increment and return None
+                    let _ = gc_box;
+                    crate::ptr::GcBox::dec_ref(ptr.as_ptr());
+                    return None;
+                }
                 crate::gc::notify_created_gc();
                 return Some(Gc {
                     ptr: AtomicNullable::new(ptr),
