@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::clone() 缺少 dead_flag / dropping_state 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -155,3 +155,11 @@ pub(crate) fn clone(&self) -> Self {
 - bug31: Weak::clone TOCTOU - 提及 GcBoxWeakRef::clone 也有類似問題
 - bug64: Weak::clone 缺少 dead_flag/dropping_state 檢查 - 類似的問題
 - bug68: Gc::as_weak() 缺少 dead_flag/dropping_state 檢查 - 類似的問題
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed.
+
+The fix was applied in commit `3ccae47` ("fix: add safety checks to GcBoxWeakRef::clone"). The current `GcBoxWeakRef::clone()` implementation in `ptr.rs` (lines 488-497) correctly checks `has_dead_flag()` and `dropping_state() != 0`, returning a null weak ref when either is true. Behavior matches `Weak::clone()`.

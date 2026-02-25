@@ -3,27 +3,21 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 59
-- **Open**: 11
+- **Fixed**: 70
+- **Open**: 46
 - **Invalid**: 4
+- **Verified**: 2
 
 ### By Tags
-- **Verified**: 56
-- **Unverified**: 5
-- **Not Verified**: 3
+- **Verified**: 76
+- **Not Verified**: 5
 - **Not Reproduced**: 6
+- **Unverified**: 35
 
 ## All Issues
 
 | Issue | Title | Status | Tags |
 |---|---|---|---|
-| [2026-02-24_ISSUE_bug103_gchandle_inc_ref_toctou_race.md](./2026-02-24_ISSUE_bug103_gchandle_inc_ref_toctou_race.md) | GcHandle/GcBoxWeakRef inc_ref TOCTOU Race - 檢查與遞增非原子操作導致 Use-After-Free | Open | Unverified |
-| [2026-02-24_ISSUE_bug102_async_handle_get_missing_checks.md](./2026-02-24_ISSUE_bug102_async_handle_get_missing_checks.md) | AsyncHandle::get 缺少 is_under_construction 檢查 | Open | Unverified |
-| [2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md](./2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md) | sync.rs trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Open | Unverified |
-| [2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md](./2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md) | Incremental Marking 啟用時 Generational Barrier 被禁用 | Open | Unverified |
-| [2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md](./2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md) | AsyncHandle::to_gc 缺少 reference count 遞增 | Open | Unverified |
-| [2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md](./2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md) | GcRwLockWriteGuard/GcMutexGuard Drop 缺少 Generational Barrier 檢查 | Open | Unverified |
-| [2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md](./2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md) | mark_new_object_black 缺少 is_allocated 檢查，與 mark_object_black 行為不一致 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md](./2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md) | Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏 | Fixed | Not Reproduced |
@@ -86,12 +80,63 @@
 | [2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md](./2026-02-21_ISSUE_bug60_mark_page_dirty_for_ptr_large_object.md) | mark_page_dirty_for_ptr 未處理大型物件導致 Vec<Gc<T>> 追蹤失敗 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug61_gcmutex_capture_gc_ptrs_try_lock.md](./2026-02-21_ISSUE_bug61_gcmutex_capture_gc_ptrs_try_lock.md) | GcMutex::capture_gc_ptrs_into() 使用 try_lock() 而非 lock()，與 GcRwLock 不一致 | Fixed | Verified |
 | [2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md](./2026-02-21_ISSUE_bug62_gchandle_resolve_dropping_state.md) | GcHandle::resolve() 與 GcHandle::try_resolve() 缺少 dropping_state 檢查 | Fixed | Verified |
-| [2026-02-22_ISSUE_bug64_weak_clone_missing_dead_check.md](./2026-02-22_ISSUE_bug64_weak_clone_missing_dead_check.md) | Weak::clone() 缺少 dead_flag / dropping_state 檢查 | Open | Unverified |
-| [2026-02-22_ISSUE_bug66_parking_lot_mutex_rwlock_missing_gccapture.md](./2026-02-22_ISSUE_bug66_parking_lot_mutex_rwlock_missing_gccapture.md) | parking_lot::Mutex 與 parking_lot::RwLock 缺少 GcCapture 實作導致指標遺漏 | Open | Verified |
-| [2026-02-22_ISSUE_bug68_gc_as_weak_missing_dead_check.md](./2026-02-22_ISSUE_bug68_gc_as_weak_missing_dead_check.md) | Gc::as_weak() 缺少 dead_flag / dropping_state 檢查 | Open | Unverified |
-| [2026-02-22_ISSUE_bug70_asynchandle_to_gc_missing_dead_check.md](./2026-02-22_ISSUE_bug70_asynchandle_to_gc_missing_dead_check.md) | AsyncHandle::to_gc 缺少 dead_flag / dropping_state 檢查，與 Handle::to_gc 行為不一致 | Open | Unverified |
-| [2026-02-22_ISSUE_bug71_write_barrier_gen_old_flag_page_generation_mismatch.md](./2026-02-22_ISSUE_bug71_write_barrier_gen_old_flag_page_generation_mismatch.md) | Write Barrier 僅檢查 per-object GEN_OLD_FLAG 忽略 Page Generation 導致 OLD→YOUNG 引用遺漏 | Open | Not Verified |
-| [2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md](./2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md) | GcHandle::resolve() / try_resolve() 未檢查 handle_id 是否已失效導致 UB | Open | Verified |
-| [2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md](./2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md) | Gc::clone() 缺少 is_under_construction 檢查 - 與其他操作不一致 | Open | Unverified |
+| [2026-02-21_ISSUE_bug63_cross_thread_handle_missing_dead_check.md](./2026-02-21_ISSUE_bug63_cross_thread_handle_missing_dead_check.md) | Gc::cross_thread_handle() 與 Gc::weak_cross_thread_handle() 缺少 dead_flag / dropping_state 檢查 | Verified | Verified |
+| [2026-02-22_ISSUE_bug64_weak_clone_missing_dead_check.md](./2026-02-22_ISSUE_bug64_weak_clone_missing_dead_check.md) | Weak::clone() 缺少 dead_flag / dropping_state 檢查 | Fixed | Verified |
+| [2026-02-22_ISSUE_bug65_gcrwlock_gcmutex_write_missing_satb_old_value.md](./2026-02-22_ISSUE_bug65_gcrwlock_gcmutex_write_missing_satb_old_value.md) | GcRwLock 與 GcMutex 的 write()/lock() 缺少 SATB 舊值捕獲，導致增量標記期間潛在 UAF | Fixed | Verified |
+| [2026-02-22_ISSUE_bug66_parking_lot_mutex_rwlock_missing_gccapture.md](./2026-02-22_ISSUE_bug66_parking_lot_mutex_rwlock_missing_gccapture.md) | parking_lot::Mutex 與 parking_lot::RwLock 缺少 GcCapture 實作導致指標遺漏 | Fixed | Verified |
+| [2026-02-22_ISSUE_bug67_vecdeque_linkedlist_missing_gccapture.md](./2026-02-22_ISSUE_bug67_vecdeque_linkedlist_missing_gccapture.md) | VecDeque 與 LinkedList 缺少 GcCapture 實作導致指標遺漏 | Fixed | Verified |
+| [2026-02-22_ISSUE_bug68_gc_as_weak_missing_dead_check.md](./2026-02-22_ISSUE_bug68_gc_as_weak_missing_dead_check.md) | Gc::as_weak() 缺少 dead_flag / dropping_state 檢查 | Fixed | Verified |
+| [2026-02-22_ISSUE_bug69_gcboxweakref_clone_missing_dead_check.md](./2026-02-22_ISSUE_bug69_gcboxweakref_clone_missing_dead_check.md) | GcBoxWeakRef::clone() 缺少 dead_flag / dropping_state 檢查 | Fixed | Verified |
+| [2026-02-22_ISSUE_bug70_asynchandle_to_gc_missing_dead_check.md](./2026-02-22_ISSUE_bug70_asynchandle_to_gc_missing_dead_check.md) | AsyncHandle::to_gc 缺少 dead_flag / dropping_state 檢查，與 Handle::to_gc 行為不一致 | Fixed | Verified |
+| [2026-02-22_ISSUE_bug71_write_barrier_gen_old_flag_page_generation_mismatch.md](./2026-02-22_ISSUE_bug71_write_barrier_gen_old_flag_page_generation_mismatch.md) | Write Barrier 僅檢查 per-object GEN_OLD_FLAG 忽略 Page Generation 導致 OLD→YOUNG 引用遺漏 | Fixed | Verified |
+| [2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md](./2026-02-22_ISSUE_bug72_gchandle_resolve_unregistered_handle_ub.md) | GcHandle::resolve() / try_resolve() 未檢查 handle_id 是否已失效 | Open | Verified |
+| [2026-02-22_ISSUE_bug73_incremental_transition_to_toctou.md](./2026-02-22_ISSUE_bug73_incremental_transition_to_toctou.md) | IncrementalMarkState::transition_to has TOCTOU Race Condition | Open | Not Verified |
+| [2026-02-22_ISSUE_bug74_handle_get_missing_dead_check.md](./2026-02-22_ISSUE_bug74_handle_get_missing_dead_check.md) | Handle::get() / AsyncHandle::get() 缺少 dead_flag / dropping_state 檢查導致潛在 UAF | Open | Unverified |
+| [2026-02-22_ISSUE_bug75_gcboxweakref_upgrade_refcount_leak.md](./2026-02-22_ISSUE_bug75_gcboxweakref_upgrade_refcount_leak.md) | GcBoxWeakRef::upgrade ref_count leak due to TOCTOU between try_inc_ref_from_zero and dropping_state check | Open | Verified |
+| [2026-02-22_ISSUE_bug76_ephemeron_clone_null_value.md](./2026-02-22_ISSUE_bug76_ephemeron_clone_null_value.md) | Ephemeron::clone() creates null value Gc when original value is dead/dropping | Open | Unverified |
+| [2026-02-23_ISSUE_bug77_lazy_sweep_infinite_loop.md](./2026-02-23_ISSUE_bug77_lazy_sweep_infinite_loop.md) | Lazy Sweep 發生無窮迴圈 - is_allocated 為 true 時 continue 導致無限循環 | Open | Unverified |
+| [2026-02-23_ISSUE_bug78_parallel_marking_missing_is_allocated_check.md](./2026-02-23_ISSUE_bug78_parallel_marking_missing_is_allocated_check.md) | Parallel Marking 缺少 is_allocated 檢查 - 可能標記錯誤物件 | Open | Unverified |
+| [2026-02-23_ISSUE_bug79_vecdeque_linkedlist_missing_gccapture.md](./2026-02-23_ISSUE_bug79_vecdeque_linkedlist_missing_gccapture.md) | VecDeque 與 LinkedList 缺少 GcCapture 實作導致指標遺漏 | Fixed | Verified |
+| [2026-02-23_ISSUE_bug80_asynchandle_togc_missing_refcount_increment.md](./2026-02-23_ISSUE_bug80_asynchandle_togc_missing_refcount_increment.md) | AsyncHandle::to_gc 缺少 ref count 增量導致 Use-After-Free | Open | Verified |
+| [2026-02-23_ISSUE_bug81_async_handle_to_gc_uaf.md](./2026-02-23_ISSUE_bug81_async_handle_to_gc_uaf.md) | AsyncHandle::to_gc 缺少 ref count 增量與 dead check 導致 UAF | Open | Verified |
+| [2026-02-23_ISSUE_bug82_binaryheap_missing_gccapture.md](./2026-02-23_ISSUE_bug82_binaryheap_missing_gccapture.md) | BinaryHeap 缺少 GcCapture 實作導致指標遺漏 | Open | Unverified |
+| [2026-02-23_ISSUE_bug83_gchandle_resolve_toctou_race.md](./2026-02-23_ISSUE_bug83_gchandle_resolve_toctou_race.md) | GcHandle resolve/clone 存在 TOCTOU Race Condition 導致 Use-After-Free | Open | Unverified |
+| [2026-02-23_ISSUE_bug84_parallel_marking_worker_index.md](./2026-02-23_ISSUE_bug84_parallel_marking_worker_index.md) | Parallel Marking Worker Index Uses Wrong Pointer | Open | Not Verified |
+| [2026-02-23_ISSUE_bug85_refcell_gccapture_borrow_panic.md](./2026-02-23_ISSUE_bug85_refcell_gccapture_borrow_panic.md) | RefCell GcCapture 使用 borrow() 可能導致 panic | Open | Unverified |
+| [2026-02-23_ISSUE_bug86_refcell_gccapture_borrow_panic.md](./2026-02-23_ISSUE_bug86_refcell_gccapture_borrow_panic.md) | RefCell GcCapture 使用 borrow() 導致 panic | Open | Verified |
+| [2026-02-23_ISSUE_bug87_binaryheap_missing_trace.md](./2026-02-23_ISSUE_bug87_binaryheap_missing_trace.md) | BinaryHeap 缺少 Trace 與 GcCapture 實作導致無法與 Gc 整合 | Open | Unverified |
+| [2026-02-23_ISSUE_bug88_cow_missing_trace_gccapture.md](./2026-02-23_ISSUE_bug88_cow_missing_trace_gccapture.md) | std::borrow::Cow 缺少 Trace 與 GcCapture 實作導致無法與 Gc 整合 | Open | Unverified |
+| [2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md](./2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md) | Gc::clone() 缺少 is_under_construction 檢查 - 與其他操作不一致 | Verified | Verified |
 | [2026-02-23_ISSUE_bug90_async_handle_slot_allocation_race.md](./2026-02-23_ISSUE_bug90_async_handle_slot_allocation_race.md) | AsyncHandleScope slot allocation race condition - TOCTOU between fetch_add and bounds check | Open | Unverified |
 | [2026-02-24_ISSUE_bug91_gcbox_inc_weak_race_condition.md](./2026-02-24_ISSUE_bug91_gcbox_inc_weak_race_condition.md) | GcBox::inc_weak 使用 load+store 導致並發調用時 weak_count 丢失更新 | Open | Unverified |
+| [2026-02-24_ISSUE_bug92_gc_downgrade_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug92_gc_downgrade_missing_is_under_construction_check.md) | Gc::downgrade() 缺少 is_under_construction 檢查 - 與 Gc::clone() 行為不一致 | Open | Unverified |
+| [2026-02-24_ISSUE_bug93_slot_reuse_dead_flag_not_cleared.md](./2026-02-24_ISSUE_bug93_slot_reuse_dead_flag_not_cleared.md) | Slot Reuse 時未清除 DEAD_FLAG 導致新物件被錯誤標記為死亡 | Open | Unverified |
+| [2026-02-24_ISSUE_bug94_gc_deref_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug94_gc_deref_missing_is_under_construction_check.md) | Gc::deref() 和 Gc::try_deref() 缺少 is_under_construction 檢查 | Open | Unverified |
+| [2026-02-24_ISSUE_bug95_gc_ref_count_weak_count_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug95_gc_ref_count_weak_count_missing_is_under_construction_check.md) | Gc::ref_count() 和 Gc::weak_count() 缺少 is_under_construction 檢查 | Open | Unverified |
+| [2026-02-24_ISSUE_bug96_ephemeron_gccapture_missing_key_alive_check.md](./2026-02-24_ISSUE_bug96_ephemeron_gccapture_missing_key_alive_check.md) | Ephemeron GcCapture 實現不一致 - 未檢查 key 是否存活 | Open | Unverified |
+| [2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md](./2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md) | AsyncHandle::to_gc() 漏增引用計數導致雙重釋放 | Open | Verified |
+| [2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md](./2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md) | is_generational_barrier_active() returns false when incremental marking disabled, breaking GcRwLock/GcThreadSafeCell barriers | Open | Verified |
+| [2026-02-24_ISSUE_bug99_async_gchandle_downcast_ref_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug99_async_gchandle_downcast_ref_missing_is_under_construction_check.md) | AsyncGcHandle::downcast_ref() 缺少 is_under_construction 檢查 - Bug55 修復不完整 | Open | Unverified |
+| [2026-02-24_ISSUE_bug100_gc_cross_thread_handle_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug100_gc_cross_thread_handle_missing_is_under_construction_check.md) | Gc::cross_thread_handle() 缺少 is_under_construction 檢查 - Bug92 修復不完整 | Open | Unverified |
+| [2026-02-24_ISSUE_bug100_trigger_write_barrier_toctou.md](./2026-02-24_ISSUE_bug100_trigger_write_barrier_toctou.md) | trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Open | Not Verified |
+| [2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md](./2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md) | sync.rs trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Open | Unverified |
+| [2026-02-24_ISSUE_bug102_async_handle_get_missing_checks.md](./2026-02-24_ISSUE_bug102_async_handle_get_missing_checks.md) | AsyncHandle::get() missing dead/dropping/construction checks | Fixed | Verified |
+| [2026-02-24_ISSUE_bug103_gchandle_inc_ref_toctou_race.md](./2026-02-24_ISSUE_bug103_gchandle_inc_ref_toctou_race.md) | GcHandle/GcBoxWeakRef inc_ref TOCTOU Race - 檢查與遞增非原子操作導致 Use-After-Free | Open | Unverified |
+| [2026-02-24_ISSUE_bug104_weak_clone_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug104_weak_clone_missing_is_under_construction_check.md) | Weak::clone() 和 GcBoxWeakRef::clone() 缺少 is_under_construction 檢查 - Bug64/69 修復不完整 | Open | Unverified |
+| [2026-02-24_ISSUE_bug105_gcbox_as_weak_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug105_gcbox_as_weak_missing_is_under_construction_check.md) | GcBox::as_weak() 缺少 is_under_construction 檢查 - 內部方法缺少一致性檢查 | Open | Unverified |
+| [2026-02-25_ISSUE_bug106_ephemeron_upgrade_toctou.md](./2026-02-25_ISSUE_bug106_ephemeron_upgrade_toctou.md) | Ephemeron::upgrade() TOCTOU race condition - key alive check and value clone not atomic | Open | Unverified |
+| [2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md](./2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md) | GcRwLockWriteGuard/GcMutexGuard Drop 缺少 Generational Barrier 檢查 | Open | Unverified |
+| [2026-02-25_ISSUE_bug108_gcboxweakref_clone_missing_safety_checks.md](./2026-02-25_ISSUE_bug108_gcboxweakref_clone_missing_safety_checks.md) | GcBoxWeakRef::clone 缺少安全檢查導致潛在 Use-After-Free | Open | Unverified |
+| [2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md](./2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md) | mark_new_object_black 缺少 is_allocated 檢查，與 mark_object_black 行為不一致 | Fixed | Verified |
+| [2026-02-25_ISSUE_bug109_gcthreadsaferefmut_drop_missing_generational_barrier.md](./2026-02-25_ISSUE_bug109_gcthreadsaferefmut_drop_missing_generational_barrier.md) | GcThreadSafeRefMut::drop 缺少 Generational Barrier 檢查 | Fixed | Verified |
+| [2026-02-25_ISSUE_bug110_gccell_borrow_mut_triple_is_incremental_check.md](./2026-02-25_ISSUE_bug110_gccell_borrow_mut_triple_is_incremental_check.md) | GcCell::borrow_mut 三次調用 is_incremental_marking_active 導致 TOCTOU | Open | Unverified |
+| [2026-02-25_ISSUE_bug111_gcthreadsafecell_trigger_write_barrier_toctou.md](./2026-02-25_ISSUE_bug111_gcthreadsafecell_trigger_write_barrier_toctou.md) | GcThreadSafeCell::trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Open | Unverified |
+| [2026-02-25_ISSUE_bug112_try_inc_ref_from_zero_doc_mismatch.md](./2026-02-25_ISSUE_bug112_try_inc_ref_from_zero_doc_mismatch.md) | try_inc_ref_from_zero 文檔與實作不一致 - 聲稱檢查 "fully alive" 但只檢查 dead | Open | Unverified |
+| [2026-02-25_ISSUE_bug113_gcbox_is_under_construction_relaxed_ordering.md](./2026-02-25_ISSUE_bug113_gcbox_is_under_construction_relaxed_ordering.md) | GcBox::is_under_construction() 使用 Relaxed Ordering 導致潜在 Race Condition | Open | Unverified |
+| [2026-02-25_ISSUE_bug114_gc_cell_validate_and_barrier_gen_old_flag_toctou.md](./2026-02-25_ISSUE_bug114_gc_cell_validate_and_barrier_gen_old_flag_toctou.md) | gc_cell_validate_and_barrier GEN_OLD_FLAG 檢查與 barrier 執行之間存在 TOCTOU | Open | Unverified |
+| [2026-02-25_ISSUE_bug115_async_handle_missing_scope_validity_check.md](./2026-02-25_ISSUE_bug115_async_handle_missing_scope_validity_check.md) | AsyncHandle 缺少 scope 有效性檢查導致 use-after-free | Open | Verified |
+| [2026-02-25_ISSUE_bug116_gcthreadsafecell_borrow_mut_toctou.md](./2026-02-25_ISSUE_bug116_gcthreadsafecell_borrow_mut_toctou.md) | GcThreadSafeCell::borrow_mut() TOCTOU - 兩處 is_incremental_marking_active() 調用導致狀態不一致 | Open | Unverified |
+| [2026-02-25_ISSUE_bug117_weak_strong_count_missing_is_under_construction_check.md](./2026-02-25_ISSUE_bug117_weak_strong_count_missing_is_under_construction_check.md) | Weak::strong_count() 和 Weak::weak_count() 缺少 is_under_construction 檢查 - 與 Weak::upgrade 行為不一致 | Open | Unverified |
+| [2026-02-25_ISSUE_bug118_write_guard_drop_toctou.md](./2026-02-25_ISSUE_bug118_write_guard_drop_toctou.md) | Write Guard Drop TOCTOU - 檢查 barrier 狀態與調用 mark_object_black 之间状态可能改变 | Open | Unverified |
+| [2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md](./2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md) | GcBoxWeakRef::upgrade TOCTOU - dropping_state 檢查與 try_inc_ref_from_zero CAS 之間的 Race 導致 Use-After-Free | Open | Unverified |
+| [2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md](./2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md) | GcBoxWeakRef::try_upgrade TOCTOU - is_dead_or_unrooted 檢查與 inc_ref人之間的 Race 導致 Use-After-Free | Open | Unverified |

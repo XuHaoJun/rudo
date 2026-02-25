@@ -1,6 +1,6 @@
 # [Bug]: Write Barrier 僅檢查 per-object GEN_OLD_FLAG 忽略 Page Generation 導致 OLD→YOUNG 引用遺漏
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -190,3 +190,13 @@ if !(*gc_box_addr).has_gen_old_flag() {
 ### 修復建議確認
 
 issue 中的修復建議正確：應該先檢查 page generation，再檢查 per-object flag。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Updated write barrier logic in `heap.rs` to check page generation before per-object `GEN_OLD_FLAG`. The barrier now skips only when **both** `(*header).generation == 0` (young page) **and** `!has_gen_old_flag()` (object not promoted). If the page is old (generation > 0), the barrier records dirty regardless of the per-object flag.
+
+Applied to: `simple_write_barrier`, `gc_cell_validate_and_barrier`, `unified_write_barrier`, and `incremental_write_barrier` (both regular and large-object paths where applicable).

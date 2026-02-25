@@ -1,7 +1,7 @@
 # [Bug]: Gc::as_weak() 缺少 dead_flag / dropping_state 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -156,3 +156,11 @@ pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
 1. 繞過 GC 的安全檢查
 2. 創建對已釋放物件的 weak 引用
 3. 導致記憶體管理不一致
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Added `has_dead_flag()` and `dropping_state()` checks to `Gc::as_weak()` in `ptr.rs`. When the Gc is null, dead, or dropping, the method now returns a null `GcBoxWeakRef` (ptr: AtomicNullable::null()) instead of calling `inc_weak()`. Behavior now matches `Gc::downgrade()` and `Weak::clone()`.

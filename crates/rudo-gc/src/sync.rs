@@ -43,11 +43,43 @@ use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 
 use crate::cell::GcCapture;
-use crate::gc::incremental::{is_generational_barrier_active, is_incremental_marking_active};
+use crate::gc::incremental::{
+    is_generational_barrier_active, is_incremental_marking_active, FallbackReason,
+    IncrementalMarkState,
+};
 use crate::ptr::GcBox;
 use crate::Trace;
 
 mod private {}
+
+/// Records old GC pointer values to SATB buffer before mutation (when incremental marking is active).
+#[inline]
+fn record_satb_old_values<T: GcCapture + ?Sized>(value: &T) {
+    if !is_incremental_marking_active() {
+        return;
+    }
+    let mut gc_ptrs = Vec::with_capacity(32);
+    value.capture_gc_ptrs_into(&mut gc_ptrs);
+    if gc_ptrs.is_empty() {
+        return;
+    }
+    if crate::heap::try_with_heap(|heap| {
+        for gc_ptr in &gc_ptrs {
+            if !heap.record_satb_old_value(*gc_ptr) {
+                IncrementalMarkState::global()
+                    .request_fallback(FallbackReason::SatbBufferOverflow);
+                break;
+            }
+        }
+        true
+    })
+    .is_none()
+    {
+        for gc_ptr in gc_ptrs {
+            crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr);
+        }
+    }
+}
 
 /// Reader-writer lock wrapper for GC objects.
 ///
@@ -216,8 +248,9 @@ impl<T: ?Sized> GcRwLock<T> {
     where
         T: GcCapture,
     {
-        self.trigger_write_barrier();
         let guard = self.inner.write();
+        record_satb_old_values(&*guard);
+        self.trigger_write_barrier();
         GcRwLockWriteGuard {
             guard,
             _marker: PhantomData,
@@ -253,6 +286,7 @@ impl<T: ?Sized> GcRwLock<T> {
         T: GcCapture,
     {
         self.inner.try_write().map(|guard| {
+            record_satb_old_values(&*guard);
             self.trigger_write_barrier();
             GcRwLockWriteGuard {
                 guard,
@@ -482,8 +516,9 @@ impl<T: ?Sized> GcMutex<T> {
     where
         T: GcCapture,
     {
-        self.trigger_write_barrier();
         let guard = self.inner.lock();
+        record_satb_old_values(&*guard);
+        self.trigger_write_barrier();
         GcMutexGuard {
             guard,
             _marker: PhantomData,
@@ -517,6 +552,7 @@ impl<T: ?Sized> GcMutex<T> {
         T: GcCapture,
     {
         self.inner.try_lock().map(|guard| {
+            record_satb_old_values(&*guard);
             self.trigger_write_barrier();
             GcMutexGuard {
                 guard,

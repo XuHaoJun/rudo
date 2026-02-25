@@ -1,6 +1,6 @@
 # [Bug]: Weak::clone() 缺少 dead_flag / dropping_state 檢查
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -219,4 +219,16 @@ impl<T: Trace> Clone for Weak<T> {
 - Line 1568: `if gc_box.dropping_state() != 0`
 
 **Status:** Bug confirmed. Issue remains Open, marked as Verified.
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed.
+
+The fix was applied in commit `b9db90f` ("fix: add safety checks to Weak::clone and GcRwLockWriteGuard/GcMutexGuard Drop"). The current `Weak::clone()` implementation in `ptr.rs` (lines 1885–1894) correctly checks:
+- `gc_box.has_dead_flag()` → returns null Weak
+- `gc_box.dropping_state() != 0` → returns null Weak
+
+Behavior now matches `Weak::upgrade()` as described in the issue.
 

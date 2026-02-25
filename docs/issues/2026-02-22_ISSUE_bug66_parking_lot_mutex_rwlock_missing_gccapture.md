@@ -1,6 +1,6 @@
 # [Bug]: parking_lot::Mutex 與 parking_lot::RwLock 缺少 GcCapture 實作導致指標遺漏
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -126,3 +126,11 @@ impl<T: GcCapture + 'static> GcCapture for parking_lot::RwLock<T> {
 
 **Geohot (Exploit 觀點):**
 攻擊者可能利用此漏洞，通過控制何時 GC 運行來觸發 use-after-free。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Added `GcCapture` implementations for `parking_lot::Mutex<T>` and `parking_lot::RwLock<T>` in `cell.rs`, following the same pattern as `std::sync::Mutex` and `std::sync::RwLock`. Both use blocking `lock()`/`read()` to reliably capture all GC pointers before delegating to the inner value's `capture_gc_ptrs_into()`.

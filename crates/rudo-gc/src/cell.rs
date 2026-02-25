@@ -429,6 +429,34 @@ impl<T: GcCapture + 'static> GcCapture for Vec<T> {
     }
 }
 
+impl<T: GcCapture + 'static> GcCapture for std::collections::VecDeque<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for value in self {
+            value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for std::collections::LinkedList<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for value in self {
+            value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
 impl<T: GcCapture + 'static, const N: usize> GcCapture for [T; N] {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
@@ -621,6 +649,34 @@ impl<T: GcCapture + 'static> GcCapture for StdMutex<T> {
         if let Ok(guard) = self.lock() {
             guard.capture_gc_ptrs_into(ptrs);
         }
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for parking_lot::Mutex<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        // Use blocking lock() to reliably capture all GC pointers, same as StdMutex (bug66).
+        let guard = self.lock();
+        guard.capture_gc_ptrs_into(ptrs);
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for parking_lot::RwLock<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        // Use blocking read() to reliably capture all GC pointers, same as std::sync::RwLock (bug66).
+        let guard = self.read();
+        guard.capture_gc_ptrs_into(ptrs);
     }
 }
 

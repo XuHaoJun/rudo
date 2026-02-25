@@ -1,6 +1,6 @@
 # [Bug]: VecDeque 與 LinkedList 缺少 GcCapture 實作導致指標遺漏
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -138,3 +138,13 @@ VecDeque 和 LinkedList 是常見的資料結構，缺少 GcCapture 會導致 GC
 
 **Geohot (Exploit 觀點):**
 攻擊者可能利用此漏洞，通過控制何時 GC 運行來觸發 use-after-free。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Added `GcCapture` implementations for `VecDeque<T>` and `LinkedList<T>` in `cell.rs`, following the same pattern as `Vec<T>`. Both `capture_gc_ptrs()` (returns `&[]`) and `capture_gc_ptrs_into()` (iterates and delegates to each element) are implemented.
+
+Verified by existing regression test `bug79_vecdeque_linkedlist_missing_gccapture` and full test suite.

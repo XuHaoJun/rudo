@@ -1271,14 +1271,22 @@ impl<T: Trace> Gc<T> {
     #[allow(dead_code)]
     pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
         let ptr = self.ptr.load(Ordering::Acquire);
-        let gc_box_ptr = ptr.as_ptr();
-        // Increment the weak count
-        // SAFETY: ptr is valid and not null
+        let Some(ptr) = ptr.as_option() else {
+            return GcBoxWeakRef {
+                ptr: AtomicNullable::null(),
+            };
+        };
         unsafe {
-            (*gc_box_ptr).inc_weak();
+            let gc_box = &*ptr.as_ptr();
+            if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 {
+                return GcBoxWeakRef {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+            (*ptr.as_ptr()).inc_weak();
         }
         GcBoxWeakRef {
-            ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(gc_box_ptr) }),
+            ptr: AtomicNullable::new(ptr),
         }
     }
 }
