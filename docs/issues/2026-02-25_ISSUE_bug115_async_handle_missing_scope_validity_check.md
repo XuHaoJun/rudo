@@ -1,7 +1,7 @@
 # [Bug]: AsyncHandle 缺少 scope 有效性檢查導致 use-after-free
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
