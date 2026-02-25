@@ -1,7 +1,7 @@
 # [Bug]: BinaryHeap 缺少 Trace 與 GcCapture 實作導致無法與 Gc 整合
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -142,3 +142,15 @@ BinaryHeap 是標準庫提供的優先級隊列實現，與 VecDeque、LinkedLis
 
 - bug79: VecDeque 與 LinkedList 缺少 GcCapture
 - bug82: BinaryHeap 缺少 GcCapture（本 issue 補充：根本原因是缺少 Trace）
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed (same fix as bug82).
+
+Both `Trace` and `GcCapture` for `BinaryHeap<T>` were added in the bug82 resolution:
+- `trace.rs`: `unsafe impl<T: Trace> Trace for BinaryHeap<T>`
+- `cell.rs`: `impl<T: GcCapture + 'static> GcCapture for BinaryHeap<T>`
+
+Regression test: `tests/bug82_binaryheap_missing_gccapture.rs`. No code changes required.

@@ -144,6 +144,7 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// assert_eq!(resolved.value, 42);
     /// ```
     #[track_caller]
+    #[allow(clippy::significant_drop_tightening, clippy::option_if_let_else)] // Lock held through inc_ref; if-let clearer
     pub fn resolve(&self) -> Gc<T> {
         assert!(
             self.handle_id != HandleId::INVALID,
@@ -157,24 +158,51 @@ impl<T: Trace + 'static> GcHandle<T> {
             self.origin_thread,
             std::thread::current().id(),
         );
-        // Take ownership of one ref for the returned Gc. The handle holds refs;
-        // resolving transfers one to the caller.
-        unsafe {
-            let gc_box = &*self.ptr.as_ptr();
-            assert!(
-                !gc_box.is_under_construction(),
-                "GcHandle::resolve: object is under construction"
-            );
-            assert!(
-                !gc_box.has_dead_flag(),
-                "GcHandle::resolve: object has been dropped (dead flag set)"
-            );
-            assert!(
-                gc_box.dropping_state() == 0,
-                "GcHandle::resolve: object is being dropped"
-            );
-            gc_box.inc_ref();
-            Gc::from_raw(self.ptr.as_ptr() as *const u8)
+        // Hold lock during check+use to prevent TOCTOU with unregister.
+        if let Some(tcb) = self.origin_tcb.upgrade() {
+            let roots = tcb.cross_thread_roots.lock().unwrap();
+            if !roots.strong.contains_key(&self.handle_id) {
+                panic!("GcHandle::resolve: handle has been unregistered");
+            }
+            unsafe {
+                let gc_box = &*self.ptr.as_ptr();
+                assert!(
+                    !gc_box.is_under_construction(),
+                    "GcHandle::resolve: object is under construction"
+                );
+                assert!(
+                    !gc_box.has_dead_flag(),
+                    "GcHandle::resolve: object has been dropped (dead flag set)"
+                );
+                assert!(
+                    gc_box.dropping_state() == 0,
+                    "GcHandle::resolve: object is being dropped"
+                );
+                gc_box.inc_ref();
+                Gc::from_raw(self.ptr.as_ptr() as *const u8)
+            }
+        } else {
+            let orphan = heap::lock_orphan_roots();
+            if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                panic!("GcHandle::resolve: handle has been unregistered");
+            }
+            unsafe {
+                let gc_box = &*self.ptr.as_ptr();
+                assert!(
+                    !gc_box.is_under_construction(),
+                    "GcHandle::resolve: object is under construction"
+                );
+                assert!(
+                    !gc_box.has_dead_flag(),
+                    "GcHandle::resolve: object has been dropped (dead flag set)"
+                );
+                assert!(
+                    gc_box.dropping_state() == 0,
+                    "GcHandle::resolve: object is being dropped"
+                );
+                gc_box.inc_ref();
+                Gc::from_raw(self.ptr.as_ptr() as *const u8)
+            }
         }
     }
 
@@ -204,6 +232,7 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// }
     /// ```
     #[must_use]
+    #[allow(clippy::significant_drop_tightening, clippy::option_if_let_else)] // Lock held through inc_ref; if-let clearer
     pub fn try_resolve(&self) -> Option<Gc<T>> {
         if self.handle_id == HandleId::INVALID {
             return None;
@@ -211,16 +240,39 @@ impl<T: Trace + 'static> GcHandle<T> {
         if std::thread::current().id() != self.origin_thread {
             return None;
         }
-        unsafe {
-            let gc_box = &*self.ptr.as_ptr();
-            if gc_box.is_under_construction()
-                || gc_box.has_dead_flag()
-                || gc_box.dropping_state() != 0
-            {
+        // Hold lock during check+use to prevent TOCTOU with unregister.
+        if let Some(tcb) = self.origin_tcb.upgrade() {
+            let roots = tcb.cross_thread_roots.lock().unwrap();
+            if !roots.strong.contains_key(&self.handle_id) {
                 return None;
             }
-            gc_box.inc_ref();
-            Some(Gc::from_raw(self.ptr.as_ptr() as *const u8))
+            unsafe {
+                let gc_box = &*self.ptr.as_ptr();
+                if gc_box.is_under_construction()
+                    || gc_box.has_dead_flag()
+                    || gc_box.dropping_state() != 0
+                {
+                    return None;
+                }
+                gc_box.inc_ref();
+                Some(Gc::from_raw(self.ptr.as_ptr() as *const u8))
+            }
+        } else {
+            let orphan = heap::lock_orphan_roots();
+            if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                return None;
+            }
+            unsafe {
+                let gc_box = &*self.ptr.as_ptr();
+                if gc_box.is_under_construction()
+                    || gc_box.has_dead_flag()
+                    || gc_box.dropping_state() != 0
+                {
+                    return None;
+                }
+                gc_box.inc_ref();
+                Some(Gc::from_raw(self.ptr.as_ptr() as *const u8))
+            }
         }
     }
 
@@ -262,6 +314,7 @@ impl<T: Trace + 'static> GcHandle<T> {
     }
 }
 
+#[allow(clippy::significant_drop_tightening)] // Lock must be held through inc_ref
 impl<T: Trace + 'static> Clone for GcHandle<T> {
     fn clone(&self) -> Self {
         if self.handle_id == HandleId::INVALID {
@@ -269,11 +322,12 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
         }
         let (new_id, origin_tcb) = self.origin_tcb.upgrade().map_or_else(
             || {
-                let (new_id, ok) = heap::clone_orphan_root(
-                    self.origin_thread,
-                    self.handle_id,
-                    self.ptr.cast::<GcBox<()>>(),
-                );
+                let (new_id, ok) =
+                    heap::clone_orphan_root_with_inc_ref(
+                        self.origin_thread,
+                        self.handle_id,
+                        self.ptr.cast::<GcBox<()>>(),
+                    );
                 if !ok {
                     panic!("cannot clone an unregistered GcHandle");
                 }
@@ -286,21 +340,21 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
                 }
                 let new_id = roots.allocate_id();
                 roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());
+                // inc_ref for new handle while holding lock (prevents TOCTOU with unregister)
+                unsafe {
+                    let gc_box = &*self.ptr.as_ptr();
+                    assert!(
+                        !gc_box.has_dead_flag()
+                            && gc_box.dropping_state() == 0
+                            && !gc_box.is_under_construction(),
+                        "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle"
+                    );
+                    gc_box.inc_ref();
+                }
                 drop(roots);
                 (new_id, Arc::downgrade(&tcb))
             },
         );
-
-        unsafe {
-            let gc_box = &*self.ptr.as_ptr();
-            assert!(
-                !gc_box.has_dead_flag()
-                    && gc_box.dropping_state() == 0
-                    && !gc_box.is_under_construction(),
-                "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle"
-            );
-            gc_box.inc_ref();
-        };
 
         Self {
             ptr: self.ptr,

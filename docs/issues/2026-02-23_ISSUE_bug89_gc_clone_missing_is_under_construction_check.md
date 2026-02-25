@@ -1,6 +1,6 @@
 # [Bug]: Gc::clone() 缺少 is_under_construction 檢查 - 與其他操作不一致
 
-**Status:** Verified
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -164,3 +164,17 @@ assert!(
 - 在並髮環境中，構造中的物件被 clone 後可能導致 use-after-free
 - 攻擊者可能透過精心設計的時序來利用這個 race condition
 - 雖然難以穩定利用，但仍是潛在的攻击面
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed.
+
+All three locations already include the `is_under_construction()` check:
+
+1. **Gc::clone** (`ptr.rs` lines 1425-1429): `assert!(... && !(*gc_box_ptr).is_under_construction(), ...)`
+2. **Gc::try_clone** (`ptr.rs` lines 1144-1147): `if ... || (*gc_box_ptr).is_under_construction() { return None; }`
+3. **GcHandle::clone** (`handles/cross_thread.rs` lines 347-350): `assert!(... && !gc_box.is_under_construction(), ...)`
+
+No code changes required.

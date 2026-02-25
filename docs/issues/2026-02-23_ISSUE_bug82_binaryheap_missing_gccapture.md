@@ -1,7 +1,7 @@
 # [Bug]: BinaryHeap 缺少 GcCapture 實作導致指標遺漏
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -131,3 +131,13 @@ BinaryHeap 是常見的資料結構（優先級隊列），與 Vec、HashMap 等
 ## 關聯 Issue
 
 - bug79: VecDeque 與 LinkedList 缺少 GcCapture（本 issue 的相關 issue）
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+1. Added `GcCapture` impl for `BinaryHeap<T>` in `cell.rs` (iterates elements, delegates to `capture_gc_ptrs_into`)
+2. Added `Trace` impl for `BinaryHeap<T>` in `trace.rs` (traces all elements, marks page dirty when non-empty)
+3. Added regression test `tests/bug82_binaryheap_missing_gccapture.rs`

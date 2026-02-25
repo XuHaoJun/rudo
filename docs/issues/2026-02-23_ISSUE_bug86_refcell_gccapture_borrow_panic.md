@@ -1,6 +1,6 @@
 # [Bug]: RefCell GcCapture 使用 borrow() 導致 panic
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -103,3 +103,11 @@ fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
 
 **Geohot (Exploit 觀點):**
 雖然不是安全漏洞，但攻擊者可能利用這個行為進行 DoS。通過刻意持有 mutable borrow 並觸發 GC，可以使服務崩潰。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed. Same fix as bug85.
+
+The `RefCell` GcCapture implementation in `cell.rs` lines 632-636 uses `try_borrow()` and skips capturing when borrow fails. No code changes required.

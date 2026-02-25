@@ -194,12 +194,19 @@ impl<T: Trace + ?Sized> GcBox<T> {
 
     /// Increment the weak reference count.
     /// Uses Relaxed ordering since weak count is advisory only.
+    /// Uses `fetch_update` to avoid lost updates under concurrent `inc_weak` calls.
     pub fn inc_weak(&self) {
-        let current = self.weak_count.load(Ordering::Relaxed);
-        let flags = current & Self::FLAGS_MASK;
-        let count = current & !Self::FLAGS_MASK;
-        let new_count = count.saturating_add(1);
-        self.weak_count.store(flags | new_count, Ordering::Relaxed);
+        self.weak_count
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                let flags = current & Self::FLAGS_MASK;
+                let count = current & !Self::FLAGS_MASK;
+                if count == usize::MAX {
+                    None // Stay at MAX (overflow protection)
+                } else {
+                    Some(flags | (count + 1))
+                }
+            })
+            .ok();
     }
 
     /// Try to increment `ref_count` atomically when it is currently zero.

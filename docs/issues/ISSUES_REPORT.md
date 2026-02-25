@@ -3,16 +3,16 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 78
-- **Open**: 39
+- **Fixed**: 89
+- **Open**: 29
 - **Invalid**: 4
-- **Verified**: 2
+- **Verified**: 1
 
 ### By Tags
-- **Verified**: 81
-- **Not Verified**: 4
+- **Verified**: 89
+- **Not Verified**: 3
 - **Not Reproduced**: 6
-- **Unverified**: 32
+- **Unverified**: 25
 
 ## All Issues
 
@@ -98,17 +98,17 @@
 | [2026-02-23_ISSUE_bug78_parallel_marking_missing_is_allocated_check.md](./2026-02-23_ISSUE_bug78_parallel_marking_missing_is_allocated_check.md) | Parallel Marking 缺少 is_allocated 檢查 - 可能標記錯誤物件 | Fixed | Verified |
 | [2026-02-23_ISSUE_bug79_vecdeque_linkedlist_missing_gccapture.md](./2026-02-23_ISSUE_bug79_vecdeque_linkedlist_missing_gccapture.md) | VecDeque 與 LinkedList 缺少 GcCapture 實作導致指標遺漏 | Fixed | Verified |
 | [2026-02-23_ISSUE_bug80_asynchandle_togc_missing_refcount_increment.md](./2026-02-23_ISSUE_bug80_asynchandle_togc_missing_refcount_increment.md) | AsyncHandle::to_gc 缺少 ref count 增量導致 Use-After-Free | Fixed | Verified |
-| [2026-02-23_ISSUE_bug81_async_handle_to_gc_uaf.md](./2026-02-23_ISSUE_bug81_async_handle_to_gc_uaf.md) | AsyncHandle::to_gc 缺少 ref count 增量與 dead check 導致 UAF | Open | Verified |
-| [2026-02-23_ISSUE_bug82_binaryheap_missing_gccapture.md](./2026-02-23_ISSUE_bug82_binaryheap_missing_gccapture.md) | BinaryHeap 缺少 GcCapture 實作導致指標遺漏 | Open | Unverified |
-| [2026-02-23_ISSUE_bug83_gchandle_resolve_toctou_race.md](./2026-02-23_ISSUE_bug83_gchandle_resolve_toctou_race.md) | GcHandle resolve/clone 存在 TOCTOU Race Condition 導致 Use-After-Free | Open | Unverified |
-| [2026-02-23_ISSUE_bug84_parallel_marking_worker_index.md](./2026-02-23_ISSUE_bug84_parallel_marking_worker_index.md) | Parallel Marking Worker Index Uses Wrong Pointer | Open | Not Verified |
-| [2026-02-23_ISSUE_bug85_refcell_gccapture_borrow_panic.md](./2026-02-23_ISSUE_bug85_refcell_gccapture_borrow_panic.md) | RefCell GcCapture 使用 borrow() 可能導致 panic | Open | Unverified |
-| [2026-02-23_ISSUE_bug86_refcell_gccapture_borrow_panic.md](./2026-02-23_ISSUE_bug86_refcell_gccapture_borrow_panic.md) | RefCell GcCapture 使用 borrow() 導致 panic | Open | Verified |
-| [2026-02-23_ISSUE_bug87_binaryheap_missing_trace.md](./2026-02-23_ISSUE_bug87_binaryheap_missing_trace.md) | BinaryHeap 缺少 Trace 與 GcCapture 實作導致無法與 Gc 整合 | Open | Unverified |
-| [2026-02-23_ISSUE_bug88_cow_missing_trace_gccapture.md](./2026-02-23_ISSUE_bug88_cow_missing_trace_gccapture.md) | std::borrow::Cow 缺少 Trace 與 GcCapture 實作導致無法與 Gc 整合 | Open | Unverified |
-| [2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md](./2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md) | Gc::clone() 缺少 is_under_construction 檢查 - 與其他操作不一致 | Verified | Verified |
-| [2026-02-23_ISSUE_bug90_async_handle_slot_allocation_race.md](./2026-02-23_ISSUE_bug90_async_handle_slot_allocation_race.md) | AsyncHandleScope slot allocation race condition - TOCTOU between fetch_add and bounds check | Open | Unverified |
-| [2026-02-24_ISSUE_bug91_gcbox_inc_weak_race_condition.md](./2026-02-24_ISSUE_bug91_gcbox_inc_weak_race_condition.md) | GcBox::inc_weak 使用 load+store 導致並發調用時 weak_count 丢失更新 | Open | Unverified |
+| [2026-02-23_ISSUE_bug81_async_handle_to_gc_uaf.md](./2026-02-23_ISSUE_bug81_async_handle_to_gc_uaf.md) | AsyncHandle::to_gc 缺少 ref count 增量與 dead check 導致 UAF | Fixed | Verified |
+| [2026-02-23_ISSUE_bug82_binaryheap_missing_gccapture.md](./2026-02-23_ISSUE_bug82_binaryheap_missing_gccapture.md) | BinaryHeap 缺少 GcCapture 實作導致指標遺漏 | Fixed | Verified |
+| [2026-02-23_ISSUE_bug83_gchandle_resolve_toctou_race.md](./2026-02-23_ISSUE_bug83_gchandle_resolve_toctou_race.md) | GcHandle resolve/clone 存在 TOCTOU Race Condition 導致 Use-After-Free | Fixed | Verified |
+| [2026-02-23_ISSUE_bug84_parallel_marking_worker_index.md](./2026-02-23_ISSUE_bug84_parallel_marking_worker_index.md) | Parallel Marking Worker Index Uses Wrong Pointer | Fixed | Verified |
+| [2026-02-23_ISSUE_bug85_refcell_gccapture_borrow_panic.md](./2026-02-23_ISSUE_bug85_refcell_gccapture_borrow_panic.md) | RefCell GcCapture 使用 borrow() 可能導致 panic | Fixed | Verified |
+| [2026-02-23_ISSUE_bug86_refcell_gccapture_borrow_panic.md](./2026-02-23_ISSUE_bug86_refcell_gccapture_borrow_panic.md) | RefCell GcCapture 使用 borrow() 導致 panic | Fixed | Verified |
+| [2026-02-23_ISSUE_bug87_binaryheap_missing_trace.md](./2026-02-23_ISSUE_bug87_binaryheap_missing_trace.md) | BinaryHeap 缺少 Trace 與 GcCapture 實作導致無法與 Gc 整合 | Fixed | Verified |
+| [2026-02-23_ISSUE_bug88_cow_missing_trace_gccapture.md](./2026-02-23_ISSUE_bug88_cow_missing_trace_gccapture.md) | std::borrow::Cow 缺少 Trace 與 GcCapture 實作導致無法與 Gc 整合 | Fixed | Verified |
+| [2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md](./2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md) | Gc::clone() 缺少 is_under_construction 檢查 - 與其他操作不一致 | Fixed | Verified |
+| [2026-02-23_ISSUE_bug90_async_handle_slot_allocation_race.md](./2026-02-23_ISSUE_bug90_async_handle_slot_allocation_race.md) | AsyncHandleScope slot allocation race condition - TOCTOU between fetch_add and bounds check | Fixed | Verified |
+| [2026-02-24_ISSUE_bug91_gcbox_inc_weak_race_condition.md](./2026-02-24_ISSUE_bug91_gcbox_inc_weak_race_condition.md) | GcBox::inc_weak 使用 load+store 導致並發調用時 weak_count 丢失更新 | Fixed | Verified |
 | [2026-02-24_ISSUE_bug92_gc_downgrade_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug92_gc_downgrade_missing_is_under_construction_check.md) | Gc::downgrade() 缺少 is_under_construction 檢查 - 與 Gc::clone() 行為不一致 | Open | Unverified |
 | [2026-02-24_ISSUE_bug93_slot_reuse_dead_flag_not_cleared.md](./2026-02-24_ISSUE_bug93_slot_reuse_dead_flag_not_cleared.md) | Slot Reuse 時未清除 DEAD_FLAG 導致新物件被錯誤標記為死亡 | Open | Unverified |
 | [2026-02-24_ISSUE_bug94_gc_deref_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug94_gc_deref_missing_is_under_construction_check.md) | Gc::deref() 和 Gc::try_deref() 缺少 is_under_construction 檢查 | Open | Unverified |

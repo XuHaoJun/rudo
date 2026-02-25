@@ -1,7 +1,7 @@
 # [Bug]: GcHandle resolve/clone 存在 TOCTOU Race Condition 導致 Use-After-Free
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -189,4 +189,12 @@ fn main() {
 4. 透過懸指標實現任意讀寫
 
 修復此問題需要確保 check 和 use 的原子性，或使用世代計數器來偵測無效化。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed (Option 1).
+
+Held `cross_thread_roots` (or orphan roots) lock during the entire resolve/try_resolve flow: check `contains_key(handle_id)` and `inc_ref` are now atomic. For `clone()`, moved `inc_ref` inside the lock in the TCB path; added `clone_orphan_root_with_inc_ref` for the orphan path. Added `heap::lock_orphan_roots()` for orphan table access.
 

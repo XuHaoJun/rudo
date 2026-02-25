@@ -1,7 +1,7 @@
 # [Bug]: GcBox::inc_weak 使用 load+store 導致並發調用時 weak_count 丢失更新
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -234,3 +234,29 @@ pub fn inc_weak(&self) {
 ### 修復建議確認
 
 建議使用 `fetch_update` 或 `compare_exchange_weak` 來確保原子性。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Replaced load+store pattern in `GcBox::inc_weak` with `fetch_update` (matching `inc_ref`):
+
+```rust
+pub fn inc_weak(&self) {
+    self.weak_count
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            let flags = current & Self::FLAGS_MASK;
+            let count = current & !Self::FLAGS_MASK;
+            if count == usize::MAX {
+                None // Stay at MAX (overflow protection)
+            } else {
+                Some(flags | (count + 1))
+            }
+        })
+        .ok();
+}
+```
+
+Added regression test `tests/bug91_gcbox_inc_weak_race.rs` (concurrent Weak clone stress test).

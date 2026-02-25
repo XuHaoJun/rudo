@@ -189,6 +189,13 @@ pub fn get_orphaned_cross_thread_roots() -> Vec<*const GcBox<()>> {
         .collect()
 }
 
+/// Lock the orphan roots table. Used by `GcHandle::resolve`/`try_resolve` to prevent
+/// TOCTOU with unregister (check and `inc_ref` must be atomic under the lock).
+pub fn lock_orphan_roots() -> parking_lot::MutexGuard<'static, HashMap<(ThreadId, HandleId), usize>>
+{
+    orphaned_cross_thread_roots().lock()
+}
+
 /// Remove an orphan root (when `GcHandle` is dropped and TCB is already gone).
 /// Returns the pointer address if it was found and removed (not used by callers).
 #[must_use]
@@ -217,6 +224,27 @@ pub fn clone_orphan_root(
     }
     let new_id = allocate_orphan_handle_id();
     orphan.insert((thread_id, new_id), ptr.as_ptr() as usize);
+    drop(orphan);
+    (new_id, true)
+}
+
+/// Clone an orphan root and `inc_ref` the pointer atomically (under the lock).
+/// Prevents TOCTOU with unregister: check, insert, and `inc_ref` are all atomic.
+#[must_use]
+pub fn clone_orphan_root_with_inc_ref(
+    thread_id: ThreadId,
+    source_handle_id: HandleId,
+    ptr: NonNull<GcBox<()>>,
+) -> (HandleId, bool) {
+    let mut orphan = orphaned_cross_thread_roots().lock();
+    if !orphan.contains_key(&(thread_id, source_handle_id)) {
+        return (HandleId::INVALID, false);
+    }
+    let new_id = allocate_orphan_handle_id();
+    orphan.insert((thread_id, new_id), ptr.as_ptr() as usize);
+    unsafe {
+        (*ptr.as_ptr()).inc_ref();
+    }
     drop(orphan);
     (new_id, true)
 }

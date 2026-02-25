@@ -1,7 +1,7 @@
 # [Bug]: AsyncHandleScope slot allocation race condition - TOCTOU between fetch_add and bounds check
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -155,3 +155,16 @@ The slot collision could be exploited to:
 3. In extreme cases, bypass the bounds check timing to overflow the array
 
 The relaxed ordering is the key issue - it's optimized for the "common case" but the bounds check creates a dependency that relaxed ordering cannot guarantee.
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed.
+
+Both affected locations now use the compare_exchange loop (Option 2 from the suggested fix):
+
+- `handles/async.rs` lines 311-321 (`AsyncHandleScope::handle`): CAS loop with `Acquire` load and `AcqRel` exchange
+- `handles/async.rs` lines 1079-1094 (`GcScope::spawn`): Same pattern
+
+The old `fetch_add` + bounds-check pattern has been replaced. No code changes required.

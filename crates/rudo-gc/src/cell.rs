@@ -401,6 +401,18 @@ impl<T: Trace + 'static> GcCapture for crate::Gc<T> {
     }
 }
 
+impl<T: GcCapture + ?Sized> GcCapture for &T {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        (**self).capture_gc_ptrs()
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        (**self).capture_gc_ptrs_into(ptrs);
+    }
+}
+
 impl<T: GcCapture + 'static> GcCapture for Option<T> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
@@ -411,6 +423,25 @@ impl<T: GcCapture + 'static> GcCapture for Option<T> {
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
         if let Some(value) = self {
             value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<B> GcCapture for std::borrow::Cow<'_, B>
+where
+    B: std::borrow::ToOwned + ?Sized + GcCapture,
+    B::Owned: GcCapture + 'static,
+{
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        match self {
+            std::borrow::Cow::Borrowed(t) => t.capture_gc_ptrs_into(ptrs),
+            std::borrow::Cow::Owned(t) => t.capture_gc_ptrs_into(ptrs),
         }
     }
 }
@@ -444,6 +475,20 @@ impl<T: GcCapture + 'static> GcCapture for std::collections::VecDeque<T> {
 }
 
 impl<T: GcCapture + 'static> GcCapture for std::collections::LinkedList<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for value in self {
+            value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for std::collections::BinaryHeap<T> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]

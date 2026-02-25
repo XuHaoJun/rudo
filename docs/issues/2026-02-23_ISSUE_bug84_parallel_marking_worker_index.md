@@ -1,7 +1,7 @@
 # [Bug]: Parallel Marking Worker Index Uses Wrong Pointer
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -92,3 +92,17 @@ Parallel marking 的核心目標是通過 work stealing 實現負載均衡。使
 
 **Geohot (Exploit 觀點):**
 此問題無安全風險，純粹是效能優化問題。在某些極端情況下（如大量臨時對象在棧上），可能導致 GC 暂停時間增加。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed.
+
+The current implementation in `gc/gc.rs` line 1232 correctly uses `gc_box.as_ptr()` for worker index calculation:
+
+```rust
+let worker_idx = gc_box.as_ptr() as usize % num_workers;
+```
+
+The issue described using `ptr` (root pointer) instead of `gc_box`; the codebase already uses the correct pointer. No code changes required.

@@ -1,6 +1,6 @@
 # [Bug]: AsyncHandle::to_gc 缺少 ref count 增量與 dead check 導致 UAF
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -148,3 +148,11 @@ pub fn to_gc(self) -> Gc<T> {
 - bug80: AsyncHandle::to_gc 缺少 ref count 增量
 
 本 issue 合併這兩個相關問題，提供完整的修復方案。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed (same as bug70 + bug80).
+
+The current `AsyncHandle::to_gc` in `handles/async.rs` (lines 671–686) correctly implements both fixes: (1) `gc_box.inc_ref()` before `Gc::from_raw`, (2) asserts for `has_dead_flag()`, `dropping_state()`, and `is_under_construction()`. No code changes required.
