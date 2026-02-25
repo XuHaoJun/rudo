@@ -1,6 +1,6 @@
 # [Bug]: AsyncHandle::to_gc() 漏增引用計數導致雙重釋放
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -128,3 +128,11 @@ pub fn to_gc(self) -> Gc<T> {
 **Geohot (Exploit 觀點):**
 - 雙重釋放可用於堆溢位利用
 - 在多執行緒環境中，此問題可能導致 race condition 可被利用
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Already fixed.
+
+`AsyncHandle::to_gc()` in `handles/async.rs` (lines 671-684) already calls `gc_box.inc_ref()` before `Gc::from_raw()`. The returned `Gc` correctly owns one ref. No code changes required.

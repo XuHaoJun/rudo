@@ -301,8 +301,10 @@ impl<T: Trace + 'static> GcHandle<T> {
         unsafe {
             let gc_box = &*self.ptr.as_ptr();
             assert!(
-                !gc_box.has_dead_flag() && gc_box.dropping_state() == 0,
-                "GcHandle::downgrade: object is dead or in dropping state"
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle"
             );
             gc_box.inc_weak();
         }

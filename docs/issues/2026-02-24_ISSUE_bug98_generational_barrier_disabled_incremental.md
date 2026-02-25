@@ -1,6 +1,6 @@
 # [Bug]: is_generational_barrier_active() returns false when incremental marking disabled, breaking GcRwLock/GcThreadSafeCell barriers
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -133,3 +133,11 @@ Generational barrier 應該獨立於 incremental marking。這是兩個不同的
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可以通過禁用 incremental marking 來觸發 bug，導致內存錯誤。
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Removed the `state.enabled` check from `is_generational_barrier_active()` in `gc/incremental.rs`. The generational barrier is now active whenever `!state.fallback_requested()`, independent of incremental marking. GcRwLock and GcThreadSafeCell barriers now correctly record OLD→YOUNG references even when incremental marking is disabled.

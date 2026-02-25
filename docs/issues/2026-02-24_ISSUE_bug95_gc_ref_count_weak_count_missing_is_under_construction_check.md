@@ -1,7 +1,7 @@
 # [Bug]: Gc::ref_count() 和 Gc::weak_count() 缺少 is_under_construction 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -158,3 +158,13 @@ assert!(
 - 在並髮環境中，構造中的物件的 ref_count 被讀取後可能導致資訊洩露
 - 攻擊者可能透過精心設計的時序來利用這個問題
 - 雖然難以穩定利用，但仍是潛在的攻击面
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+1. Added `is_under_construction()` check to `Gc::ref_count` in `ptr.rs` — now asserts `!(*gc_box_ptr).is_under_construction()` alongside dead/dropping checks.
+2. Added `is_under_construction()` check to `Gc::weak_count` in `ptr.rs` — same assertion.
+3. Aligns behavior with `Gc::clone`, `Gc::deref`, `Gc::downgrade`, and other Gc operations.

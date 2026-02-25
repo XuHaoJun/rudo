@@ -3,16 +3,16 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 89
-- **Open**: 29
+- **Fixed**: 98
+- **Open**: 20
 - **Invalid**: 4
 - **Verified**: 1
 
 ### By Tags
-- **Verified**: 89
+- **Verified**: 96
 - **Not Verified**: 3
 - **Not Reproduced**: 6
-- **Unverified**: 25
+- **Unverified**: 18
 
 ## All Issues
 
@@ -109,15 +109,15 @@
 | [2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md](./2026-02-23_ISSUE_bug89_gc_clone_missing_is_under_construction_check.md) | Gc::clone() 缺少 is_under_construction 檢查 - 與其他操作不一致 | Fixed | Verified |
 | [2026-02-23_ISSUE_bug90_async_handle_slot_allocation_race.md](./2026-02-23_ISSUE_bug90_async_handle_slot_allocation_race.md) | AsyncHandleScope slot allocation race condition - TOCTOU between fetch_add and bounds check | Fixed | Verified |
 | [2026-02-24_ISSUE_bug91_gcbox_inc_weak_race_condition.md](./2026-02-24_ISSUE_bug91_gcbox_inc_weak_race_condition.md) | GcBox::inc_weak 使用 load+store 導致並發調用時 weak_count 丢失更新 | Fixed | Verified |
-| [2026-02-24_ISSUE_bug92_gc_downgrade_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug92_gc_downgrade_missing_is_under_construction_check.md) | Gc::downgrade() 缺少 is_under_construction 檢查 - 與 Gc::clone() 行為不一致 | Open | Unverified |
-| [2026-02-24_ISSUE_bug93_slot_reuse_dead_flag_not_cleared.md](./2026-02-24_ISSUE_bug93_slot_reuse_dead_flag_not_cleared.md) | Slot Reuse 時未清除 DEAD_FLAG 導致新物件被錯誤標記為死亡 | Open | Unverified |
-| [2026-02-24_ISSUE_bug94_gc_deref_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug94_gc_deref_missing_is_under_construction_check.md) | Gc::deref() 和 Gc::try_deref() 缺少 is_under_construction 檢查 | Open | Unverified |
-| [2026-02-24_ISSUE_bug95_gc_ref_count_weak_count_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug95_gc_ref_count_weak_count_missing_is_under_construction_check.md) | Gc::ref_count() 和 Gc::weak_count() 缺少 is_under_construction 檢查 | Open | Unverified |
-| [2026-02-24_ISSUE_bug96_ephemeron_gccapture_missing_key_alive_check.md](./2026-02-24_ISSUE_bug96_ephemeron_gccapture_missing_key_alive_check.md) | Ephemeron GcCapture 實現不一致 - 未檢查 key 是否存活 | Open | Unverified |
-| [2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md](./2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md) | AsyncHandle::to_gc() 漏增引用計數導致雙重釋放 | Open | Verified |
-| [2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md](./2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md) | is_generational_barrier_active() returns false when incremental marking disabled, breaking GcRwLock/GcThreadSafeCell barriers | Open | Verified |
-| [2026-02-24_ISSUE_bug99_async_gchandle_downcast_ref_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug99_async_gchandle_downcast_ref_missing_is_under_construction_check.md) | AsyncGcHandle::downcast_ref() 缺少 is_under_construction 檢查 - Bug55 修復不完整 | Open | Unverified |
-| [2026-02-24_ISSUE_bug100_gc_cross_thread_handle_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug100_gc_cross_thread_handle_missing_is_under_construction_check.md) | Gc::cross_thread_handle() 缺少 is_under_construction 檢查 - Bug92 修復不完整 | Open | Unverified |
+| [2026-02-24_ISSUE_bug92_gc_downgrade_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug92_gc_downgrade_missing_is_under_construction_check.md) | Gc::downgrade() 缺少 is_under_construction 檢查 - 與 Gc::clone() 行為不一致 | Fixed | Verified |
+| [2026-02-24_ISSUE_bug93_slot_reuse_dead_flag_not_cleared.md](./2026-02-24_ISSUE_bug93_slot_reuse_dead_flag_not_cleared.md) | Slot Reuse 時未清除 DEAD_FLAG 導致新物件被錯誤標記為死亡 | Fixed | Verified |
+| [2026-02-24_ISSUE_bug94_gc_deref_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug94_gc_deref_missing_is_under_construction_check.md) | Gc::deref() 和 Gc::try_deref() 缺少 is_under_construction 檢查 | Fixed | Verified |
+| [2026-02-24_ISSUE_bug95_gc_ref_count_weak_count_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug95_gc_ref_count_weak_count_missing_is_under_construction_check.md) | Gc::ref_count() 和 Gc::weak_count() 缺少 is_under_construction 檢查 | Fixed | Verified |
+| [2026-02-24_ISSUE_bug96_ephemeron_gccapture_missing_key_alive_check.md](./2026-02-24_ISSUE_bug96_ephemeron_gccapture_missing_key_alive_check.md) | Ephemeron GcCapture 實現不一致 - 未檢查 key 是否存活 | Fixed | Verified |
+| [2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md](./2026-02-24_ISSUE_bug97_async_handle_to_gc_missing_ref_count.md) | AsyncHandle::to_gc() 漏增引用計數導致雙重釋放 | Fixed | Verified |
+| [2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md](./2026-02-24_ISSUE_bug98_generational_barrier_disabled_incremental.md) | is_generational_barrier_active() returns false when incremental marking disabled, breaking GcRwLock/GcThreadSafeCell barriers | Fixed | Verified |
+| [2026-02-24_ISSUE_bug99_async_gchandle_downcast_ref_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug99_async_gchandle_downcast_ref_missing_is_under_construction_check.md) | AsyncGcHandle::downcast_ref() 缺少 is_under_construction 檢查 - Bug55 修復不完整 | Fixed | Verified |
+| [2026-02-24_ISSUE_bug100_gc_cross_thread_handle_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug100_gc_cross_thread_handle_missing_is_under_construction_check.md) | Gc::cross_thread_handle() 缺少 is_under_construction 檢查 - Bug92 修復不完整 | Fixed | Verified |
 | [2026-02-24_ISSUE_bug100_trigger_write_barrier_toctou.md](./2026-02-24_ISSUE_bug100_trigger_write_barrier_toctou.md) | trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Open | Not Verified |
 | [2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md](./2026-02-24_ISSUE_bug101_sync_trigger_write_barrier_toctou.md) | sync.rs trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Open | Unverified |
 | [2026-02-24_ISSUE_bug102_async_handle_get_missing_checks.md](./2026-02-24_ISSUE_bug102_async_handle_get_missing_checks.md) | AsyncHandle::get() missing dead/dropping/construction checks | Fixed | Verified |

@@ -1,7 +1,7 @@
 # [Bug]: Ephemeron GcCapture 實現不一致 - 未檢查 key 是否存活
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -183,3 +183,11 @@ impl<K: Trace + 'static, V: Trace + 'static> GcCapture for Ephemeron<K, V> {
 **Geohot (Exploit 攻擊觀點):**
 - 攻擊者可能利用此不一致性讓 value 記憶體無法釋放
 - 導致記憶體消耗增加，是一種潜在的 DOS 攻擊向量
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Wrapped `GcCapture::capture_gc_ptrs_into` for `Ephemeron<K,V>` in `if self.is_key_alive()` — only captures value and key when key is alive. When key is dead, nothing is captured, allowing GC to collect the value. Aligns with `Trace` semantics.

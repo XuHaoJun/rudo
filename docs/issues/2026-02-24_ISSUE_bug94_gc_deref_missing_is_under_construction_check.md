@@ -1,7 +1,7 @@
 # [Bug]: Gc::deref() 和 Gc::try_deref() 缺少 is_under_construction 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -160,3 +160,13 @@ if (*gc_box_ptr).has_dead_flag()
 - 在並髮環境中，構造中的物件被 deref 後可能導致資訊洩露
 - 攻擊者可能透過精心設計的時序來利用這個問題
 - 雖然難以穩定利用，但仍是潛在的攻击面
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+1. Added `is_under_construction()` check to `Gc::deref` in `ptr.rs` — now asserts `!(*gc_box_ptr).is_under_construction()` alongside dead/dropping checks.
+2. Added `is_under_construction()` check to `Gc::try_deref` in `ptr.rs` — now returns `None` when object is under construction.
+3. Aligns behavior with `Gc::clone`, `Gc::downgrade`, and other Gc operations.

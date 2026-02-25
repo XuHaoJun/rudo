@@ -1249,7 +1249,10 @@ impl AsyncGcHandle {
             let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
             unsafe {
                 let gc_box = &*gc_box_ptr;
-                if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 {
+                if gc_box.is_under_construction()
+                    || gc_box.has_dead_flag()
+                    || gc_box.dropping_state() != 0
+                {
                     return None;
                 }
                 Some(gc_box.value())

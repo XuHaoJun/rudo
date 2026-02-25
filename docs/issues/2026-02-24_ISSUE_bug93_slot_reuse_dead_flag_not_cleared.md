@@ -1,7 +1,7 @@
 # [Bug]: Slot Reuse 時未清除 DEAD_FLAG 導致新物件被錯誤標記為死亡
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -106,4 +106,15 @@
 - 如果攻擊者能控制 GC 時序，可能利用此 bug 導致物件被錯誤回收
 - Weak reference upgrade 失敗可能導致預期外的 NULL 處理
 - 這更像是一個 reliability bug 而非安全漏洞
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+1. Added `GcBox::clear_dead()` in `ptr.rs` (mirrors `clear_gen_old`, uses `fetch_and(!DEAD_FLAG)`).
+2. Call `clear_dead()` in `try_pop_from_page()` when reusing a slot from the free list, before returning the pointer to the allocator.
+
+TLAB allocation was not changed: it allocates from virgin bump-pointer space, not from the free list, so slots there have never had DEAD_FLAG set.
 

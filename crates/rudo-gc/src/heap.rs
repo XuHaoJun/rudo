@@ -2158,6 +2158,14 @@ impl LocalHeap {
         // SAFETY: Caller guarantees header is valid.
         unsafe { (*header).set_allocated(idx as usize) };
 
+        // Clear DEAD_FLAG so reused slot is not incorrectly marked as dead.
+        // SAFETY: obj_ptr points to a valid GcBox slot (was in free list).
+        #[allow(clippy::cast_ptr_alignment)]
+        unsafe {
+            let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+            (*gc_box_ptr).clear_dead();
+        }
+
         // Clear ALL_DEAD flag since we're allocating a new live object
         // SAFETY: Caller guarantees header is valid.
         if unsafe { (*header).all_dead() } {

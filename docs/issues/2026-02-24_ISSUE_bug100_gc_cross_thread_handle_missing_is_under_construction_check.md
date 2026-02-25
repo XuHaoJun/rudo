@@ -1,7 +1,7 @@
 # [Bug]: Gc::cross_thread_handle() 缺少 is_under_construction 檢查 - Bug92 修復不完整
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -165,3 +165,11 @@ pub fn cross_thread_handle(&self) -> crate::handles::GcHandle<T> {
 - 在並髮環境中，構造中的物件被 cross_thread_handle 後可能導致 use-after-free
 - 攻擊者可能透過精心設計的時序來利用這個 race condition
 - 雖然難以穩定利用，但仍是潛在的攻击面
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Added `!(*ptr.as_ptr()).is_under_construction()` to the assertion in `Gc::cross_thread_handle` in `ptr.rs`. Aligns with `Gc::weak_cross_thread_handle`, `Gc::clone`, and other APIs.

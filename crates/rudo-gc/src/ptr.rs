@@ -342,6 +342,14 @@ impl<T: Trace + ?Sized> GcBox<T> {
         self.weak_count
             .fetch_and(!Self::GEN_OLD_FLAG, Ordering::Relaxed);
     }
+
+    /// Clear `DEAD_FLAG`. Used when reusing a slot so the new object is not incorrectly
+    /// marked as dead. Must be called before the slot is used for a new allocation.
+    #[inline]
+    pub(crate) fn clear_dead(&self) {
+        self.weak_count
+            .fetch_and(!Self::DEAD_FLAG, Ordering::Relaxed);
+    }
 }
 
 impl<T: Trace> GcBox<T> {
@@ -1124,7 +1132,10 @@ impl<T: Trace> Gc<T> {
         }
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
-            if (*gc_box_ptr).has_dead_flag() || (*gc_box_ptr).dropping_state() != 0 {
+            if (*gc_box_ptr).has_dead_flag()
+                || (*gc_box_ptr).dropping_state() != 0
+                || (*gc_box_ptr).is_under_construction()
+            {
                 return None;
             }
             Some(&(*gc_box_ptr).value)
@@ -1190,8 +1201,10 @@ impl<T: Trace> Gc<T> {
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
             assert!(
-                !(*gc_box_ptr).has_dead_flag() && (*gc_box_ptr).dropping_state() == 0,
-                "Gc::ref_count: Gc is dead or in dropping state"
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::ref_count: cannot get ref_count of a dead, dropping, or under construction Gc"
             );
             (*gc_box_ptr).ref_count()
         }
@@ -1211,8 +1224,10 @@ impl<T: Trace> Gc<T> {
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
             assert!(
-                !(*gc_box_ptr).has_dead_flag() && (*gc_box_ptr).dropping_state() == 0,
-                "Gc::weak_count: Gc is dead or in dropping state"
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::weak_count: cannot get weak_count of a dead, dropping, or under construction Gc"
             );
             (*gc_box_ptr).weak_count()
         }
@@ -1243,8 +1258,10 @@ impl<T: Trace> Gc<T> {
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
             assert!(
-                !(*gc_box_ptr).has_dead_flag() && (*gc_box_ptr).dropping_state() == 0,
-                "Gc::downgrade: Gc is dead or in dropping state"
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::downgrade: cannot downgrade a dead, dropping, or under construction Gc"
             );
             (*gc_box_ptr).inc_weak();
         }
@@ -1335,8 +1352,10 @@ impl<T: Trace + 'static> Gc<T> {
 
         unsafe {
             assert!(
-                !(*ptr.as_ptr()).has_dead_flag() && (*ptr.as_ptr()).dropping_state() == 0,
-                "Gc::cross_thread_handle: cannot create handle for dead or dropping Gc"
+                !(*ptr.as_ptr()).has_dead_flag()
+                    && (*ptr.as_ptr()).dropping_state() == 0
+                    && !(*ptr.as_ptr()).is_under_construction(),
+                "Gc::cross_thread_handle: cannot create handle for dead, dropping, or under construction Gc"
             );
             (*ptr.as_ptr()).inc_ref();
         }
@@ -1375,8 +1394,10 @@ impl<T: Trace + 'static> Gc<T> {
         unsafe {
             let gc_box = &*self.as_non_null().as_ptr();
             assert!(
-                !gc_box.has_dead_flag() && gc_box.dropping_state() == 0,
-                "Gc::weak_cross_thread_handle: cannot create handle for dead or dropping Gc"
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "Gc::weak_cross_thread_handle: cannot create handle for dead, dropping, or under construction Gc"
             );
             gc_box.inc_weak();
         }
@@ -1399,8 +1420,10 @@ impl<T: Trace> Deref for Gc<T> {
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
             assert!(
-                !(*gc_box_ptr).has_dead_flag() && (*gc_box_ptr).dropping_state() == 0,
-                "Gc::deref: cannot dereference a dead Gc"
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::deref: cannot dereference a dead, dropping, or under construction Gc"
             );
             &(*gc_box_ptr).value
         }
@@ -2219,11 +2242,13 @@ impl<K: Trace + 'static, V: Trace + 'static> GcCapture for Ephemeron<K, V> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        // Capture value (strong reference) - always present
-        self.value.capture_gc_ptrs_into(ptrs);
-        // Capture key if still alive (weak -> upgrade)
-        if let Some(key_gc) = self.key.try_upgrade() {
-            key_gc.capture_gc_ptrs_into(ptrs);
+        // Ephemeron semantics: only capture when key is alive (matches Trace).
+        // When key is dead, value can be collected; capturing would incorrectly retain it.
+        if self.is_key_alive() {
+            self.value.capture_gc_ptrs_into(ptrs);
+            if let Some(key_gc) = self.key.try_upgrade() {
+                key_gc.capture_gc_ptrs_into(ptrs);
+            }
         }
     }
 }

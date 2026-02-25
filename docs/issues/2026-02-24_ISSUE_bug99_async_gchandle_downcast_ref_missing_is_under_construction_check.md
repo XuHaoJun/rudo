@@ -1,7 +1,7 @@
 # [Bug]: AsyncGcHandle::downcast_ref() 缺少 is_under_construction 檢查 - Bug55 修復不完整
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -144,3 +144,11 @@ pub fn downcast_ref<T: Trace + 'static>(&self) -> Option<&T> {
 - 在並髮環境中，構造中的物件被 downcast_ref 後可能導致 use-after-free
 - 攻擊者可能透過精心設計的時序來利用這個 race condition
 - 雖然難以穩定利用，但仍是潛在的攻击面
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Added `gc_box.is_under_construction()` check to `AsyncGcHandle::downcast_ref` in `handles/async.rs`. Returns `None` when object is under construction, aligning with `Gc::clone`, `Gc::try_deref`, and other APIs.

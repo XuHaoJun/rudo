@@ -1,7 +1,7 @@
 # [Bug]: Gc::downgrade() 缺少 is_under_construction 檢查 - 與 Gc::clone() 行為不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -183,3 +183,15 @@ assert!(
 - 在並髮環境中，構造中的物件被 downgrade 後可能導致 use-after-free
 - 攻擊者可能透過精心設計的時序來利用這個 race condition
 - 雖然難以穩定利用，但仍是潛在的攻击面
+
+---
+
+## Resolution (2026-02-26)
+
+**Outcome:** Fixed.
+
+Added `is_under_construction()` check to all three locations (matching Gc::clone behavior from bug89):
+
+1. **Gc::downgrade** (`ptr.rs`): assert now includes `&& !(*gc_box_ptr).is_under_construction()`
+2. **Gc::weak_cross_thread_handle** (`ptr.rs`): assert now includes `&& !gc_box.is_under_construction()`
+3. **GcHandle::downgrade** (`handles/cross_thread.rs`): assert now includes `&& !gc_box.is_under_construction()`

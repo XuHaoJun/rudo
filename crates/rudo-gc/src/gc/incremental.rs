@@ -495,9 +495,13 @@ pub fn write_barrier_needed() -> bool {
         && is_write_barrier_active()
 }
 
+/// Returns true when the generational write barrier should record OLD→YOUNG references.
+///
+/// Independent of incremental marking: minor collections always need the barrier.
+/// Only disabled during STW fallback.
 pub fn is_generational_barrier_active() -> bool {
     let state = IncrementalMarkState::global();
-    state.enabled.load(Ordering::Relaxed) && !state.fallback_requested()
+    !state.fallback_requested()
 }
 
 #[allow(clippy::significant_drop_tightening)]
