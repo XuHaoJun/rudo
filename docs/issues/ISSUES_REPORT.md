@@ -4,7 +4,7 @@
 
 ### By Status
 - **Fixed**: 102
-- **Open**: 15
+- **Open**: 16
 - **Invalid**: 5
 - **Verified**: 1
 
@@ -12,7 +12,7 @@
 - **Verified**: 100
 - **Not Verified**: 2
 - **Not Reproduced**: 7
-- **Unverified**: 14
+- **Unverified**: 15
 
 ## All Issues
 
@@ -141,3 +141,6 @@
 | [2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md](./2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md) | GcBoxWeakRef::upgrade TOCTOU - dropping_state 檢查與 try_inc_ref_from_zero CAS 之間的 Race 導致 Use-After-Free | Open | Unverified |
 | [2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md](./2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md) | GcBoxWeakRef::try_upgrade TOCTOU - is_dead_or_unrooted 檢查與 inc_ref人之間的 Race 導致 Use-After-Free | Open | Unverified |
 | [2026-02-26_ISSUE_bug121_gcbox_dec_weak_count_zero.md](./2026-02-26_ISSUE_bug121_gcbox_dec_weak_count_zero.md) | GcBox::dec_weak 當 weak_count 為 0 時錯誤地返回 true - 與 Weak::drop 行為不一致 | Open | Unverified |
+| [2026-02-26_ISSUE_bug122_gcbox_dec_ref_count_zero.md](./2026-02-26_ISSUE_bug122_gcbox_dec_ref_count_zero.md) | GcBox::dec_ref 當 ref_count 為 0 時錯誤地返回 true | Open | Unverified |
+| [2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md) | Incremental Marking mark_root_for_snapshot 缺少 is_allocated 檢查 | Open | Not Verified |
+| [2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md) | WeakCrossThreadHandle Clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Open | Unverified |
