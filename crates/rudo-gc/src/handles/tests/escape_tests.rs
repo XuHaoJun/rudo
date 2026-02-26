@@ -39,8 +39,7 @@ fn test_gc_from_raw_does_not_increment_refcount() {
     );
 
     drop(gc);
-    assert_eq!(Gc::ref_count(&gc2).get(), 1);
-
+    // gc2 points to freed memory (from_raw did not inc_ref); ref_count would panic per docs.
     drop(gc2);
 }
 
@@ -73,7 +72,18 @@ fn test_async_handle_to_gc_basic() {
     let handle = scope.handle(&gc);
 
     let gc1 = handle.to_gc();
-    assert_eq!(Gc::ref_count(&gc1).get(), 1);
+    assert_eq!(
+        Gc::ref_count(&gc1).get(),
+        2,
+        "to_gc inc_refs so gc + gc1 each hold a ref"
+    );
+
+    drop(gc);
+    assert_eq!(
+        Gc::ref_count(&gc1).get(),
+        1,
+        "escaped Gc survives original drop"
+    );
 
     drop(gc1);
     drop(scope);

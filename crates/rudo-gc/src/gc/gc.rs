@@ -619,7 +619,7 @@ pub fn collect_full() {
     } else {
         // We're not the collector - wake up any threads waiting in rendezvous
         // and perform single-threaded collection
-        crate::heap::GC_REQUESTED.store(false, Ordering::Relaxed);
+        crate::heap::GC_REQUESTED.store(false, Ordering::Release);
         wake_waiting_threads();
         perform_single_threaded_collect_full();
     }
@@ -1068,6 +1068,60 @@ fn collect_major_multi(
     reclaimed + reclaimed_large
 }
 
+/// Scan a single dirty page for minor GC (incremental path): mark refs and clear dirty state.
+#[inline]
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn scan_dirty_page_minor(page_ptr: NonNull<PageHeader>, visitor: &mut GcVisitor) {
+    let header = page_ptr.as_ptr();
+    if (*header).is_large_object() {
+        let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
+        #[allow(clippy::cast_ptr_alignment)]
+        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+        mark_and_trace_incremental(std::ptr::NonNull::new_unchecked(gc_box_ptr), visitor);
+    } else {
+        let obj_count = (*header).obj_count as usize;
+        for i in 0..obj_count {
+            if (*header).is_dirty(i) {
+                let block_size = (*header).block_size as usize;
+                let header_size = PageHeader::header_size(block_size);
+                let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                mark_and_trace_incremental(std::ptr::NonNull::new_unchecked(gc_box_ptr), visitor);
+            }
+        }
+    }
+    (*header).clear_all_dirty();
+    (*header).clear_dirty_listed();
+}
+
+/// Scan a single dirty page for minor GC (`trace_fn` path): trace refs and clear dirty state.
+#[inline]
+#[allow(unsafe_op_in_unsafe_fn)]
+unsafe fn scan_dirty_page_minor_trace(page_ptr: NonNull<PageHeader>, visitor: &mut GcVisitor) {
+    let header = page_ptr.as_ptr();
+    if (*header).is_large_object() {
+        let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
+        #[allow(clippy::cast_ptr_alignment)]
+        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+        ((*gc_box_ptr).trace_fn)(obj_ptr, visitor);
+    } else {
+        let obj_count = (*header).obj_count as usize;
+        for i in 0..obj_count {
+            if (*header).is_dirty(i) {
+                let block_size = (*header).block_size as usize;
+                let header_size = PageHeader::header_size(block_size);
+                let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                ((*gc_box_ptr).trace_fn)(obj_ptr, visitor);
+            }
+        }
+    }
+    (*header).clear_all_dirty();
+    (*header).clear_dirty_listed();
+}
+
 /// Mark roots from all threads' stacks for Minor GC.
 fn mark_minor_roots_multi(
     heap: &mut LocalHeap,
@@ -1137,44 +1191,17 @@ fn mark_minor_roots_multi(
     // Take snapshot of dirty pages for lock-free scanning
     let _dirty_count = heap.take_dirty_pages_snapshot();
 
-    // Scan ONLY dirty pages (not all pages)
     for page_ptr in heap.dirty_pages_iter() {
         unsafe {
-            let header = page_ptr.as_ptr();
-            if (*header).is_large_object() {
-                let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
-                #[allow(clippy::cast_ptr_alignment)]
-                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                mark_and_trace_incremental(
-                    std::ptr::NonNull::new_unchecked(gc_box_ptr),
-                    &mut visitor,
-                );
-            } else {
-                let obj_count = (*header).obj_count as usize;
-                for i in 0..obj_count {
-                    if (*header).is_dirty(i) {
-                        let block_size = (*header).block_size as usize;
-                        let header_size = PageHeader::header_size(block_size);
-                        let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
-                        #[allow(clippy::cast_ptr_alignment)]
-                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-
-                        mark_and_trace_incremental(
-                            std::ptr::NonNull::new_unchecked(gc_box_ptr),
-                            &mut visitor,
-                        );
-                    }
-                }
-            }
-            // Clear dirty state after scanning
-            (*header).clear_all_dirty();
-            (*header).clear_dirty_listed();
+            scan_dirty_page_minor(page_ptr, &mut visitor);
         }
     }
-
-    // Clear snapshot and update statistics
+    for page_ptr in heap.drain_dirty_pages_overflow() {
+        unsafe {
+            scan_dirty_page_minor(page_ptr, &mut visitor);
+        }
+    }
     heap.clear_dirty_pages_snapshot();
-
     while let Some(ptr) = visitor.worklist.pop() {
         unsafe {
             ((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), &mut visitor);
@@ -1194,12 +1221,15 @@ unsafe fn mark_and_push_to_worker_queue(
         let header = crate::heap::ptr_to_page_header(ptr_addr);
         if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box.as_ptr().cast()) {
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return;
+                }
                 if !(*header.as_ptr()).is_marked(idx) {
                     (*header.as_ptr()).set_mark(idx);
                 }
             }
         }
-        let worker_idx = ptr as usize % num_workers;
+        let worker_idx = gc_box.as_ptr() as usize % num_workers;
         worker_queues[worker_idx].push(gc_box.as_ptr());
     }
 }
@@ -1304,6 +1334,21 @@ fn mark_minor_roots_parallel(
         }
     }
 
+    // Include overflow pages added by write barriers during snapshot (bug45)
+    for page_ptr in heap.drain_dirty_pages_overflow() {
+        unsafe {
+            let header = page_ptr.as_ptr();
+            if (*header).is_large_object() {
+                let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                worker_queues[0].push(gc_box_ptr);
+            } else {
+                dirty_pages.push(header);
+            }
+        }
+    }
+
     let distribution = crate::gc::marker::distribute_dirty_pages(&dirty_pages, &worker_queues);
 
     for (idx, page) in dirty_pages.iter().enumerate() {
@@ -1401,7 +1446,7 @@ fn mark_major_roots_multi(
     }
 
     #[allow(clippy::type_complexity)]
-    let cross_thread_roots: Vec<*const GcBox<()>> = stack_roots
+    let mut cross_thread_roots: Vec<*const GcBox<()>> = stack_roots
         .iter()
         .flat_map(|(_, tcb)| {
             let mut roots = Vec::new();
@@ -1409,6 +1454,7 @@ fn mark_major_roots_multi(
             roots
         })
         .collect();
+    cross_thread_roots.extend(crate::heap::get_orphaned_cross_thread_roots());
 
     for ptr in cross_thread_roots {
         unsafe {
@@ -1879,7 +1925,7 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
     }
 
     #[allow(clippy::type_complexity)]
-    let cross_thread_roots: Vec<*const GcBox<()>> = {
+    let mut cross_thread_roots: Vec<*const GcBox<()>> = {
         crate::heap::thread_registry().lock().map_or_else(
             |_| Vec::new(),
             |registry| {
@@ -1895,6 +1941,7 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
             },
         )
     };
+    cross_thread_roots.extend(crate::heap::get_orphaned_cross_thread_roots());
 
     for ptr in cross_thread_roots {
         unsafe {
@@ -1919,38 +1966,17 @@ fn mark_minor_roots(heap: &mut LocalHeap) -> usize {
     // Take snapshot of dirty pages for lock-free scanning
     let _dirty_count = heap.take_dirty_pages_snapshot();
 
-    // Scan ONLY dirty pages (not all pages)
     for page_ptr in heap.dirty_pages_iter() {
         unsafe {
-            let header = page_ptr.as_ptr();
-            if (*header).is_large_object() {
-                let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
-                #[allow(clippy::cast_ptr_alignment)]
-                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
-            } else {
-                let obj_count = (*header).obj_count as usize;
-                for i in 0..obj_count {
-                    if (*header).is_dirty(i) {
-                        let block_size = (*header).block_size as usize;
-                        let header_size = PageHeader::header_size(block_size);
-                        let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
-                        #[allow(clippy::cast_ptr_alignment)]
-                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-
-                        ((*gc_box_ptr).trace_fn)(obj_ptr, &mut visitor);
-                    }
-                }
-            }
-            // Clear dirty state after scanning
-            (*header).clear_all_dirty();
-            (*header).clear_dirty_listed();
+            scan_dirty_page_minor_trace(page_ptr, &mut visitor);
         }
     }
-
-    // Clear snapshot and update statistics
+    for page_ptr in heap.drain_dirty_pages_overflow() {
+        unsafe {
+            scan_dirty_page_minor_trace(page_ptr, &mut visitor);
+        }
+    }
     heap.clear_dirty_pages_snapshot();
-
     visitor.process_worklist();
     visitor.objects_marked()
 }
@@ -1977,7 +2003,7 @@ fn mark_major_roots(heap: &LocalHeap) -> usize {
     }
 
     #[allow(clippy::type_complexity)]
-    let cross_thread_roots: Vec<*const GcBox<()>> = {
+    let mut cross_thread_roots: Vec<*const GcBox<()>> = {
         crate::heap::thread_registry().lock().map_or_else(
             |_| Vec::new(),
             |registry| {
@@ -1993,6 +2019,7 @@ fn mark_major_roots(heap: &LocalHeap) -> usize {
             },
         )
     };
+    cross_thread_roots.extend(crate::heap::get_orphaned_cross_thread_roots());
 
     for ptr in cross_thread_roots {
         unsafe {
@@ -2496,6 +2523,7 @@ unsafe fn lazy_sweep_page(
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
                 let mut current_free = (*header).free_list_head();
                 obj_cast.write_unaligned(current_free);
+                let mut did_reclaim = false;
                 loop {
                     let old = current_free.unwrap_or(u16::MAX);
                     match (*header).free_list_head.compare_exchange(
@@ -2538,8 +2566,9 @@ unsafe fn lazy_sweep_page(
                                 } else {
                                     current_free = next_head;
                                 }
-                                continue;
+                                break; // Slot was concurrently allocated; skip to next slot
                             }
+                            did_reclaim = true;
                             break;
                         }
                         Err(actual) => {
@@ -2553,8 +2582,10 @@ unsafe fn lazy_sweep_page(
                     }
                 }
 
-                (*header).clear_allocated(i);
-                reclaimed += 1;
+                if did_reclaim {
+                    (*header).clear_allocated(i);
+                    reclaimed += 1;
+                }
             }
         } else {
             (*header).clear_mark(i);
@@ -2614,6 +2645,7 @@ unsafe fn lazy_sweep_page_all_dead(
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
                 let mut current_free = (*header).free_list_head();
                 obj_cast.write_unaligned(current_free);
+                let mut did_reclaim = false;
                 loop {
                     let old = current_free.unwrap_or(u16::MAX);
                     match (*header).free_list_head.compare_exchange(
@@ -2656,8 +2688,9 @@ unsafe fn lazy_sweep_page_all_dead(
                                 } else {
                                     current_free = next_head;
                                 }
-                                continue;
+                                break; // Slot was concurrently allocated; skip to next slot
                             }
+                            did_reclaim = true;
                             break;
                         }
                         Err(actual) => {
@@ -2671,8 +2704,10 @@ unsafe fn lazy_sweep_page_all_dead(
                     }
                 }
 
-                (*header).clear_allocated(i);
-                reclaimed += 1;
+                if did_reclaim {
+                    (*header).clear_allocated(i);
+                    reclaimed += 1;
+                }
             }
             (*header).clear_mark(i);
         }

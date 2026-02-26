@@ -77,6 +77,23 @@ fn test_handle_to_gc() {
     });
 }
 
+/// Bug 132: `Handle::to_gc()` must check object is alive before converting.
+#[test]
+#[should_panic(
+    expected = "Handle::to_gc: cannot convert a dead, dropping, or under construction Gc"
+)]
+fn repro_bug132_handle_to_gc_after_gc_dropped() {
+    rudo_gc::test_util::reset();
+
+    with_heap_and_tcb(|_, tcb| {
+        let scope = HandleScope::new(tcb);
+        let gc = Gc::new(TestData { value: 42 });
+        let handle = scope.handle(&gc);
+        drop(gc);
+        let _ = handle.to_gc();
+    });
+}
+
 #[test]
 fn test_handle_copy_clone() {
     rudo_gc::test_util::reset();
@@ -146,10 +163,10 @@ fn test_escapeable_handlescope_escape() {
 
     with_heap_and_tcb(|_, tcb| {
         let outer = HandleScope::new(tcb);
+        let gc = Gc::new(123i32); // Keep gc alive so escaped handle stays valid (bug74)
 
         let escaped_handle = {
             let escape_scope = EscapeableHandleScope::new(tcb);
-            let gc = Gc::new(123i32);
             let inner_handle = escape_scope.handle(&gc);
             escape_scope.escape(&outer, inner_handle)
         };

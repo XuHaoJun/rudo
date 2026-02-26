@@ -17,6 +17,30 @@ use rudo_gc::{cell::GcCell, collect, Gc, Trace, Weak};
 // Basic functionality tests
 // ============================================================================
 
+/// Bug 117: Weak::strong_count/weak_count should return 0 during construction,
+/// consistent with Weak::upgrade() returning None.
+#[test]
+fn test_weak_strong_count_during_construction() {
+    #[derive(Trace)]
+    struct Node {
+        data: i32,
+    }
+
+    let _node = Gc::new_cyclic_weak(|weak| {
+        assert_eq!(
+            weak.strong_count(),
+            0,
+            "strong_count should be 0 during construction"
+        );
+        assert_eq!(
+            weak.weak_count(),
+            0,
+            "weak_count should be 0 during construction"
+        );
+        Node { data: 42 }
+    });
+}
+
 #[test]
 fn test_new_cyclic_weak_basic() {
     #[derive(Trace)]

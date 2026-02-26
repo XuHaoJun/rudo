@@ -43,11 +43,42 @@ use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 
 use crate::cell::GcCapture;
-use crate::gc::incremental::{is_generational_barrier_active, is_incremental_marking_active};
+use crate::gc::incremental::{
+    is_generational_barrier_active, is_incremental_marking_active, FallbackReason,
+    IncrementalMarkState,
+};
 use crate::ptr::GcBox;
 use crate::Trace;
 
 mod private {}
+
+/// Records old GC pointer values to SATB buffer before mutation (when incremental marking is active).
+#[inline]
+fn record_satb_old_values<T: GcCapture + ?Sized>(value: &T) {
+    if !is_incremental_marking_active() {
+        return;
+    }
+    let mut gc_ptrs = Vec::with_capacity(32);
+    value.capture_gc_ptrs_into(&mut gc_ptrs);
+    if gc_ptrs.is_empty() {
+        return;
+    }
+    if crate::heap::try_with_heap(|heap| {
+        for gc_ptr in &gc_ptrs {
+            if !heap.record_satb_old_value(*gc_ptr) {
+                IncrementalMarkState::global().request_fallback(FallbackReason::SatbBufferOverflow);
+                break;
+            }
+        }
+        true
+    })
+    .is_none()
+    {
+        for gc_ptr in gc_ptrs {
+            crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr);
+        }
+    }
+}
 
 /// Reader-writer lock wrapper for GC objects.
 ///
@@ -105,8 +136,10 @@ impl<T: ?Sized> GcRwLock<T> {
     fn trigger_write_barrier(&self) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        if is_generational_barrier_active() || is_incremental_marking_active() {
-            crate::heap::unified_write_barrier(ptr, is_incremental_marking_active());
+        let incremental_active = is_incremental_marking_active();
+        let generational_active = is_generational_barrier_active();
+        if generational_active || incremental_active {
+            crate::heap::unified_write_barrier(ptr, incremental_active);
         }
     }
 
@@ -212,9 +245,13 @@ impl<T: ?Sized> GcRwLock<T> {
     /// assert_eq!(data.read().value, 20);
     /// ```
     #[inline]
-    pub fn write(&self) -> GcRwLockWriteGuard<'_, T> {
-        self.trigger_write_barrier();
+    pub fn write(&self) -> GcRwLockWriteGuard<'_, T>
+    where
+        T: GcCapture,
+    {
         let guard = self.inner.write();
+        record_satb_old_values(&*guard);
+        self.trigger_write_barrier();
         GcRwLockWriteGuard {
             guard,
             _marker: PhantomData,
@@ -245,8 +282,12 @@ impl<T: ?Sized> GcRwLock<T> {
     /// }
     /// ```
     #[inline]
-    pub fn try_write(&self) -> Option<GcRwLockWriteGuard<'_, T>> {
+    pub fn try_write(&self) -> Option<GcRwLockWriteGuard<'_, T>>
+    where
+        T: GcCapture,
+    {
         self.inner.try_write().map(|guard| {
+            record_satb_old_values(&*guard);
             self.trigger_write_barrier();
             GcRwLockWriteGuard {
                 guard,
@@ -335,15 +376,18 @@ impl<T: ?Sized> Drop for GcRwLockReadGuard<'_, T> {
 /// Write guard for [`GcRwLock`].
 ///
 /// Holds a write lock on the `GcRwLock` and provides exclusive access to the inner data.
-/// The lock is released when the guard is dropped. Barriers are triggered on guard acquisition.
+/// The lock is released when the guard is dropped. Barriers are triggered on guard acquisition
+/// and again on drop (when incremental marking is active) to capture GC pointer changes.
+///
+/// Requires `T: GcCapture`; use [`impl_gc_capture`](crate::impl_gc_capture) for types without GC pointers.
 ///
 /// Access via [`Deref`] yields `&T`, [`DerefMut`] yields `&mut T`.
-pub struct GcRwLockWriteGuard<'a, T: ?Sized> {
+pub struct GcRwLockWriteGuard<'a, T: GcCapture + ?Sized> {
     guard: parking_lot::RwLockWriteGuard<'a, T>,
     _marker: PhantomData<&'a T>,
 }
 
-impl<T: ?Sized> Deref for GcRwLockWriteGuard<'_, T> {
+impl<T: GcCapture + ?Sized> Deref for GcRwLockWriteGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -351,16 +395,35 @@ impl<T: ?Sized> Deref for GcRwLockWriteGuard<'_, T> {
     }
 }
 
-impl<T: ?Sized> DerefMut for GcRwLockWriteGuard<'_, T> {
+impl<T: GcCapture + ?Sized> DerefMut for GcRwLockWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         self.guard.deref_mut()
     }
 }
 
-impl<T: ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
+/// Drop implementation for write guards.
+/// Captures and marks GC pointers on drop to satisfy SATB when incremental marking is active,
+/// ensuring modifications made while holding the lock are visible to the GC.
+impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
-        // Guard is dropped automatically when it goes out of scope
-        // The parking_lot guard will release the write lock
+        // Cache barrier state at start to avoid TOCTOU: state may change between check and mark.
+        let barrier_active_at_start =
+            is_generational_barrier_active() || is_incremental_marking_active();
+
+        let mut ptrs = Vec::with_capacity(32);
+        self.guard.capture_gc_ptrs_into(&mut ptrs);
+
+        // Re-check before mark: if state flipped INACTIVE→ACTIVE, we must still mark.
+        let barrier_active_before_mark =
+            is_generational_barrier_active() || is_incremental_marking_active();
+
+        if barrier_active_at_start || barrier_active_before_mark {
+            for gc_ptr in ptrs {
+                let _ = unsafe {
+                    crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
+                };
+            }
+        }
     }
 }
 
@@ -405,8 +468,10 @@ impl<T: ?Sized> GcMutex<T> {
     fn trigger_write_barrier(&self) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        if is_generational_barrier_active() || is_incremental_marking_active() {
-            crate::heap::unified_write_barrier(ptr, is_incremental_marking_active());
+        let incremental_active = is_incremental_marking_active();
+        let generational_active = is_generational_barrier_active();
+        if generational_active || incremental_active {
+            crate::heap::unified_write_barrier(ptr, incremental_active);
         }
     }
 
@@ -457,9 +522,13 @@ impl<T: ?Sized> GcMutex<T> {
     /// assert_eq!(data.lock().value, 20);
     /// ```
     #[inline]
-    pub fn lock(&self) -> GcMutexGuard<'_, T> {
-        self.trigger_write_barrier();
+    pub fn lock(&self) -> GcMutexGuard<'_, T>
+    where
+        T: GcCapture,
+    {
         let guard = self.inner.lock();
+        record_satb_old_values(&*guard);
+        self.trigger_write_barrier();
         GcMutexGuard {
             guard,
             _marker: PhantomData,
@@ -470,6 +539,8 @@ impl<T: ?Sized> GcMutex<T> {
     ///
     /// Returns `Some` with a mutex guard if the lock is not held,
     /// or `None` if the lock is currently held by another thread.
+    ///
+    /// Triggers generational and SATB write barriers on acquisition, same as [`lock()`](Self::lock).
     ///
     /// # Examples
     ///
@@ -486,10 +557,17 @@ impl<T: ?Sized> GcMutex<T> {
     /// }
     /// ```
     #[inline]
-    pub fn try_lock(&self) -> Option<GcMutexGuard<'_, T>> {
-        self.inner.try_lock().map(|guard| GcMutexGuard {
-            guard,
-            _marker: PhantomData,
+    pub fn try_lock(&self) -> Option<GcMutexGuard<'_, T>>
+    where
+        T: GcCapture,
+    {
+        self.inner.try_lock().map(|guard| {
+            record_satb_old_values(&*guard);
+            self.trigger_write_barrier();
+            GcMutexGuard {
+                guard,
+                _marker: PhantomData,
+            }
         })
     }
 
@@ -519,7 +597,7 @@ impl<T: ?Sized> GcMutex<T> {
 
 impl<T> std::fmt::Debug for GcMutex<T>
 where
-    T: std::fmt::Debug + ?Sized,
+    T: std::fmt::Debug + GcCapture + ?Sized,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(&*self.lock(), f)
@@ -537,25 +615,28 @@ where
 
 impl<T> Clone for GcMutex<T>
 where
-    T: Clone + Sized,
+    T: Clone + GcCapture + Sized,
 {
     fn clone(&self) -> Self {
-        Self::new(self.lock().clone())
+        Self::new((*self.lock()).clone())
     }
 }
 
 /// Guard for [`GcMutex`].
 ///
 /// Holds the mutex lock and provides exclusive access to the inner data.
-/// The lock is released when the guard is dropped.
+/// The lock is released when the guard is dropped. Barriers are triggered on guard acquisition
+/// and again on drop (when incremental marking is active) to capture GC pointer changes.
+///
+/// Requires `T: GcCapture`; use [`impl_gc_capture`](crate::impl_gc_capture) for types without GC pointers.
 ///
 /// Access via [`Deref`] yields `&T`, [`DerefMut`] yields `&mut T`.
-pub struct GcMutexGuard<'a, T: ?Sized> {
+pub struct GcMutexGuard<'a, T: GcCapture + ?Sized> {
     guard: parking_lot::MutexGuard<'a, T>,
     _marker: PhantomData<&'a T>,
 }
 
-impl<T: ?Sized> Deref for GcMutexGuard<'_, T> {
+impl<T: GcCapture + ?Sized> Deref for GcMutexGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -563,16 +644,35 @@ impl<T: ?Sized> Deref for GcMutexGuard<'_, T> {
     }
 }
 
-impl<T: ?Sized> DerefMut for GcMutexGuard<'_, T> {
+impl<T: GcCapture + ?Sized> DerefMut for GcMutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         self.guard.deref_mut()
     }
 }
 
-impl<T: ?Sized> Drop for GcMutexGuard<'_, T> {
+/// Drop implementation for mutex guards.
+/// Captures and marks GC pointers on drop to satisfy SATB when incremental marking is active,
+/// ensuring modifications made while holding the lock are visible to the GC.
+impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
     fn drop(&mut self) {
-        // Guard is dropped automatically when it goes out of scope
-        // The parking_lot guard will release the mutex
+        // Cache barrier state at start to avoid TOCTOU: state may change between check and mark.
+        let barrier_active_at_start =
+            is_generational_barrier_active() || is_incremental_marking_active();
+
+        let mut ptrs = Vec::with_capacity(32);
+        self.guard.capture_gc_ptrs_into(&mut ptrs);
+
+        // Re-check before mark: if state flipped INACTIVE→ACTIVE, we must still mark.
+        let barrier_active_before_mark =
+            is_generational_barrier_active() || is_incremental_marking_active();
+
+        if barrier_active_at_start || barrier_active_before_mark {
+            for gc_ptr in ptrs {
+                let _ = unsafe {
+                    crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
+                };
+            }
+        }
     }
 }
 
@@ -591,6 +691,11 @@ unsafe impl<T: Trace + ?Sized> Trace for GcRwLock<T> {
 }
 
 impl<T: GcCapture + ?Sized> GcCapture for GcRwLock<T> {
+    /// Returns empty slice because inner data requires locking.
+    ///
+    /// Lock-protected types cannot return a static slice; pointer collection
+    /// must use [`capture_gc_ptrs_into()`](GcCapture::capture_gc_ptrs_into) which
+    /// acquires the lock and delegates to the inner value.
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
@@ -598,9 +703,10 @@ impl<T: GcCapture + ?Sized> GcCapture for GcRwLock<T> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Some(value) = self.inner.try_read() {
-            value.capture_gc_ptrs_into(ptrs);
-        }
+        // Use blocking read() to reliably capture all GC pointers. try_read() would
+        // silently miss pointers when a writer holds the lock, breaking SATB.
+        let guard = self.inner.read();
+        guard.capture_gc_ptrs_into(ptrs);
     }
 }
 
@@ -611,6 +717,25 @@ unsafe impl<T: Trace + ?Sized> Trace for GcMutex<T> {
         let raw_ptr = self.inner.data_ptr();
         // SAFETY: See safety proof for GcRwLock.
         unsafe { (*raw_ptr).trace(visitor) }
+    }
+}
+
+impl<T: GcCapture + ?Sized> GcCapture for GcMutex<T> {
+    /// Returns empty slice because inner data requires locking.
+    ///
+    /// See [`GcRwLock`]'s `capture_gc_ptrs()` for rationale.
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        // Use blocking lock() to reliably capture all GC pointers, consistent with
+        // GcRwLock::capture_gc_ptrs_into(). try_lock() would silently miss pointers
+        // when a writer holds the lock, potentially breaking SATB.
+        let guard = self.inner.lock();
+        guard.capture_gc_ptrs_into(ptrs);
     }
 }
 

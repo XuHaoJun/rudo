@@ -534,6 +534,7 @@ fn test_multiple_weaks_concurrent() {
 struct TestData {
     value: i32,
 }
+rudo_gc::impl_gc_capture!(TestData);
 
 #[test]
 fn test_gc_rwlock_read() {
@@ -583,6 +584,7 @@ fn test_gc_rwlock_try_write_barrier_only_on_success() {
     struct Data {
         value: i32,
     }
+    rudo_gc::impl_gc_capture!(Data);
 
     let data: Gc<GcRwLock<Data>> = Gc::new(GcRwLock::new(Data { value: 0 }));
 
@@ -717,6 +719,35 @@ fn test_write_exclusivity() {
     assert!(value == 42 || value == 100);
 }
 
+#[test]
+fn test_gcrwlock_gcmutex_capture_gc_ptrs_into() {
+    use rudo_gc::cell::GcCapture;
+
+    rudo_gc::test_util::reset();
+
+    #[derive(Trace)]
+    struct Inner {
+        value: i32,
+    }
+    rudo_gc::impl_gc_capture!(Inner);
+
+    let inner = Gc::new(Inner { value: 42 });
+    let rwlock: GcRwLock<Gc<Inner>> = GcRwLock::new(inner.clone());
+    let mutex: GcMutex<Gc<Inner>> = GcMutex::new(inner.clone());
+
+    let mut ptrs = Vec::new();
+    rwlock.capture_gc_ptrs_into(&mut ptrs);
+    assert_eq!(ptrs.len(), 1);
+    ptrs.clear();
+
+    mutex.capture_gc_ptrs_into(&mut ptrs);
+    assert_eq!(ptrs.len(), 1);
+
+    assert!(GcRwLock::<Gc<Inner>>::new(inner)
+        .capture_gc_ptrs()
+        .is_empty());
+}
+
 // Compile-time assertions for GcRwLock and GcMutex Send + Sync traits
 #[allow(dead_code)]
 const _: fn() = || {
@@ -742,6 +773,7 @@ fn test_gccell_single_threaded() {
     struct Data {
         value: i32,
     }
+    rudo_gc::impl_gc_capture!(Data);
 
     let cell: rudo_gc::Gc<GcCell<Data>> = rudo_gc::Gc::new(GcCell::new(Data { value: 42 }));
 
@@ -762,6 +794,7 @@ fn test_gccell_performance_no_atomics() {
     struct Counter {
         count: u64,
     }
+    rudo_gc::impl_gc_capture!(Counter);
 
     let cell: rudo_gc::Gc<GcCell<Counter>> = rudo_gc::Gc::new(GcCell::new(Counter { count: 0 }));
 
@@ -793,6 +826,14 @@ fn test_miri_gc_rwlock_trace() {
     struct Inner {
         value: i32,
         next: Option<Gc<Inner>>,
+    }
+    impl rudo_gc::cell::GcCapture for Inner {
+        fn capture_gc_ptrs(&self) -> &[std::ptr::NonNull<rudo_gc::GcBox<()>>] {
+            &[]
+        }
+        fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<std::ptr::NonNull<rudo_gc::GcBox<()>>>) {
+            self.next.capture_gc_ptrs_into(ptrs);
+        }
     }
 
     let inner = Gc::new(Inner {
@@ -828,6 +869,7 @@ fn test_miri_gc_mutex_trace() {
     struct Data {
         values: [i32; 4],
     }
+    rudo_gc::impl_gc_capture!(Data);
 
     let data: Gc<GcMutex<Data>> = Gc::new(GcMutex::new(Data {
         values: [1, 2, 3, 4],
@@ -854,6 +896,7 @@ fn test_miri_concurrent_gc_trace() {
     struct Shared {
         counter: i32,
     }
+    rudo_gc::impl_gc_capture!(Shared);
 
     let shared: Gc<GcRwLock<Shared>> = Gc::new(GcRwLock::new(Shared { counter: 0 }));
 
@@ -900,6 +943,7 @@ fn test_tsan_gc_rwlock_no_data_race() {
     struct Counter {
         value: usize,
     }
+    rudo_gc::impl_gc_capture!(Counter);
 
     let counter: Gc<GcRwLock<Counter>> = Gc::new(GcRwLock::new(Counter { value: 0 }));
 
@@ -953,6 +997,7 @@ fn test_tsan_gc_mutex_no_data_race() {
     struct SharedState {
         items: Vec<i32>,
     }
+    rudo_gc::impl_gc_capture!(SharedState);
 
     let state: Gc<GcMutex<SharedState>> = Gc::new(GcMutex::new(SharedState {
         items: Vec::with_capacity(100),
@@ -1001,6 +1046,7 @@ fn test_tsan_gc_rwlock_readers_no_contention() {
     struct ReadOnlyData {
         values: [u64; 8],
     }
+    rudo_gc::impl_gc_capture!(ReadOnlyData);
 
     let data: Gc<GcRwLock<ReadOnlyData>> = Gc::new(GcRwLock::new(ReadOnlyData {
         values: [1, 2, 3, 4, 5, 6, 7, 8],
@@ -1045,6 +1091,7 @@ fn test_tsan_interior_mutability_through_guard() {
     struct Inner {
         state: AtomicUsize,
     }
+    rudo_gc::impl_gc_capture!(Inner);
 
     let lock: Gc<GcRwLock<Inner>> = Gc::new(GcRwLock::new(Inner {
         state: AtomicUsize::new(0),
@@ -1084,6 +1131,7 @@ fn test_gcrwlock_write_barrier_triggers() {
     struct Data {
         value: i32,
     }
+    rudo_gc::impl_gc_capture!(Data);
 
     let data: Gc<GcRwLock<Data>> = Gc::new(GcRwLock::new(Data { value: 0 }));
 
@@ -1123,6 +1171,7 @@ fn test_gcmutex_write_barrier_triggers() {
     struct Counter {
         count: i32,
     }
+    rudo_gc::impl_gc_capture!(Counter);
 
     let counter: Gc<GcMutex<Counter>> = Gc::new(GcMutex::new(Counter { count: 0 }));
 
@@ -1158,6 +1207,7 @@ fn test_gcrwlock_recovers_after_panic() {
     struct Data {
         value: i32,
     }
+    rudo_gc::impl_gc_capture!(Data);
 
     let data: Gc<GcRwLock<Data>> = Gc::new(GcRwLock::new(Data { value: 0 }));
 
@@ -1189,6 +1239,7 @@ fn test_gcmutex_recovers_after_panic() {
     struct Counter {
         count: i32,
     }
+    rudo_gc::impl_gc_capture!(Counter);
 
     let counter: Gc<GcMutex<Counter>> = Gc::new(GcMutex::new(Counter { count: 0 }));
 

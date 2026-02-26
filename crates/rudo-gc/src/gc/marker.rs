@@ -904,6 +904,9 @@ pub fn worker_mark_loop(
                     continue;
                 };
 
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    continue;
+                }
                 if (*header.as_ptr()).is_marked(idx) {
                     continue;
                 }
@@ -1023,6 +1026,9 @@ pub fn worker_mark_loop_with_registry(
                     continue;
                 };
 
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    continue;
+                }
                 if (*header.as_ptr()).is_marked(idx) {
                     continue;
                 }

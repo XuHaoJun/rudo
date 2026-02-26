@@ -308,10 +308,17 @@ impl AsyncHandleScope {
     #[inline]
     pub fn handle<T: Trace + 'static>(&self, gc: &Gc<T>) -> AsyncHandle<T> {
         let used = unsafe { &*self.data.used.get() };
-        let idx = used.fetch_add(1, Ordering::Relaxed);
-        if idx >= HANDLE_BLOCK_SIZE {
-            panic!("AsyncHandleScope: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})");
-        }
+        let idx = loop {
+            let current = used.load(Ordering::Acquire);
+            if current >= HANDLE_BLOCK_SIZE {
+                panic!("AsyncHandleScope: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})");
+            }
+            if let Ok(idx) =
+                used.compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
+            {
+                break idx;
+            }
+        };
 
         let gc_ptr = Gc::internal_ptr(gc);
         validate_gc_in_current_heap(gc_ptr);
@@ -564,20 +571,26 @@ impl<T: Trace + 'static> AsyncHandle<T> {
         let tcb = crate::heap::current_thread_control_block()
             .expect("AsyncHandle::get() must be called within a GC thread");
 
-        #[cfg(debug_assertions)]
-        {
-            if !tcb.is_scope_active(self.scope_id) {
-                panic!(
-                    "AsyncHandle used after scope was dropped. \
-                     The AsyncHandleScope that created this handle has been dropped. \
-                     Ensure the scope stays alive as long as any handles are in use."
-                );
-            }
+        if !tcb.is_scope_active(self.scope_id) {
+            panic!(
+                "AsyncHandle used after scope was dropped. \
+                 The AsyncHandleScope that created this handle has been dropped. \
+                 Ensure the scope stays alive as long as any handles are in use."
+            );
         }
 
         let slot = unsafe { &*self.slot };
         let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
-        unsafe { &*gc_box_ptr }.value()
+        unsafe {
+            let gc_box = &*gc_box_ptr;
+            assert!(
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "AsyncHandle::get: cannot access a dead, dropping, or under construction Gc"
+            );
+            gc_box.value()
+        }
     }
 
     /// Gets a reference to the underlying data without scope validation.
@@ -653,9 +666,29 @@ impl<T: Trace + 'static> AsyncHandle<T> {
     /// ```
     #[inline]
     pub fn to_gc(self) -> Gc<T> {
+        let tcb = crate::heap::current_thread_control_block()
+            .expect("AsyncHandle::to_gc() must be called within a GC thread");
+
+        if !tcb.is_scope_active(self.scope_id) {
+            panic!(
+                "AsyncHandle::to_gc() called after scope was dropped. \
+                 The AsyncHandleScope that created this handle has been dropped."
+            );
+        }
+
         unsafe {
-            let ptr = (*self.slot).as_ptr() as *const u8;
-            Gc::from_raw(ptr)
+            let gc_box_ptr = (*self.slot).as_ptr() as *const GcBox<T>;
+            let gc_box = &*gc_box_ptr;
+            assert!(
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "AsyncHandle::to_gc: cannot convert a dead, dropping, or under construction Gc"
+            );
+            if !gc_box.try_inc_ref_if_nonzero() {
+                panic!("AsyncHandle::to_gc: object is being dropped by another thread");
+            }
+            Gc::from_raw(gc_box_ptr as *const u8)
         }
     }
 }
@@ -1037,9 +1070,8 @@ impl GcScope {
     /// }
     /// ```
     #[inline]
-    pub async fn spawn<F, R>(&self, f: impl FnOnce(Vec<AsyncGcHandle>) -> R) -> R::Output
+    pub async fn spawn<R>(&self, f: impl FnOnce(Vec<AsyncGcHandle>) -> R) -> R::Output
     where
-        F: std::future::Future<Output = R>,
         R: std::future::Future,
     {
         let tcb = crate::heap::current_thread_control_block()
@@ -1052,13 +1084,29 @@ impl GcScope {
         let handles: Vec<AsyncGcHandle> = tracked
             .iter()
             .map(|tracked| {
-                let used = unsafe { &*scope.data.used.get() }.fetch_add(1, Ordering::Relaxed);
+                let used = unsafe { &*scope.data.used.get() };
+                let idx = loop {
+                    let current = used.load(Ordering::Acquire);
+                    if current >= HANDLE_BLOCK_SIZE {
+                        panic!(
+                            "GcScope::spawn: exceeded maximum handle count ({HANDLE_BLOCK_SIZE})"
+                        );
+                    }
+                    if let Ok(idx) = used.compare_exchange(
+                        current,
+                        current + 1,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        break idx;
+                    }
+                };
 
                 validate_gc_in_current_heap(tracked.ptr as *const u8);
 
                 let slot_ptr = unsafe {
                     let slots_ptr = scope.data.block.slots.get() as *mut HandleSlot;
-                    slots_ptr.add(used)
+                    slots_ptr.add(idx)
                 };
 
                 unsafe {
@@ -1176,7 +1224,8 @@ impl AsyncGcHandle {
     ///
     /// # Returns
     ///
-    /// `Some(&T)` if the handle contains the specified type, `None` otherwise.
+    /// `Some(&T)` if the handle contains the specified type and the object is alive,
+    /// `None` if the type does not match or the object is dead or in dropping state.
     ///
     /// # Example
     ///
@@ -1207,7 +1256,16 @@ impl AsyncGcHandle {
         if self.type_id == TypeId::of::<T>() {
             let slot = unsafe { &*self.slot };
             let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
-            Some(unsafe { &*gc_box_ptr }.value())
+            unsafe {
+                let gc_box = &*gc_box_ptr;
+                if gc_box.is_under_construction()
+                    || gc_box.has_dead_flag()
+                    || gc_box.dropping_state() != 0
+                {
+                    return None;
+                }
+                Some(gc_box.value())
+            }
         } else {
             None
         }

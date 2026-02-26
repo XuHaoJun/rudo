@@ -11,8 +11,9 @@ use crate::trace::Trace;
 use parking_lot::Mutex;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::ptr::NonNull;
+use std::rc::Rc;
 use std::sync::atomic::Ordering;
-use std::sync::RwLock;
+use std::sync::{Arc as StdArc, Mutex as StdMutex, RwLock};
 
 /// A memory location with interior mutability that triggers a write barrier.
 ///
@@ -157,7 +158,11 @@ impl<T: ?Sized> GcCell<T> {
     {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        if crate::gc::incremental::is_incremental_marking_active() {
+        // Cache incremental marking state once to avoid TOCTOU between check and use
+        // (bug110: triple is_incremental_marking_active call caused inconsistent barrier state)
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+
+        if incremental_active {
             unsafe {
                 let value = &*self.inner.as_ptr();
                 let mut gc_ptrs = Vec::with_capacity(32);
@@ -166,6 +171,10 @@ impl<T: ?Sized> GcCell<T> {
                     crate::heap::with_heap(|heap| {
                         for gc_ptr in gc_ptrs {
                             if !heap.record_satb_old_value(gc_ptr) {
+                                crate::gc::incremental::IncrementalMarkState::global()
+                                    .request_fallback(
+                                        crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                                    );
                                 break;
                             }
                         }
@@ -174,15 +183,11 @@ impl<T: ?Sized> GcCell<T> {
             }
         }
 
-        crate::heap::gc_cell_validate_and_barrier(
-            ptr,
-            "borrow_mut",
-            crate::gc::incremental::is_incremental_marking_active(),
-        );
+        crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut", incremental_active);
 
         let result = self.inner.borrow_mut();
 
-        if crate::gc::incremental::is_incremental_marking_active() {
+        if incremental_active {
             unsafe {
                 let new_value = &*result;
                 let mut new_gc_ptrs = Vec::with_capacity(32);
@@ -278,139 +283,6 @@ impl<T: ?Sized> GcCell<T> {
              3. Dispatch mutations back to the main thread via channel\n\
              4. Use single-threaded Tokio runtime"
         );
-    }
-
-    #[allow(dead_code)]
-    #[allow(clippy::unused_self)]
-    fn write_barrier(&self) {
-        let ptr = std::ptr::from_ref(self).cast::<u8>();
-
-        if crate::gc::incremental::is_generational_barrier_active() {
-            self.generational_write_barrier(ptr);
-        }
-
-        if crate::gc::incremental::is_incremental_marking_active() {
-            self.incremental_write_barrier(ptr);
-        }
-    }
-
-    #[inline]
-    #[allow(clippy::unused_self)]
-    fn is_gc_heap_pointer(&self, ptr: *const u8) -> bool {
-        let ptr_addr = ptr as usize;
-        let heap_start = crate::heap::heap_start();
-        let heap_end = crate::heap::heap_end();
-
-        if ptr_addr < heap_start || ptr_addr > heap_end {
-            return false;
-        }
-
-        let _page_addr = ptr_addr & crate::heap::page_mask();
-        let header = unsafe { crate::heap::ptr_to_page_header(ptr) };
-        unsafe { (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE }
-    }
-
-    /// Records a write to an old-generation object for generational GC.
-    ///
-    /// This implements the generational GC invariant: all OLD→YOUNG references
-    /// must be tracked so minor collections can find roots without scanning old gen.
-    ///
-    /// **Important**: This barrier remains active through ALL phases of incremental
-    /// marking (including `FinalMark`), not just during Marking. Mutations during
-    /// `FinalMark` must still be recorded for correctness.
-    #[allow(dead_code)]
-    #[allow(clippy::unused_self)]
-    fn generational_write_barrier(&self, ptr: *const u8) {
-        if !self.is_gc_heap_pointer(ptr) {
-            return;
-        }
-
-        unsafe {
-            crate::heap::with_heap(|heap| {
-                let ptr_addr = ptr as usize;
-                let header = crate::heap::ptr_to_page_header(ptr);
-
-                if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
-                    let h = header.as_ptr();
-                    if (*h).generation > 0 {
-                        let block_size = (*h).block_size as usize;
-                        let header_size = (*h).header_size as usize;
-                        let header_page_addr = header.as_ptr() as usize;
-                        let obj_count = (*h).obj_count as usize;
-
-                        if ptr_addr >= header_page_addr + header_size {
-                            let offset = ptr_addr - (header_page_addr + header_size);
-                            let index = offset / block_size;
-
-                            if index < obj_count {
-                                (*h).set_dirty(index);
-                                heap.add_to_dirty_pages(header);
-                            }
-                        }
-                    }
-                    return;
-                }
-
-                let page_addr = ptr_addr & crate::heap::page_mask();
-                if let Some(&(head_addr, _obj_size, _h_size)) =
-                    heap.large_object_map.get(&page_addr)
-                {
-                    let h = head_addr as *mut crate::heap::PageHeader;
-                    if (*h).magic == crate::heap::MAGIC_GC_PAGE && (*h).generation > 0 {
-                        let block_size = (*h).block_size as usize;
-                        let header_size = (*h).header_size as usize;
-                        let header_page_addr = head_addr;
-
-                        if ptr_addr >= header_page_addr + header_size {
-                            let offset = ptr_addr - (header_page_addr + header_size);
-                            let index = offset / block_size;
-                            let obj_count = (*h).obj_count as usize;
-
-                            if index < obj_count {
-                                (*h).set_dirty(index);
-                                heap.add_to_dirty_pages(NonNull::new_unchecked(
-                                    head_addr as *mut crate::heap::PageHeader,
-                                ));
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    #[allow(dead_code)]
-    #[allow(clippy::unused_self)]
-    #[allow(clippy::needless_return)]
-    fn incremental_write_barrier(&self, ptr: *const u8) {
-        if !self.is_gc_heap_pointer(ptr) {
-            return;
-        }
-
-        let state = IncrementalMarkState::global();
-
-        if !state.config().enabled || state.fallback_requested() {
-            return;
-        }
-
-        // SAFETY: This fence synchronizes with the GC thread to ensure
-        // that all prior writes are visible before we check page metadata.
-        std::sync::atomic::fence(Ordering::AcqRel);
-
-        unsafe {
-            if state.fallback_requested() {
-                return;
-            }
-
-            let header = ptr_to_page_header(ptr);
-            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
-                return;
-            }
-
-            if (*header.as_ptr()).generation > 0 {
-                let _ = record_page_in_remembered_buffer(header);
-            }
-        }
     }
 }
 
@@ -529,6 +401,18 @@ impl<T: Trace + 'static> GcCapture for crate::Gc<T> {
     }
 }
 
+impl<T: GcCapture + ?Sized> GcCapture for &T {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        (**self).capture_gc_ptrs()
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        (**self).capture_gc_ptrs_into(ptrs);
+    }
+}
+
 impl<T: GcCapture + 'static> GcCapture for Option<T> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
@@ -543,7 +427,68 @@ impl<T: GcCapture + 'static> GcCapture for Option<T> {
     }
 }
 
+impl<B> GcCapture for std::borrow::Cow<'_, B>
+where
+    B: std::borrow::ToOwned + ?Sized + GcCapture,
+    B::Owned: GcCapture + 'static,
+{
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        match self {
+            std::borrow::Cow::Borrowed(t) => t.capture_gc_ptrs_into(ptrs),
+            std::borrow::Cow::Owned(t) => t.capture_gc_ptrs_into(ptrs),
+        }
+    }
+}
+
 impl<T: GcCapture + 'static> GcCapture for Vec<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for value in self {
+            value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for std::collections::VecDeque<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for value in self {
+            value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for std::collections::LinkedList<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        for value in self {
+            value.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for std::collections::BinaryHeap<T> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
         &[]
@@ -649,6 +594,30 @@ impl<T: GcCapture + 'static> GcCapture for Box<T> {
     }
 }
 
+impl<T: GcCapture + 'static> GcCapture for StdArc<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        (**self).capture_gc_ptrs_into(ptrs);
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for Rc<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        (**self).capture_gc_ptrs_into(ptrs);
+    }
+}
+
 impl<T: GcCapture + ?Sized> GcCapture for GcCell<T> {
     #[inline]
     fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
@@ -692,8 +661,9 @@ impl<T: GcCapture + 'static> GcCapture for RefCell<T> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        let value = self.borrow();
-        value.capture_gc_ptrs_into(ptrs);
+        if let Ok(value) = self.try_borrow() {
+            value.capture_gc_ptrs_into(ptrs);
+        }
     }
 }
 
@@ -705,9 +675,53 @@ impl<T: GcCapture + 'static> GcCapture for RwLock<T> {
 
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Ok(value) = self.try_read() {
-            value.capture_gc_ptrs_into(ptrs);
+        // Use blocking read() to reliably capture all GC pointers, same as GcRwLock (bug34).
+        if let Ok(guard) = self.read() {
+            guard.capture_gc_ptrs_into(ptrs);
         }
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for StdMutex<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        // Use blocking lock() to reliably capture all GC pointers, same as RwLock (bug35).
+        if let Ok(guard) = self.lock() {
+            guard.capture_gc_ptrs_into(ptrs);
+        }
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for parking_lot::Mutex<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        // Use blocking lock() to reliably capture all GC pointers, same as StdMutex (bug66).
+        let guard = self.lock();
+        guard.capture_gc_ptrs_into(ptrs);
+    }
+}
+
+impl<T: GcCapture + 'static> GcCapture for parking_lot::RwLock<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        // Use blocking read() to reliably capture all GC pointers, same as std::sync::RwLock (bug66).
+        let guard = self.read();
+        guard.capture_gc_ptrs_into(ptrs);
     }
 }
 
@@ -755,6 +769,122 @@ macro_rules! impl_gc_capture {
             }
         }
     };
+}
+
+// Primitives: no-op GcCapture so GcRwLock/GcMutex guards can require T: GcCapture on drop.
+impl GcCapture for i8 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for i16 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for i32 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for i64 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for i128 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for u8 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for u16 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for u32 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for u64 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for u128 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for usize {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for isize {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for bool {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for f32 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for f64 {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for char {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for () {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for str {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
+}
+impl GcCapture for String {
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+    fn capture_gc_ptrs_into(&self, _: &mut Vec<NonNull<GcBox<()>>>) {}
 }
 
 // SAFETY: GcCell is Trace if T is Trace.
@@ -911,15 +1041,26 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     {
         let guard = self.inner.lock();
 
-        if crate::gc::incremental::is_incremental_marking_active() {
+        // Cache incremental marking state once to avoid TOCTOU between SATB capture
+        // and trigger_write_barrier (bug116)
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+
+        if incremental_active {
             let value = &*guard;
             let mut gc_ptrs = Vec::with_capacity(32);
             value.capture_gc_ptrs_into(&mut gc_ptrs);
             if !gc_ptrs.is_empty() {
                 if crate::heap::try_with_heap(|heap| {
                     for gc_ptr in &gc_ptrs {
-                        let _ = heap.record_satb_old_value(*gc_ptr);
+                        if !heap.record_satb_old_value(*gc_ptr) {
+                            crate::gc::incremental::IncrementalMarkState::global()
+                                .request_fallback(
+                                    crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                                );
+                            break;
+                        }
                     }
+                    true
                 })
                 .is_some()
                 {
@@ -933,7 +1074,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
             }
         }
 
-        self.trigger_write_barrier();
+        self.trigger_write_barrier_with_incremental(incremental_active);
 
         GcThreadSafeRefMut {
             inner: guard,
@@ -986,15 +1127,19 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 
     #[inline]
     fn trigger_write_barrier(&self) {
+        self.trigger_write_barrier_with_incremental(
+            crate::gc::incremental::is_incremental_marking_active(),
+        );
+    }
+
+    /// Barrier with cached incremental state. Used by `borrow_mut` to avoid TOCTOU (bug116).
+    #[inline]
+    fn trigger_write_barrier_with_incremental(&self, incremental_active: bool) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        if crate::gc::incremental::is_generational_barrier_active()
-            || crate::gc::incremental::is_incremental_marking_active()
-        {
-            crate::heap::unified_write_barrier(
-                ptr,
-                crate::gc::incremental::is_incremental_marking_active(),
-            );
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        if generational_active || incremental_active {
+            crate::heap::unified_write_barrier(ptr, incremental_active);
         }
     }
 
@@ -1132,10 +1277,18 @@ impl<T: GcCapture + ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
 
 impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
     fn drop(&mut self) {
-        if crate::gc::incremental::is_incremental_marking_active() {
-            let mut ptrs = Vec::with_capacity(32);
-            (*self.inner).capture_gc_ptrs_into(&mut ptrs);
+        // Cache barrier state at start to avoid TOCTOU: state may change between check and mark.
+        let barrier_active_at_start = crate::gc::incremental::is_generational_barrier_active()
+            || crate::gc::incremental::is_incremental_marking_active();
 
+        let mut ptrs = Vec::with_capacity(32);
+        (*self.inner).capture_gc_ptrs_into(&mut ptrs);
+
+        // Re-check before mark: if state flipped INACTIVE→ACTIVE, we must still mark.
+        let barrier_active_before_mark = crate::gc::incremental::is_generational_barrier_active()
+            || crate::gc::incremental::is_incremental_marking_active();
+
+        if barrier_active_at_start || barrier_active_before_mark {
             for gc_ptr in ptrs {
                 let _ = unsafe {
                     crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
@@ -1167,10 +1320,15 @@ impl<T: GcCapture + ?Sized> GcCapture for GcThreadSafeCell<T> {
         &[]
     }
 
+    /// Captures GC pointers from the inner value.
+    ///
+    /// Uses `try_lock()` to avoid data races: if the lock is held by another thread
+    /// (e.g. a writer), we skip capturing. The writer will record SATB in `borrow_mut()`.
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        let raw_ptr = self.inner.data_ptr();
-        unsafe { (*raw_ptr).capture_gc_ptrs_into(ptrs) }
+        if let Some(guard) = self.inner.try_lock() {
+            guard.capture_gc_ptrs_into(ptrs);
+        }
     }
 }
 

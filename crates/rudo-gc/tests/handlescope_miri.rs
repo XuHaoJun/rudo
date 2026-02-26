@@ -47,10 +47,10 @@ fn miri_escapeable_handle_scope_escape() {
 
     with_heap_and_tcb(|_, tcb| {
         let outer = HandleScope::new(tcb);
+        let gc = Gc::new(MiriTestData { value: 123 }); // Keep gc alive (bug74)
 
         let escaped = {
             let escape_scope = EscapeableHandleScope::new(tcb);
-            let gc = Gc::new(MiriTestData { value: 123 });
             let inner = escape_scope.handle(&gc);
 
             escape_scope.escape(&outer, inner)

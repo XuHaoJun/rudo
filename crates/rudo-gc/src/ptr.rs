@@ -11,6 +11,7 @@ use std::ops::Deref;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
+use crate::cell::GcCapture;
 use crate::gc::incremental::mark_new_object_black;
 use crate::gc::notify_dropped_gc;
 use crate::heap::{with_heap, LocalHeap};
@@ -66,9 +67,10 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Check if the value is currently under construction.
+    /// Uses `Acquire` ordering to synchronize with `set_under_construction(false)` (`AcqRel`).
     #[inline]
-    fn is_under_construction(&self) -> bool {
-        (self.weak_count.load(Ordering::Relaxed) & Self::UNDER_CONSTRUCTION_FLAG) != 0
+    pub(crate) fn is_under_construction(&self) -> bool {
+        (self.weak_count.load(Ordering::Acquire) & Self::UNDER_CONSTRUCTION_FLAG) != 0
     }
 
     /// Set the under-construction flag.
@@ -88,7 +90,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// Returns the dropping state: 0 = not dropping, 1 = dropping phase 1, 2 = final dropping.
     /// Uses `Acquire` ordering to synchronize with `try_mark_dropping()`.
     #[inline]
-    fn dropping_state(&self) -> usize {
+    pub(crate) fn dropping_state(&self) -> usize {
         self.is_dropping.load(Ordering::Acquire)
     }
 
@@ -126,6 +128,23 @@ impl<T: Trace + ?Sized> GcBox<T> {
             .ok();
     }
 
+    /// Try to increment `ref_count` only if it is currently > 0.
+    /// Returns true if successful, false if `ref_count` was 0 (object is being dropped).
+    /// Used by weak upgrade to avoid TOCTOU: prevents `inc_ref` on object that
+    /// another thread has just dropped (`ref_count` 1->0).
+    #[inline]
+    pub(crate) fn try_inc_ref_if_nonzero(&self) -> bool {
+        self.ref_count
+            .fetch_update(Ordering::Acquire, Ordering::Acquire, |c| {
+                if c > 0 && c < usize::MAX {
+                    Some(c + 1)
+                } else {
+                    None
+                }
+            })
+            .is_ok()
+    }
+
     /// Decrement the reference count. Returns true if count reached zero.
     /// Uses `AcqRel` ordering to synchronize with other threads.
     /// Takes a raw pointer to avoid Miri's stacked borrows issues with `&self` casting.
@@ -143,9 +162,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
 
             let count = this.ref_count.load(Ordering::Acquire);
             if count == 0 {
-                // Already at zero - this is a bug (double-free or use-after-free)
-                // Return true to prevent further issues
-                return true;
+                return false;
             }
             if count == 1 && this.dropping_state() == 0 {
                 // Last reference and not already marked as dropping
@@ -193,12 +210,19 @@ impl<T: Trace + ?Sized> GcBox<T> {
 
     /// Increment the weak reference count.
     /// Uses Relaxed ordering since weak count is advisory only.
+    /// Uses `fetch_update` to avoid lost updates under concurrent `inc_weak` calls.
     pub fn inc_weak(&self) {
-        let current = self.weak_count.load(Ordering::Relaxed);
-        let flags = current & Self::FLAGS_MASK;
-        let count = current & !Self::FLAGS_MASK;
-        let new_count = count.saturating_add(1);
-        self.weak_count.store(flags | new_count, Ordering::Relaxed);
+        self.weak_count
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                let flags = current & Self::FLAGS_MASK;
+                let count = current & !Self::FLAGS_MASK;
+                if count == usize::MAX {
+                    None // Stay at MAX (overflow protection)
+                } else {
+                    Some(flags | (count + 1))
+                }
+            })
+            .ok();
     }
 
     /// Try to increment `ref_count` atomically when it is currently zero.
@@ -206,7 +230,10 @@ impl<T: Trace + ?Sized> GcBox<T> {
     ///
     /// This is used by weak upgrades to atomically transition from ref=0 to ref=1
     /// without racing with concurrent collection. The transition is only allowed
-    /// if the object is fully alive (not under construction, not dead).
+    /// if the object is not dead (`DEAD_FLAG` not set).
+    ///
+    /// This function checks `dropping_state()` internally; callers must still check
+    /// `is_under_construction()` before calling.
     ///
     /// # Safety
     ///
@@ -218,9 +245,14 @@ impl<T: Trace + ?Sized> GcBox<T> {
             let weak_count_raw = self.weak_count.load(Ordering::Acquire);
 
             let flags = weak_count_raw & Self::FLAGS_MASK;
-            let weak_count = weak_count_raw & !Self::FLAGS_MASK;
 
-            if flags != 0 && weak_count == 0 {
+            // Never resurrect a dead object; DEAD_FLAG means value was dropped.
+            if (flags & Self::DEAD_FLAG) != 0 {
+                return false;
+            }
+
+            // Object is being dropped - do not allow resurrection (UAF prevention)
+            if self.dropping_state() != 0 {
                 return false;
             }
 
@@ -251,7 +283,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
             let count = current & !Self::FLAGS_MASK;
 
             if count == 0 {
-                return true;
+                return false;
             } else if count == 1 {
                 // Attempt to set to just flags
                 match self.weak_count.compare_exchange_weak(
@@ -314,10 +346,33 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Set `GEN_OLD_FLAG` on promotion. Enables barrier early-exit for young objects.
+    /// Uses `Release` ordering so barrier reads (Acquire) synchronize with promotion.
     #[inline]
     pub(crate) fn set_gen_old(&self) {
         self.weak_count
-            .fetch_or(Self::GEN_OLD_FLAG, Ordering::Relaxed);
+            .fetch_or(Self::GEN_OLD_FLAG, Ordering::Release);
+    }
+
+    /// Check if `GEN_OLD_FLAG` is set. For use in write barriers only.
+    /// Uses `Acquire` ordering to synchronize with `set_gen_old` (Release).
+    #[inline]
+    pub(crate) fn has_gen_old_flag(&self) -> bool {
+        (self.weak_count.load(Ordering::Acquire) & Self::GEN_OLD_FLAG) != 0
+    }
+
+    /// Clear `GEN_OLD_FLAG`. Used when deallocating so reused slots don't inherit stale state.
+    #[inline]
+    pub(crate) fn clear_gen_old(&self) {
+        self.weak_count
+            .fetch_and(!Self::GEN_OLD_FLAG, Ordering::Relaxed);
+    }
+
+    /// Clear `DEAD_FLAG`. Used when reusing a slot so the new object is not incorrectly
+    /// marked as dead. Must be called before the slot is used for a new allocation.
+    #[inline]
+    pub(crate) fn clear_dead(&self) {
+        self.weak_count
+            .fetch_and(!Self::DEAD_FLAG, Ordering::Relaxed);
     }
 }
 
@@ -364,9 +419,13 @@ impl<T: Trace> GcBox<T> {
     /// Create a weak reference to this `GcBox`.
     #[allow(dead_code)]
     pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
-        // Increment the weak count to track this weak reference.
         // SAFETY: self is a valid GcBox pointer.
         unsafe {
+            if self.is_under_construction() {
+                return GcBoxWeakRef {
+                    ptr: AtomicNullable::null(),
+                };
+            }
             (*NonNull::from(self).as_ptr()).inc_weak();
         }
         GcBoxWeakRef::new(NonNull::from(self))
@@ -409,20 +468,41 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
         unsafe {
             let gc_box = &*ptr.as_ptr();
 
+            if gc_box.is_under_construction() {
+                return None;
+            }
+
             // If DEAD_FLAG is set, value has been dropped - cannot resurrect
             if gc_box.has_dead_flag() {
                 return None;
             }
 
+            // BUGFIX: Check dropping_state BEFORE try_inc_ref_from_zero
+            // Object is being dropped - do not allow new strong refs (UAF prevention)
+            if gc_box.dropping_state() != 0 {
+                return None;
+            }
+
             // Try atomic transition from 0 to 1 (resurrection)
             if gc_box.try_inc_ref_from_zero() {
+                // Second check: verify object wasn't dropped between check and CAS
+                if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                    // Undo the increment and return None
+                    let _ = gc_box;
+                    crate::ptr::GcBox::dec_ref(ptr.as_ptr());
+                    return None;
+                }
                 return Some(Gc {
                     ptr: AtomicNullable::new(ptr),
                     _marker: PhantomData,
                 });
             }
 
-            gc_box.inc_ref();
+            // ref_count > 0: use atomic try_inc_ref_if_nonzero to avoid TOCTOU with
+            // concurrent dec_ref (another thread could drop last ref between check and inc_ref)
+            if !gc_box.try_inc_ref_if_nonzero() {
+                return None;
+            }
             Some(Gc {
                 ptr: AtomicNullable::new(ptr),
                 _marker: PhantomData,
@@ -431,9 +511,46 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
     }
 
     /// Clone the weak reference.
+    #[allow(clippy::manual_let_else)]
     pub(crate) fn clone(&self) -> Self {
-        let ptr = self.ptr.load(Ordering::Acquire).as_option().unwrap();
+        let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
+            return Self {
+                ptr: AtomicNullable::null(),
+            };
+        };
+
+        let ptr_addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
+            return Self {
+                ptr: AtomicNullable::null(),
+            };
+        }
+
+        if !is_gc_box_pointer_valid(ptr_addr) {
+            return Self {
+                ptr: AtomicNullable::null(),
+            };
+        }
+
         unsafe {
+            let gc_box = &*ptr.as_ptr();
+
+            // Note: We do NOT check is_under_construction here. Gc::new_cyclic_weak
+            // passes a Weak to the closure while the object is under construction;
+            // the closure may legitimately clone it (e.g. to store in ref1 and ref2).
+            if gc_box.has_dead_flag() {
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+
+            if gc_box.dropping_state() != 0 {
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+
             (*ptr.as_ptr()).inc_weak();
         }
         Self {
@@ -493,6 +610,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
             // Try atomic transition from 0 to 1 (same as regular upgrade)
             if gc_box.try_inc_ref_from_zero() {
+                // Second check: verify object wasn't dropped between check and CAS
+                if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                    // Undo the increment and return None
+                    let _ = gc_box;
+                    crate::ptr::GcBox::dec_ref(ptr.as_ptr());
+                    return None;
+                }
                 crate::gc::notify_created_gc();
                 return Some(Gc {
                     ptr: AtomicNullable::new(ptr),
@@ -500,19 +624,12 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 });
             }
 
-            // ref_count > 0, check again if still alive
-            if gc_box.is_dead_or_unrooted() {
+            // ref_count > 0: use atomic try_inc_ref_if_nonzero to avoid TOCTOU with
+            // concurrent dec_ref (another thread could drop last ref between check and inc_ref)
+            if !gc_box.try_inc_ref_if_nonzero() {
                 return None;
             }
-
-            // Check for overflow (for consistency with public Weak<T>::try_upgrade)
-            let current_count = gc_box.ref_count.load(Ordering::Relaxed);
-            if current_count == usize::MAX {
-                return None;
-            }
-
-            // Object is alive and has strong refs - increment normally
-            gc_box.inc_ref();
+            crate::gc::notify_created_gc();
             Some(Gc {
                 ptr: AtomicNullable::new(ptr),
                 _marker: PhantomData,
@@ -826,7 +943,9 @@ impl<T: Trace> Gc<T> {
         };
 
         // SAFETY: We know this is a valid GcBox<()> for ZST
-        // Increment ref count for the new Gc handle
+        // Increment ref count for the new Gc handle.
+        // Note: Initial ref_count=1 serves as a phantom ref that keeps the ZST immortal
+        // (prevents value drop when all user Gcs are dropped). So first Gc has ref_count=2.
         unsafe {
             (*gc_box_ptr).inc_ref();
         }
@@ -1048,29 +1167,48 @@ impl<T: Trace> Gc<T> {
     pub fn try_deref(gc: &Self) -> Option<&T> {
         let ptr = gc.ptr.load(Ordering::Acquire);
         if ptr.is_null() {
-            None
-        } else {
-            Some(&**gc)
+            return None;
+        }
+        let gc_box_ptr = ptr.as_ptr();
+        unsafe {
+            if (*gc_box_ptr).has_dead_flag()
+                || (*gc_box_ptr).dropping_state() != 0
+                || (*gc_box_ptr).is_under_construction()
+            {
+                return None;
+            }
+            Some(&(*gc_box_ptr).value)
         }
     }
 
     /// Attempt to clone this `Gc`.
     ///
-    /// Returns `None` if this Gc is "dead".
+    /// Returns `None` if this Gc is "dead" or in dropping state.
     pub fn try_clone(gc: &Self) -> Option<Self> {
         let ptr = gc.ptr.load(Ordering::Acquire);
         if ptr.is_null() {
-            None
-        } else {
-            Some(gc.clone())
+            return None;
         }
+        let gc_box_ptr = ptr.as_ptr();
+        unsafe {
+            if (*gc_box_ptr).has_dead_flag()
+                || (*gc_box_ptr).dropping_state() != 0
+                || (*gc_box_ptr).is_under_construction()
+            {
+                return None;
+            }
+        }
+        Some(gc.clone())
     }
 
     /// Get a raw pointer to the data.
     ///
-    /// # Panics
+    /// # Safety
     ///
-    /// Panics if the Gc is dead.
+    /// The caller is responsible for ensuring that the `Gc` is still alive
+    /// (i.e. not dead or in dropping state) before dereferencing the returned
+    /// pointer. Dereferencing a pointer obtained from a dead `Gc` is undefined
+    /// behaviour. Use [`Gc::try_deref`] for a safe alternative.
     pub fn as_ptr(&self) -> *const T {
         let ptr = self.ptr.load(Ordering::Acquire);
         let gc_box_ptr = ptr.as_ptr();
@@ -1092,31 +1230,53 @@ impl<T: Trace> Gc<T> {
     ///
     /// # Panics
     ///
-    /// Panics if the Gc is dead.
+    /// Panics if the Gc is dead or in dropping state.
     pub fn ref_count(gc: &Self) -> NonZeroUsize {
         let ptr = gc.ptr.load(Ordering::Acquire);
+        assert!(
+            !ptr.is_null(),
+            "Gc::ref_count: cannot get ref_count of a dead Gc"
+        );
         let gc_box_ptr = ptr.as_ptr();
-        // SAFETY: ptr is not null (checked in callers)
-        unsafe { (*gc_box_ptr).ref_count() }
+        unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::ref_count: cannot get ref_count of a dead, dropping, or under construction Gc"
+            );
+            (*gc_box_ptr).ref_count()
+        }
     }
 
     /// Get the current weak reference count.
     ///
     /// # Panics
     ///
-    /// Panics if the Gc is dead.
+    /// Panics if the Gc is dead or in dropping state.
     pub fn weak_count(gc: &Self) -> usize {
         let ptr = gc.ptr.load(Ordering::Acquire);
+        assert!(
+            !ptr.is_null(),
+            "Gc::weak_count: cannot get weak_count of a dead Gc"
+        );
         let gc_box_ptr = ptr.as_ptr();
-        // SAFETY: ptr is not null (checked in callers)
-        unsafe { (*gc_box_ptr).weak_count() }
+        unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::weak_count: cannot get weak_count of a dead, dropping, or under construction Gc"
+            );
+            (*gc_box_ptr).weak_count()
+        }
     }
 
     /// Create a `Weak<T>` pointer to this allocation.
     ///
     /// # Panics
     ///
-    /// Panics if the Gc is dead.
+    /// Panics if the Gc is dead or in dropping state.
     ///
     /// # Examples
     ///
@@ -1133,10 +1293,15 @@ impl<T: Trace> Gc<T> {
     /// ```
     pub fn downgrade(gc: &Self) -> Weak<T> {
         let ptr = gc.ptr.load(Ordering::Acquire);
+        assert!(!ptr.is_null(), "Gc::downgrade: cannot downgrade a dead Gc");
         let gc_box_ptr = ptr.as_ptr();
-        // Increment the weak count
-        // SAFETY: ptr is valid and not null
         unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::downgrade: cannot downgrade a dead, dropping, or under construction Gc"
+            );
             (*gc_box_ptr).inc_weak();
         }
         Weak {
@@ -1169,14 +1334,25 @@ impl<T: Trace> Gc<T> {
     #[allow(dead_code)]
     pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
         let ptr = self.ptr.load(Ordering::Acquire);
-        let gc_box_ptr = ptr.as_ptr();
-        // Increment the weak count
-        // SAFETY: ptr is valid and not null
+        let Some(ptr) = ptr.as_option() else {
+            return GcBoxWeakRef {
+                ptr: AtomicNullable::null(),
+            };
+        };
         unsafe {
-            (*gc_box_ptr).inc_weak();
+            let gc_box = &*ptr.as_ptr();
+            if gc_box.is_under_construction()
+                || gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+            {
+                return GcBoxWeakRef {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+            (*ptr.as_ptr()).inc_weak();
         }
         GcBoxWeakRef {
-            ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(gc_box_ptr) }),
+            ptr: AtomicNullable::new(ptr),
         }
     }
 }
@@ -1211,20 +1387,28 @@ impl<T: Trace + 'static> Gc<T> {
         let tcb = crate::heap::current_thread_control_block()
             .expect("cross_thread_handle called outside of GC context");
 
-        // Lock the root table BEFORE reading the pointer.
-        // While this lock is held, GC cannot sweep this thread's
-        // cross-thread roots (GC also acquires this lock for marking).
         let mut roots = tcb.cross_thread_roots.lock().unwrap();
         let handle_id = roots.allocate_id();
 
         let ptr = self.as_non_null();
+
+        unsafe {
+            assert!(
+                !(*ptr.as_ptr()).has_dead_flag()
+                    && (*ptr.as_ptr()).dropping_state() == 0
+                    && !(*ptr.as_ptr()).is_under_construction(),
+                "Gc::cross_thread_handle: cannot create handle for dead, dropping, or under construction Gc"
+            );
+            (*ptr.as_ptr()).inc_ref();
+        }
+
         roots.strong.insert(handle_id, ptr.cast::<GcBox<()>>());
 
         drop(roots);
 
         GcHandle {
             ptr,
-            origin_tcb: Arc::clone(&tcb),
+            origin_tcb: Arc::downgrade(&tcb),
             origin_thread: std::thread::current().id(),
             handle_id,
         }
@@ -1250,12 +1434,21 @@ impl<T: Trace + 'static> Gc<T> {
     #[must_use]
     pub fn weak_cross_thread_handle(&self) -> crate::handles::WeakCrossThreadHandle<T> {
         unsafe {
-            (*self.as_non_null().as_ptr()).inc_weak();
+            let gc_box = &*self.as_non_null().as_ptr();
+            assert!(
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "Gc::weak_cross_thread_handle: cannot create handle for dead, dropping, or under construction Gc"
+            );
+            gc_box.inc_weak();
         }
         crate::handles::WeakCrossThreadHandle {
             weak: GcBoxWeakRef::new(self.as_non_null()),
-            origin_tcb: crate::heap::current_thread_control_block()
-                .expect("weak_cross_thread_handle called outside of GC context"),
+            origin_tcb: std::sync::Arc::downgrade(
+                &crate::heap::current_thread_control_block()
+                    .expect("weak_cross_thread_handle called outside of GC context"),
+            ),
             origin_thread: std::thread::current().id(),
         }
     }
@@ -1267,8 +1460,15 @@ impl<T: Trace> Deref for Gc<T> {
     fn deref(&self) -> &Self::Target {
         let ptr = self.ptr.load(Ordering::Acquire);
         let gc_box_ptr = ptr.as_ptr();
-        // SAFETY: ptr is not null (checked in callers), and ptr is valid
-        unsafe { &(*gc_box_ptr).value }
+        unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::deref: cannot dereference a dead, dropping, or under construction Gc"
+            );
+            &(*gc_box_ptr).value
+        }
     }
 }
 
@@ -1284,9 +1484,15 @@ impl<T: Trace> Clone for Gc<T> {
 
         let gc_box_ptr = ptr.as_ptr();
 
-        // Increment reference count
-        // SAFETY: Pointer is valid (not null)
+        // SAFETY: Pointer is valid (not null).
+        // Check flags before incrementing ref_count; must match Deref/try_deref semantics.
         unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::clone: cannot clone a dead, dropping, or under construction Gc"
+            );
             (*gc_box_ptr).inc_ref();
         }
 
@@ -1486,7 +1692,7 @@ impl<T: Trace> Weak<T> {
                     return None;
                 }
 
-                let current_count = gc_box.ref_count.load(Ordering::Relaxed);
+                let current_count = gc_box.ref_count.load(Ordering::Acquire);
                 if current_count == 0 {
                     return None;
                 }
@@ -1564,7 +1770,11 @@ impl<T: Trace> Weak<T> {
                     return None;
                 }
 
-                let current_count = gc_box.ref_count.load(Ordering::Relaxed);
+                if gc_box.dropping_state() != 0 {
+                    return None;
+                }
+
+                let current_count = gc_box.ref_count.load(Ordering::Acquire);
                 if current_count == 0 || current_count == usize::MAX {
                     return None;
                 }
@@ -1636,12 +1846,10 @@ impl<T: Trace> Weak<T> {
     /// ```
     #[must_use]
     pub fn is_alive(&self) -> bool {
-        let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
-            return false;
-        };
-
-        // SAFETY: The pointer is valid because we have a weak reference
-        unsafe { !(*ptr.as_ptr()).has_dead_flag() }
+        // Delegate to upgrade() to avoid TOCTOU: between loading ptr and checking
+        // has_dead_flag(), GC could reclaim the object. upgrade() uses atomic
+        // compare_exchange to safely acquire a strong ref when the object is alive.
+        self.upgrade().is_some()
     }
 
     /// Casts this `Weak<T>` to a `Weak<U>`.
@@ -1661,7 +1869,8 @@ impl<T: Trace> Weak<T> {
     }
     /// Gets the number of strong `Gc<T>` pointers pointing to this allocation.
     ///
-    /// Returns 0 if the value has been dropped.
+    /// Returns 0 if the value has been dropped, is currently being dropped,
+    /// or is under construction (e.g. inside `Gc::new_cyclic_weak`).
     #[must_use]
     pub fn strong_count(&self) -> usize {
         let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
@@ -1674,22 +1883,44 @@ impl<T: Trace> Weak<T> {
         }
 
         unsafe {
-            if (*ptr.as_ptr()).has_dead_flag() {
+            let gc_box = &*ptr.as_ptr();
+            if gc_box.is_under_construction()
+                || gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+            {
                 0
             } else {
-                (*ptr.as_ptr()).ref_count().get()
+                gc_box.ref_count().get()
             }
         }
     }
 
     /// Gets the number of `Weak<T>` pointers pointing to this allocation.
+    ///
+    /// Returns 0 if the value has been dropped, is currently being dropped,
+    /// or is under construction (e.g. inside `Gc::new_cyclic_weak`).
     #[must_use]
     pub fn weak_count(&self) -> usize {
         let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
             return 0;
         };
+        let ptr_addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if ptr_addr % alignment != 0 {
+            return 0;
+        }
 
-        unsafe { (*ptr.as_ptr()).weak_count() }
+        unsafe {
+            let gc_box = &*ptr.as_ptr();
+            if gc_box.is_under_construction()
+                || gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+            {
+                0
+            } else {
+                gc_box.weak_count()
+            }
+        }
     }
 
     /// Returns `true` if the two `Weak`s point to the same allocation.
@@ -1716,31 +1947,50 @@ impl<T: Trace> Weak<T> {
 
 impl<T: Trace> Clone for Weak<T> {
     fn clone(&self) -> Self {
-        let ptr = self.ptr.load(Ordering::Relaxed);
-        if ptr.is_null() {
+        let ptr = self.ptr.load(Ordering::Acquire);
+        let Some(ptr) = ptr.as_option() else {
             return Self {
                 ptr: AtomicNullable::null(),
             };
-        }
+        };
         let ptr_addr = ptr.as_ptr() as usize;
         let alignment = std::mem::align_of::<GcBox<T>>();
-        if ptr_addr % alignment != 0 {
+        if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
             return Self {
                 ptr: AtomicNullable::null(),
             };
         }
-        let gc_box_ptr = ptr.as_ptr();
+        // Validate pointer is still in heap before dereferencing (avoids TOCTOU with sweep).
+        if !is_gc_box_pointer_valid(ptr_addr) {
+            return Self {
+                ptr: AtomicNullable::null(),
+            };
+        }
         unsafe {
-            (*gc_box_ptr).inc_weak();
+            let gc_box = &*ptr.as_ptr();
+            // Note: We do NOT check is_under_construction here. Gc::new_cyclic_weak
+            // passes a Weak to the closure while the object is under construction;
+            // the closure may legitimately clone it (e.g. to store in ref1 and ref2).
+            if gc_box.has_dead_flag() {
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+            if gc_box.dropping_state() != 0 {
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+            (*ptr.as_ptr()).inc_weak();
         }
         Self {
-            ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(gc_box_ptr) }),
+            ptr: AtomicNullable::new(ptr),
         }
     }
 }
 
 #[inline]
-fn is_gc_box_pointer_valid(ptr_addr: usize) -> bool {
+pub fn is_gc_box_pointer_valid(ptr_addr: usize) -> bool {
     let ptr = ptr_addr as *const u8;
 
     // Fast path: current thread heap.
@@ -1881,30 +2131,13 @@ impl<T: Trace> Default for Weak<T> {
 /// assert!(ephemeron.upgrade().is_none());
 /// ```
 ///
-/// # Current Implementation Status
-///
-/// **Partial Implementation**: This type provides the correct API for ephemeron semantics,
-/// but full GC-level semantics are not yet implemented.
+/// # Implementation Status
 ///
 /// ✅ What works:
 /// - `upgrade()` correctly returns `None` when the key is no longer reachable
 /// - `is_key_alive()` correctly detects when key has been collected
 /// - The value is properly kept alive while the key is alive
-///
-/// ⚠️ Current limitation:
-/// - The value is NOT automatically collected when the key becomes unreachable
-/// - This is because the current `Trace` implementation unconditionally traces the value
-/// - Full implementation would require GC-level ephemeron tracking (future work)
-///
-/// This limitation means memory usage may be higher than expected for some use cases,
-/// but the API is sound and correctly prevents accessing values when keys are dead.
-///
-/// # Future Work
-///
-/// Full ephemeron semantics would require:
-/// 1. Track ephemerons in a global list during marking
-/// 2. In mark phase: if key is marked, trace value; if not, skip (broken ephemeron)
-/// 3. In sweep phase: clear broken ephemerons' value references
+/// - The value is no longer traced when the key is dead, allowing GC to collect it
 pub struct Ephemeron<K: Trace + 'static, V: Trace + 'static> {
     /// Weak reference to key - does NOT keep key alive
     key: Weak<K>,
@@ -1958,9 +2191,14 @@ impl<K: Trace + 'static, V: Trace + 'static> Ephemeron<K, V> {
     ///
     /// This is the primary way to access the value - it ensures type safety
     /// by only returning the value when the key is still alive.
+    #[allow(clippy::option_if_let_else)]
     pub fn upgrade(&self) -> Option<Gc<V>> {
-        if self.is_key_alive() {
-            // Clone the Gc to return - this increments the ref count
+        // FIX: Keep the key alive while checking value. This fixes TOCTOU race
+        // where key could become invalid between is_key_alive() check and value clone.
+        // We upgrade the key first (acquiring a strong ref), then clone the value
+        // while holding that ref, ensuring atomicity.
+        if let Some(_key_gc) = self.key.upgrade() {
+            // Key is alive and we hold a ref. Now safely clone the value.
             Gc::try_clone(&self.value)
         } else {
             None
@@ -1988,10 +2226,7 @@ impl<K: Trace + 'static, V: Trace + 'static> Clone for Ephemeron<K, V> {
     fn clone(&self) -> Self {
         Self {
             key: self.key.clone(),
-            value: Gc::try_clone(&self.value).unwrap_or_else(|| Gc {
-                ptr: AtomicNullable::null(),
-                _marker: PhantomData,
-            }),
+            value: Gc::clone(&self.value),
         }
     }
 }
@@ -2021,20 +2256,55 @@ impl<K: Trace + 'static, V: Trace + 'static> std::fmt::Debug for Ephemeron<K, V>
 
 unsafe impl<K: Trace + 'static, V: Trace + 'static> Trace for Ephemeron<K, V> {
     fn trace(&self, visitor: &mut impl Visitor) {
-        // For basic ephemeron implementation:
+        // Ephemeron semantics: value is only reachable if key is reachable.
         // - The key is stored as a Weak, so it's not traced (correct)
-        // - The value is always traced while the ephemeron exists
-        //
-        // NOTE: This keeps the value alive as long as the ephemeron exists.
-        // For true ephemeron semantics where value is collected when key dies,
-        // the GC would need special ephemeron handling:
-        // - Track ephemerons in a special list during marking
-        // - Only trace value if key was marked (reachable)
-        // - Clear broken ephemerons during sweep
-        //
-        // For now, this basic implementation provides the API but not the
-        // full GC semantics. The value will stay in memory even after key dies.
-        visitor.visit(&self.value);
+        // - Only trace value when key is alive; when key dies, value can be collected
+        if self.is_key_alive() {
+            visitor.visit(&self.value);
+        }
+    }
+}
+
+// ============================================================================
+// GcCapture for Weak and Ephemeron
+// ============================================================================
+
+impl<T: Trace + 'static> GcCapture for Weak<T> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        if let Some(gc) = self.try_upgrade() {
+            let raw = gc.raw_ptr();
+            if !raw.is_null() {
+                unsafe {
+                    let nn = NonNull::new_unchecked(raw.cast());
+                    ptrs.push(nn);
+                }
+            }
+        }
+    }
+}
+
+impl<K: Trace + 'static, V: Trace + 'static> GcCapture for Ephemeron<K, V> {
+    #[inline]
+    fn capture_gc_ptrs(&self) -> &[NonNull<GcBox<()>>] {
+        &[]
+    }
+
+    #[inline]
+    fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
+        // Ephemeron semantics: only capture when key is alive (matches Trace).
+        // When key is dead, value can be collected; capturing would incorrectly retain it.
+        if self.is_key_alive() {
+            self.value.capture_gc_ptrs_into(ptrs);
+            if let Some(key_gc) = self.key.try_upgrade() {
+                key_gc.capture_gc_ptrs_into(ptrs);
+            }
+        }
     }
 }
 

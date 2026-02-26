@@ -302,12 +302,38 @@ impl IncrementalMarkState {
     }
 
     pub fn transition_to(&self, new_phase: MarkPhase) -> bool {
-        let current = self.phase();
-        if !self.is_valid_transition(current, new_phase) {
+        let current = self.phase.load(Ordering::SeqCst);
+        let current_phase = MarkPhase::from_usize(current).unwrap_or(MarkPhase::Idle);
+        if !self.is_valid_transition(current_phase, new_phase) {
             return false;
         }
-        self.set_phase(new_phase);
-        true
+        // Use CAS to make the transition atomic (bug73: avoid TOCTOU race).
+        if self
+            .phase
+            .compare_exchange(
+                current,
+                new_phase as usize,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            #[cfg(feature = "tracing")]
+            {
+                let phase_str = match new_phase {
+                    MarkPhase::Idle => "idle",
+                    MarkPhase::Snapshot => "snapshot",
+                    MarkPhase::Marking => "marking",
+                    MarkPhase::FinalMark => "final_mark",
+                    MarkPhase::Sweeping => "sweeping",
+                };
+                let objects_marked = self.stats.objects_marked.load(Ordering::Relaxed);
+                crate::gc::tracing::log_phase_transition(phase_str, objects_marked);
+            }
+            true
+        } else {
+            false
+        }
     }
 
     #[allow(clippy::unused_self)]
@@ -469,11 +495,13 @@ pub fn write_barrier_needed() -> bool {
         && is_write_barrier_active()
 }
 
+/// Returns true when the generational write barrier should record OLD→YOUNG references.
+///
+/// Independent of incremental marking: minor collections always need the barrier.
+/// Only disabled during STW fallback.
 pub fn is_generational_barrier_active() -> bool {
     let state = IncrementalMarkState::global();
-    state.enabled.load(Ordering::Relaxed)
-        && !state.fallback_requested()
-        && is_incremental_marking_active()
+    !state.fallback_requested()
 }
 
 #[allow(clippy::significant_drop_tightening)]
@@ -498,16 +526,18 @@ fn stop_all_mutators_for_snapshot() {
             .active_count
             .load(std::sync::atomic::Ordering::Acquire);
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
-        let ack_count = state.rendezvous_ack_count();
-        let thread_count = registry.threads.len();
 
         // If no threads registered (e.g., after reset), we're the only mutator
         // so we can proceed immediately
-        if thread_count == 0 {
+        if registry.threads.is_empty() {
             break;
         }
 
-        if active == 1 && ack_count >= thread_count {
+        // active == 1 means only the collector is running; all mutators have
+        // reached safepoint and decremented active_count in enter_rendezvous().
+        // The rendezvous_ack_counter was never fully wired: mutators never
+        // increment it, so ack_count >= thread_count would never hold.
+        if active == 1 {
             break;
         }
     }
@@ -537,6 +567,10 @@ unsafe fn mark_root_for_snapshot(ptr: NonNull<GcBox<()>>, visitor: &mut crate::t
     }
 
     if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+        // Skip if slot was swept; avoids marking wrong object when lazy sweep runs concurrently.
+        if !(*header.as_ptr()).is_allocated(idx) {
+            return;
+        }
         let was_marked = (*header.as_ptr()).is_marked(idx);
         if !was_marked {
             (*header.as_ptr()).set_mark(idx);
@@ -670,6 +704,12 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
             dirty_scanned += scan_page_for_marked_refs(page_ptr, state);
         }
     }
+    // Scan overflow pages added by write barriers during snapshot (bug45)
+    for page_ptr in heap.drain_dirty_pages_overflow() {
+        unsafe {
+            dirty_scanned += scan_page_for_marked_refs(page_ptr, state);
+        }
+    }
     heap.clear_dirty_pages_snapshot();
     state
         .stats()
@@ -767,17 +807,13 @@ unsafe fn scan_page_for_marked_refs(
         if (*header).is_allocated(i) && !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
             refs_found += 1;
-            if let Some(idx) = crate::heap::ptr_to_object_index(obj_ptr.cast()) {
-                if !(*header).is_marked(idx) {
-                    (*header).set_mark(idx);
-                    #[allow(clippy::cast_ptr_alignment)]
-                    #[allow(clippy::unnecessary_cast)]
-                    #[allow(clippy::ptr_as_ptr)]
-                    let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                    if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
-                        state.push_work(gc_box);
-                    }
-                }
+            (*header).set_mark(i);
+            #[allow(clippy::cast_ptr_alignment)]
+            #[allow(clippy::unnecessary_cast)]
+            #[allow(clippy::ptr_as_ptr)]
+            let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+            if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
+                state.push_work(gc_box);
             }
         }
     }
@@ -841,6 +877,12 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
 
         let snapshot_count = heap.take_dirty_pages_snapshot();
         for page_ptr in heap.dirty_pages_iter() {
+            unsafe {
+                scan_page_for_unmarked_refs(page_ptr, state.stats());
+            }
+        }
+        // Scan overflow pages added during snapshot (bug45)
+        for page_ptr in heap.drain_dirty_pages_overflow() {
             unsafe {
                 scan_page_for_unmarked_refs(page_ptr, state.stats());
             }
@@ -910,6 +952,9 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
     unsafe {
         if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
             let header = crate::heap::ptr_to_page_header(ptr);
+            if !(*header.as_ptr()).is_allocated(idx) {
+                return false;
+            }
             if !(*header.as_ptr()).is_marked(idx) {
                 (*header.as_ptr()).set_mark(idx);
                 return true;
@@ -922,14 +967,22 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
 /// Get the object index for a pointer and mark it black.
 ///
 /// Returns the index if successful, None otherwise.
+///
+/// Skips marking if the object has been swept (`!is_allocated`), preventing
+/// use-after-free when `GcThreadSafeRefMut::drop` runs concurrently with GC sweep.
 #[inline]
 #[allow(clippy::missing_safety_doc)]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
     if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
         let header = crate::heap::ptr_to_page_header(ptr);
-        if !(*header.as_ptr()).is_marked(idx) {
-            (*header.as_ptr()).set_mark(idx);
+        let h = header.as_ptr();
+        // Skip if object was swept; avoids UAF when Drop runs during/concurrent with sweep.
+        if !(*h).is_allocated(idx) {
+            return None;
+        }
+        if !(*h).is_marked(idx) {
+            (*h).set_mark(idx);
             return Some(idx);
         }
     }

@@ -54,3 +54,5 @@ tarpaulin-report.html
 # Rust-specific
 **/*.rs.bk
 rustc-ice-*.txt
+
+__pycache__

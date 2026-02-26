@@ -3,8 +3,9 @@
 //! Types that implement `Trace` can be stored in `Gc<T>` and will be
 //! automatically traversed during garbage collection.
 
+use std::borrow::{Cow, ToOwned};
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::BuildHasher;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -175,6 +176,9 @@ impl<'a> GcVisitorConcurrent<'a> {
                     return;
                 }
 
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return;
+                }
                 if (*header.as_ptr()).is_marked(idx) {
                     return;
                 }
@@ -348,6 +352,21 @@ unsafe impl<T: Trace> Trace for [T] {
     }
 }
 
+// SAFETY: Cow traces its contents (either borrowed or owned)
+unsafe impl<B> Trace for Cow<'_, B>
+where
+    B: ToOwned + ?Sized + Trace,
+    B::Owned: Trace,
+{
+    #[inline]
+    fn trace(&self, visitor: &mut impl Visitor) {
+        match self {
+            Cow::Borrowed(t) => t.trace(visitor),
+            Cow::Owned(t) => t.trace(visitor),
+        }
+    }
+}
+
 // SAFETY: Option traces its contents if Some
 unsafe impl<T: Trace> Trace for Option<T> {
     #[inline]
@@ -416,6 +435,22 @@ unsafe impl<T: Trace> Trace for LinkedList<T> {
     fn trace(&self, visitor: &mut impl Visitor) {
         for item in self {
             item.trace(visitor);
+        }
+    }
+}
+
+// SAFETY: BinaryHeap traces all elements
+unsafe impl<T: Trace> Trace for BinaryHeap<T> {
+    #[inline]
+    fn trace(&self, visitor: &mut impl Visitor) {
+        for item in self {
+            item.trace(visitor);
+        }
+        if !self.is_empty() {
+            let ptr = std::ptr::from_ref(self.peek().unwrap()).cast::<u8>();
+            unsafe {
+                crate::heap::mark_page_dirty_for_ptr(ptr);
+            }
         }
     }
 }

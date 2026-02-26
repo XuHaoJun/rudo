@@ -29,10 +29,11 @@
 //!    `Mutex`-protected handle list.
 
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
 
-use crate::heap::{HandleId, ThreadControlBlock};
+use crate::heap::{self, HandleId, ThreadControlBlock};
+use crate::ptr::is_gc_box_pointer_valid;
 use crate::ptr::GcBox;
 use crate::ptr::GcBoxWeakRef;
 use crate::trace::Trace;
@@ -66,8 +67,8 @@ use crate::Gc;
 pub struct GcHandle<T: Trace + 'static> {
     /// Raw pointer to the `GcBox`. Validity is guaranteed by root registration.
     pub(crate) ptr: NonNull<GcBox<T>>,
-    /// TCB of the origin thread. Prevents TCB deallocation; holds root list.
-    pub(crate) origin_tcb: Arc<ThreadControlBlock>,
+    /// TCB of the origin thread. Weak allows TCB to be dropped when thread terminates.
+    pub(crate) origin_tcb: Weak<ThreadControlBlock>,
     /// Origin thread identity, for resolve-time check.
     pub(crate) origin_thread: ThreadId,
     /// Unique ID for this handle's root entry (for O(1) unregistration).
@@ -88,11 +89,27 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// Returns `true` if the underlying object is still alive.
     ///
     /// For strong handles this is `true` while the handle is registered.
-    /// Returns `false` if the handle was unregistered or if the origin thread's
-    /// heap was torn down (in which case [`resolve()`] would panic).
+    /// Returns `false` if the handle was unregistered. Note: when the origin
+    /// thread has terminated, [`resolve()`] will panic (use [`try_resolve()`]).
+    ///
+    /// Checks both `handle_id` and root list presence to match [`resolve()`]
+    /// semantics and avoid TOCTOU where another thread unregisters between
+    /// `is_valid()` and `resolve()`.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.handle_id != HandleId::INVALID
+        if self.handle_id == HandleId::INVALID {
+            return false;
+        }
+        self.origin_tcb.upgrade().map_or_else(
+            || {
+                let orphan = heap::lock_orphan_roots();
+                orphan.contains_key(&(self.origin_thread, self.handle_id))
+            },
+            |tcb| {
+                let roots = tcb.cross_thread_roots.lock().unwrap();
+                roots.strong.contains_key(&self.handle_id)
+            },
+        )
     }
 
     /// Explicitly unregisters this handle from the root set.
@@ -102,17 +119,31 @@ impl<T: Trace + 'static> GcHandle<T> {
     ///
     /// This is idempotent — calling it multiple times is safe.
     pub fn unregister(&mut self) {
-        let mut roots = self.origin_tcb.cross_thread_roots.lock().unwrap();
-        roots.strong.remove(&self.handle_id);
-        drop(roots);
+        if self.handle_id == HandleId::INVALID {
+            return;
+        }
+        if let Some(tcb) = self.origin_tcb.upgrade() {
+            let mut roots = tcb.cross_thread_roots.lock().unwrap();
+            roots.strong.remove(&self.handle_id);
+            drop(roots);
+        } else {
+            let _ = heap::remove_orphan_root(self.origin_thread, self.handle_id);
+        }
         self.handle_id = HandleId::INVALID;
+        crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
     }
 
     /// Resolves this handle to a `Gc<T>` on the origin thread.
     ///
     /// # Panics
     ///
-    /// Panics if called from a thread other than the origin thread.
+    /// Panics if called from a thread other than the origin thread. This includes
+    /// the case where the origin thread has already terminated, since the current
+    /// thread can never match a terminated thread's ID.
+    ///
+    /// **When the origin thread may have terminated** (e.g., handles passed to a
+    /// main thread after a worker joins), use [`try_resolve()`] instead to get
+    /// `None` without panicking.
     ///
     /// # Example
     ///
@@ -130,24 +161,76 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// assert_eq!(resolved.value, 42);
     /// ```
     #[track_caller]
+    #[allow(clippy::significant_drop_tightening, clippy::option_if_let_else)] // Lock held through inc_ref; if-let clearer
     pub fn resolve(&self) -> Gc<T> {
+        assert!(
+            self.handle_id != HandleId::INVALID,
+            "GcHandle::resolve: handle has been unregistered"
+        );
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,
-            "GcHandle::resolve() must be called on the origin thread \
-             (origin={:?}, current={:?})",
+            "GcHandle::resolve() must be called on the origin thread (origin={:?}, current={:?}). \
+             If the origin thread has terminated, use try_resolve() instead to get None.",
             self.origin_thread,
             std::thread::current().id(),
         );
-        // SAFETY: The root registration guarantees the object is alive.
-        // We've verified we're on the origin thread, so producing a Gc<T>
-        // is safe even if T: !Send.
-        unsafe { Gc::from_raw(self.ptr.as_ptr() as *const u8) }
+        // Hold lock during check+use to prevent TOCTOU with unregister.
+        if let Some(tcb) = self.origin_tcb.upgrade() {
+            let roots = tcb.cross_thread_roots.lock().unwrap();
+            if !roots.strong.contains_key(&self.handle_id) {
+                panic!("GcHandle::resolve: handle has been unregistered");
+            }
+            unsafe {
+                let gc_box = &*self.ptr.as_ptr();
+                assert!(
+                    !gc_box.is_under_construction(),
+                    "GcHandle::resolve: object is under construction"
+                );
+                assert!(
+                    !gc_box.has_dead_flag(),
+                    "GcHandle::resolve: object has been dropped (dead flag set)"
+                );
+                assert!(
+                    gc_box.dropping_state() == 0,
+                    "GcHandle::resolve: object is being dropped"
+                );
+                gc_box.inc_ref();
+                Gc::from_raw(self.ptr.as_ptr() as *const u8)
+            }
+        } else {
+            let orphan = heap::lock_orphan_roots();
+            if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                panic!("GcHandle::resolve: handle has been unregistered");
+            }
+            unsafe {
+                let gc_box = &*self.ptr.as_ptr();
+                assert!(
+                    !gc_box.is_under_construction(),
+                    "GcHandle::resolve: object is under construction"
+                );
+                assert!(
+                    !gc_box.has_dead_flag(),
+                    "GcHandle::resolve: object has been dropped (dead flag set)"
+                );
+                assert!(
+                    gc_box.dropping_state() == 0,
+                    "GcHandle::resolve: object is being dropped"
+                );
+                gc_box.inc_ref();
+                Gc::from_raw(self.ptr.as_ptr() as *const u8)
+            }
+        }
     }
 
-    /// Tries to resolve, returning `None` if called from wrong thread.
+    /// Tries to resolve, returning `None` if called from the wrong thread.
     ///
-    /// Useful in contexts where you cannot guarantee which thread you're on.
+    /// Returns `None` when:
+    /// - Called from a thread other than the origin thread, or
+    /// - The origin thread has already terminated.
+    ///
+    /// Use this instead of [`resolve()`] when the origin thread may have terminated
+    /// (e.g., handle received after `join()` on the origin thread).
     ///
     /// # Example
     ///
@@ -166,15 +249,55 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// }
     /// ```
     #[must_use]
+    #[allow(clippy::significant_drop_tightening, clippy::option_if_let_else)] // Lock held through inc_ref; if-let clearer
     pub fn try_resolve(&self) -> Option<Gc<T>> {
+        if self.handle_id == HandleId::INVALID {
+            return None;
+        }
         if std::thread::current().id() != self.origin_thread {
             return None;
         }
-        // SAFETY: same as resolve().
-        Some(unsafe { Gc::from_raw(self.ptr.as_ptr() as *const u8) })
+        // Hold lock during check+use to prevent TOCTOU with unregister.
+        if let Some(tcb) = self.origin_tcb.upgrade() {
+            let roots = tcb.cross_thread_roots.lock().unwrap();
+            if !roots.strong.contains_key(&self.handle_id) {
+                return None;
+            }
+            unsafe {
+                let gc_box = &*self.ptr.as_ptr();
+                if gc_box.is_under_construction()
+                    || gc_box.has_dead_flag()
+                    || gc_box.dropping_state() != 0
+                {
+                    return None;
+                }
+                gc_box.inc_ref();
+                Some(Gc::from_raw(self.ptr.as_ptr() as *const u8))
+            }
+        } else {
+            let orphan = heap::lock_orphan_roots();
+            if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                return None;
+            }
+            unsafe {
+                let gc_box = &*self.ptr.as_ptr();
+                if gc_box.is_under_construction()
+                    || gc_box.has_dead_flag()
+                    || gc_box.dropping_state() != 0
+                {
+                    return None;
+                }
+                gc_box.inc_ref();
+                Some(Gc::from_raw(self.ptr.as_ptr() as *const u8))
+            }
+        }
     }
 
     /// Downgrades to a weak cross-thread handle.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the object is dead or in dropping state.
     ///
     /// # Example
     ///
@@ -193,32 +316,79 @@ impl<T: Trace + 'static> GcHandle<T> {
     #[must_use]
     pub fn downgrade(&self) -> WeakCrossThreadHandle<T> {
         unsafe {
-            (*self.ptr.as_ptr()).inc_weak();
+            let gc_box = &*self.ptr.as_ptr();
+            assert!(
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle"
+            );
+            gc_box.inc_weak();
         }
         WeakCrossThreadHandle {
             weak: GcBoxWeakRef::new(self.ptr),
-            origin_tcb: Arc::clone(&self.origin_tcb),
+            origin_tcb: Weak::clone(&self.origin_tcb),
             origin_thread: self.origin_thread,
         }
     }
 }
 
+#[allow(clippy::significant_drop_tightening)] // Lock must be held through inc_ref
 impl<T: Trace + 'static> Clone for GcHandle<T> {
+    #[track_caller]
     fn clone(&self) -> Self {
-        assert_ne!(
-            self.handle_id,
-            HandleId::INVALID,
-            "cannot clone an unregistered GcHandle"
+        if self.handle_id == HandleId::INVALID {
+            panic!("cannot clone an unregistered GcHandle");
+        }
+        // Require origin thread when origin is still alive (consistent with resolve()).
+        // When origin has terminated (orphaned handle), clone is allowed from any thread.
+        if self.origin_tcb.upgrade().is_some() {
+            assert_eq!(
+                std::thread::current().id(),
+                self.origin_thread,
+                "GcHandle::clone() must be called on the origin thread. \
+                 Clone from a different thread is not allowed."
+            );
+        }
+        let (new_id, origin_tcb) = self.origin_tcb.upgrade().map_or_else(
+            || {
+                let (new_id, ok) =
+                    heap::clone_orphan_root_with_inc_ref(
+                        self.origin_thread,
+                        self.handle_id,
+                        self.ptr.cast::<GcBox<()>>(),
+                    );
+                if !ok {
+                    panic!("cannot clone an unregistered GcHandle");
+                }
+                (new_id, Weak::clone(&self.origin_tcb))
+            },
+            |tcb| {
+                let mut roots = tcb.cross_thread_roots.lock().unwrap();
+                if !roots.strong.contains_key(&self.handle_id) {
+                    panic!("cannot clone an unregistered GcHandle");
+                }
+                let new_id = roots.allocate_id();
+                roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());
+                // inc_ref for new handle while holding lock (prevents TOCTOU with unregister)
+                unsafe {
+                    let gc_box = &*self.ptr.as_ptr();
+                    assert!(
+                        !gc_box.has_dead_flag()
+                            && gc_box.dropping_state() == 0
+                            && !gc_box.is_under_construction(),
+                        "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle"
+                    );
+                    gc_box.inc_ref();
+                }
+                drop(roots);
+                (new_id, Arc::downgrade(&tcb))
+            },
         );
-
-        let mut roots = self.origin_tcb.cross_thread_roots.lock().unwrap();
-        let new_id = roots.allocate_id();
-        roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());
-        drop(roots);
 
         Self {
             ptr: self.ptr,
-            origin_tcb: Arc::clone(&self.origin_tcb),
+            origin_tcb,
             origin_thread: self.origin_thread,
             handle_id: new_id,
         }
@@ -226,17 +396,24 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
 }
 
 impl<T: Trace + 'static> Drop for GcHandle<T> {
-    /// Unregisters the root entry from the origin thread's TCB.
+    /// Unregisters the root entry and releases the reference count held by this handle.
     ///
-    /// Safe to call from any thread: the TCB is held via `Arc`, and the root
-    /// list is `Mutex`-protected. No thread-local storage is accessed.
+    /// Safe to call from any thread: the TCB is held via `Weak`, and the root
+    /// list (or orphan table) is `Mutex`-protected. No thread-local storage is accessed.
     fn drop(&mut self) {
-        // Lock the origin thread's root table. This is safe from any thread
-        // because origin_tcb is an Arc<ThreadControlBlock>.
-        let mut roots = self.origin_tcb.cross_thread_roots.lock().unwrap();
-        roots.strong.remove(&self.handle_id);
-        // Lock released here. The object becomes eligible for collection
-        // on the next GC cycle (unless other roots exist).
+        if self.handle_id == HandleId::INVALID {
+            return;
+        }
+        if let Some(tcb) = self.origin_tcb.upgrade() {
+            let mut roots = tcb.cross_thread_roots.lock().unwrap();
+            roots.strong.remove(&self.handle_id);
+            drop(roots);
+        } else {
+            let _ = heap::remove_orphan_root(self.origin_thread, self.handle_id);
+        }
+        self.handle_id = HandleId::INVALID;
+        // Release the ref count we held. May trigger object drop if this was last ref.
+        crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
     }
 }
 
@@ -271,7 +448,7 @@ impl<T: Trace + 'static> std::fmt::Debug for GcHandle<T> {
 /// ```
 pub struct WeakCrossThreadHandle<T: Trace + 'static> {
     pub(crate) weak: GcBoxWeakRef<T>,
-    pub(crate) origin_tcb: Arc<ThreadControlBlock>,
+    pub(crate) origin_tcb: Weak<ThreadControlBlock>,
     pub(crate) origin_thread: ThreadId,
 }
 
@@ -308,14 +485,16 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     ///
     /// # Panics
     ///
-    /// Panics if called from a thread other than the origin thread,
-    /// because `T` may be `!Send`.
+    /// Panics if called from a thread other than the origin thread (including
+    /// when the origin thread has terminated). Use [`try_resolve()`] for
+    /// fallible resolution.
     #[track_caller]
     pub fn resolve(&self) -> Option<Gc<T>> {
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,
-            "WeakCrossThreadHandle::resolve() must be called on the origin thread"
+            "WeakCrossThreadHandle::resolve() must be called on the origin thread. \
+             If the origin thread has terminated, use try_resolve() instead."
         );
         // Weak handle does not prevent collection. Check liveness first.
         self.weak.upgrade()
@@ -323,6 +502,8 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
 
     /// Tries to resolve, returning `None` if called from wrong thread
     /// or if the object has been collected.
+    ///
+    /// Use this when the origin thread may have terminated.
     #[must_use]
     pub fn try_resolve(&self) -> Option<Gc<T>> {
         if std::thread::current().id() != self.origin_thread {
@@ -355,24 +536,32 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     ///
     /// # Panics
     ///
-    /// Panics if called from a thread other than the origin thread,
-    /// because `T` may be `!Send`.
+    /// Panics if called from a thread other than the origin thread (including
+    /// when it has terminated). Prefer [`try_resolve()`] when origin may be dead.
     #[track_caller]
     pub fn try_upgrade(&self) -> Option<Gc<T>> {
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,
-            "WeakCrossThreadHandle::try_upgrade() must be called on the origin thread"
+            "WeakCrossThreadHandle::try_upgrade() must be called on the origin thread. \
+             If the origin thread has terminated, use try_resolve() instead."
         );
         self.weak.try_upgrade()
     }
 }
 
 impl<T: Trace + 'static> Clone for WeakCrossThreadHandle<T> {
+    #[track_caller]
     fn clone(&self) -> Self {
+        assert_eq!(
+            std::thread::current().id(),
+            self.origin_thread,
+            "WeakCrossThreadHandle::clone() must be called on the origin thread. \
+             Clone from a different thread is not allowed."
+        );
         Self {
             weak: self.weak.clone(),
-            origin_tcb: Arc::clone(&self.origin_tcb),
+            origin_tcb: Weak::clone(&self.origin_tcb),
             origin_thread: self.origin_thread,
         }
     }
@@ -384,6 +573,10 @@ impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
         let Some(ptr) = ptr else {
             return;
         };
+        let ptr_addr = ptr.as_ptr() as usize;
+        if !is_gc_box_pointer_valid(ptr_addr) {
+            return;
+        }
         unsafe {
             (*ptr.as_ptr()).dec_weak();
         }
