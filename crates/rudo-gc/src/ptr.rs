@@ -2176,9 +2176,14 @@ impl<K: Trace + 'static, V: Trace + 'static> Ephemeron<K, V> {
     ///
     /// This is the primary way to access the value - it ensures type safety
     /// by only returning the value when the key is still alive.
+    #[allow(clippy::option_if_let_else)]
     pub fn upgrade(&self) -> Option<Gc<V>> {
-        if self.is_key_alive() {
-            // Clone the Gc to return - this increments the ref count
+        // FIX: Keep the key alive while checking value. This fixes TOCTOU race
+        // where key could become invalid between is_key_alive() check and value clone.
+        // We upgrade the key first (acquiring a strong ref), then clone the value
+        // while holding that ref, ensuring atomicity.
+        if let Some(_key_gc) = self.key.upgrade() {
+            // Key is alive and we hold a ref. Now safely clone the value.
             Gc::try_clone(&self.value)
         } else {
             None

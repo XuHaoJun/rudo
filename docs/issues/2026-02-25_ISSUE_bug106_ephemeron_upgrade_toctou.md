@@ -1,7 +1,7 @@
 # [Bug]: Ephemeron::upgrade() TOCTOU race condition - key alive check and value clone not atomic
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
