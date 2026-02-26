@@ -1,7 +1,7 @@
 # [Bug]: Write Guard Drop TOCTOU - 檢查 barrier 狀態與調用 mark_object_black 之间状态可能改变
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -142,3 +142,17 @@ impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
 - 在高負載並發環境中，攻擊者可能嘗試利用這個小窗口
 - 雖然難以穩定利用，但是一個潛在的攻击面
 - 修復成本低，建議修復
+
+---
+
+## Resolution (2026-02-27)
+
+**Fix applied**: Double-check strategy in `GcThreadSafeRefMut::drop`, `GcRwLockWriteGuard::drop`, and `GcMutexGuard::drop`:
+1. Cache barrier state at start
+2. Always capture ptrs (needed for potential mark)
+3. Re-check barrier state before mark
+4. Mark if either check was active
+
+This eliminates the INACTIVE→ACTIVE TOCTOU: if state flips between check and mark, the second check catches it. Cost: always capture (even when barrier inactive); mark only when needed.
+
+**Verification**: Single-threaded tests pass. Race cannot be reliably reproduced without Miri/TSan; fix is based on code review and TOCTOU pattern.

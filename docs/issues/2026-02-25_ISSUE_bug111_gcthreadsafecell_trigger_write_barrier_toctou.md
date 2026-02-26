@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::trigger_write_barrier TOCTOU - is_incremental_marking_active called twice
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -108,3 +108,9 @@ fn trigger_write_barrier(&self) {
 **相關 Bug:**
 - bug101: sync.rs GcRwLock::trigger_write_barrier / GcMutex::trigger_write_barrier TOCTOU (相同模式)
 - bug110: cell.rs GcCell::borrow_mut 三次調用 is_incremental_marking_active (更嚴重版本)
+
+---
+
+## Resolution Note (2026-02-26)
+
+**Classification: Invalid** — The fix is already implemented. `GcThreadSafeCell::trigger_write_barrier()` in `cell.rs` (lines 1125–1133) already caches both `is_incremental_marking_active()` and `is_generational_barrier_active()` once at the start and passes the cached `incremental_active` to `unified_write_barrier`. No TOCTOU window. No code changes required.

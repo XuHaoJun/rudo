@@ -1,7 +1,7 @@
 # [Bug]: Weak::strong_count() 和 Weak::weak_count() 缺少 is_under_construction 檢查 - 與 Weak::upgrade 行為不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -162,3 +162,9 @@ unsafe {
 - 在並髮環境中，構造中的物件的 weak count 被讀取後可能導致資訊洩露
 - 攻擊者可能透過精心設計的時序來利用這個問題
 - 雖然難以穩定利用，但仍是潛在的攻击面
+
+---
+
+## Resolution (2026-02-27)
+
+**Fixed.** Added `is_under_construction()` check to both `Weak::strong_count()` and `Weak::weak_count()` in `ptr.rs`, consistent with `Weak::upgrade()` and `Gc::ref_count`/`weak_count`. Both methods now return 0 when the object is under construction (e.g. inside `Gc::new_cyclic_weak`). Added `test_weak_strong_count_during_construction` in `cyclic_weak.rs` to verify.

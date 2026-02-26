@@ -2734,7 +2734,9 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 let h_ptr = head_addr as *mut PageHeader;
                 let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                 // Skip barrier only if page is young AND object has no gen_old_flag (bug71).
-                if (*h_ptr).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
+                // Cache flag to avoid TOCTOU between check and barrier (bug114).
+                let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                if (*h_ptr).generation == 0 && !has_gen_old {
                     return;
                 }
                 let owner = (*h_ptr).owner_thread;
@@ -2799,9 +2801,11 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 }
 
                 // GEN_OLD early-exit: skip only if page young AND object has no gen_old_flag (bug71).
+                // Cache flag to avoid TOCTOU between check and barrier (bug114).
                 let gc_box_addr =
                     (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-                if (*h).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
+                let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                if (*h).generation == 0 && !has_gen_old {
                     return;
                 }
                 (header, index)

@@ -3,16 +3,16 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 102
-- **Open**: 16
-- **Invalid**: 5
+- **Fixed**: 113
+- **Open**: 11
+- **Invalid**: 9
 - **Verified**: 1
 
 ### By Tags
-- **Verified**: 100
-- **Not Verified**: 2
+- **Verified**: 110
+- **Not Verified**: 8
 - **Not Reproduced**: 7
-- **Unverified**: 15
+- **Unverified**: 9
 
 ## All Issues
 
@@ -125,22 +125,30 @@
 | [2026-02-24_ISSUE_bug104_weak_clone_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug104_weak_clone_missing_is_under_construction_check.md) | Weak::clone() 和 GcBoxWeakRef::clone() 缺少 is_under_construction 檢查 - Bug64/69 修復不完整 | Invalid | Not Reproduced |
 | [2026-02-24_ISSUE_bug105_gcbox_as_weak_missing_is_under_construction_check.md](./2026-02-24_ISSUE_bug105_gcbox_as_weak_missing_is_under_construction_check.md) | GcBox::as_weak() 缺少 is_under_construction 檢查 - 內部方法缺少一致性檢查 | Fixed | Verified |
 | [2026-02-25_ISSUE_bug106_ephemeron_upgrade_toctou.md](./2026-02-25_ISSUE_bug106_ephemeron_upgrade_toctou.md) | Ephemeron::upgrade() TOCTOU race condition - key alive check and value clone not atomic | Fixed | Verified |
-| [2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md](./2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md) | GcRwLockWriteGuard/GcMutexGuard Drop 缺少 Generational Barrier 檢查 | Open | Unverified |
-| [2026-02-25_ISSUE_bug108_gcboxweakref_clone_missing_safety_checks.md](./2026-02-25_ISSUE_bug108_gcboxweakref_clone_missing_safety_checks.md) | GcBoxWeakRef::clone 缺少安全檢查導致潛在 Use-After-Free | Open | Unverified |
+| [2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md](./2026-02-25_ISSUE_bug107_gcrwlock_guarded_drop_missing_generational_barrier.md) | GcRwLockWriteGuard/GcMutexGuard Drop 缺少 Generational Barrier 檢查 | Invalid | Not Verified |
+| [2026-02-25_ISSUE_bug108_gcboxweakref_clone_missing_safety_checks.md](./2026-02-25_ISSUE_bug108_gcboxweakref_clone_missing_safety_checks.md) | GcBoxWeakRef::clone 缺少安全檢查導致潛在 Use-After-Free | Invalid | Not Verified |
 | [2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md](./2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md) | mark_new_object_black 缺少 is_allocated 檢查，與 mark_object_black 行為不一致 | Fixed | Verified |
 | [2026-02-25_ISSUE_bug109_gcthreadsaferefmut_drop_missing_generational_barrier.md](./2026-02-25_ISSUE_bug109_gcthreadsaferefmut_drop_missing_generational_barrier.md) | GcThreadSafeRefMut::drop 缺少 Generational Barrier 檢查 | Fixed | Verified |
-| [2026-02-25_ISSUE_bug110_gccell_borrow_mut_triple_is_incremental_check.md](./2026-02-25_ISSUE_bug110_gccell_borrow_mut_triple_is_incremental_check.md) | GcCell::borrow_mut 三次調用 is_incremental_marking_active 導致 TOCTOU | Open | Unverified |
-| [2026-02-25_ISSUE_bug111_gcthreadsafecell_trigger_write_barrier_toctou.md](./2026-02-25_ISSUE_bug111_gcthreadsafecell_trigger_write_barrier_toctou.md) | GcThreadSafeCell::trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Open | Unverified |
-| [2026-02-25_ISSUE_bug112_try_inc_ref_from_zero_doc_mismatch.md](./2026-02-25_ISSUE_bug112_try_inc_ref_from_zero_doc_mismatch.md) | try_inc_ref_from_zero 文檔與實作不一致 - 聲稱檢查 "fully alive" 但只檢查 dead | Open | Unverified |
-| [2026-02-25_ISSUE_bug113_gcbox_is_under_construction_relaxed_ordering.md](./2026-02-25_ISSUE_bug113_gcbox_is_under_construction_relaxed_ordering.md) | GcBox::is_under_construction() 使用 Relaxed Ordering 導致潜在 Race Condition | Open | Unverified |
-| [2026-02-25_ISSUE_bug114_gc_cell_validate_and_barrier_gen_old_flag_toctou.md](./2026-02-25_ISSUE_bug114_gc_cell_validate_and_barrier_gen_old_flag_toctou.md) | gc_cell_validate_and_barrier GEN_OLD_FLAG 檢查與 barrier 執行之間存在 TOCTOU | Open | Unverified |
-| [2026-02-25_ISSUE_bug115_async_handle_missing_scope_validity_check.md](./2026-02-25_ISSUE_bug115_async_handle_missing_scope_validity_check.md) | AsyncHandle 缺少 scope 有效性檢查導致 use-after-free | Open | Verified |
-| [2026-02-25_ISSUE_bug116_gcthreadsafecell_borrow_mut_toctou.md](./2026-02-25_ISSUE_bug116_gcthreadsafecell_borrow_mut_toctou.md) | GcThreadSafeCell::borrow_mut() TOCTOU - 兩處 is_incremental_marking_active() 調用導致狀態不一致 | Open | Unverified |
-| [2026-02-25_ISSUE_bug117_weak_strong_count_missing_is_under_construction_check.md](./2026-02-25_ISSUE_bug117_weak_strong_count_missing_is_under_construction_check.md) | Weak::strong_count() 和 Weak::weak_count() 缺少 is_under_construction 檢查 - 與 Weak::upgrade 行為不一致 | Open | Unverified |
-| [2026-02-25_ISSUE_bug118_write_guard_drop_toctou.md](./2026-02-25_ISSUE_bug118_write_guard_drop_toctou.md) | Write Guard Drop TOCTOU - 檢查 barrier 狀態與調用 mark_object_black 之间状态可能改变 | Open | Unverified |
-| [2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md](./2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md) | GcBoxWeakRef::upgrade TOCTOU - dropping_state 檢查與 try_inc_ref_from_zero CAS 之間的 Race 導致 Use-After-Free | Open | Unverified |
-| [2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md](./2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md) | GcBoxWeakRef::try_upgrade TOCTOU - is_dead_or_unrooted 檢查與 inc_ref人之間的 Race 導致 Use-After-Free | Open | Unverified |
-| [2026-02-26_ISSUE_bug121_gcbox_dec_weak_count_zero.md](./2026-02-26_ISSUE_bug121_gcbox_dec_weak_count_zero.md) | GcBox::dec_weak 當 weak_count 為 0 時錯誤地返回 true - 與 Weak::drop 行為不一致 | Open | Unverified |
+| [2026-02-25_ISSUE_bug110_gccell_borrow_mut_triple_is_incremental_check.md](./2026-02-25_ISSUE_bug110_gccell_borrow_mut_triple_is_incremental_check.md) | GcCell::borrow_mut 三次調用 is_incremental_marking_active 導致 TOCTOU | Fixed | Verified |
+| [2026-02-25_ISSUE_bug111_gcthreadsafecell_trigger_write_barrier_toctou.md](./2026-02-25_ISSUE_bug111_gcthreadsafecell_trigger_write_barrier_toctou.md) | GcThreadSafeCell::trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Invalid | Not Verified |
+| [2026-02-25_ISSUE_bug112_try_inc_ref_from_zero_doc_mismatch.md](./2026-02-25_ISSUE_bug112_try_inc_ref_from_zero_doc_mismatch.md) | try_inc_ref_from_zero 文檔與實作不一致 - 聲稱檢查 "fully alive" 但只檢查 dead | Fixed | Verified |
+| [2026-02-25_ISSUE_bug113_gcbox_is_under_construction_relaxed_ordering.md](./2026-02-25_ISSUE_bug113_gcbox_is_under_construction_relaxed_ordering.md) | GcBox::is_under_construction() 使用 Relaxed Ordering 導致潜在 Race Condition | Fixed | Verified |
+| [2026-02-25_ISSUE_bug114_gc_cell_validate_and_barrier_gen_old_flag_toctou.md](./2026-02-25_ISSUE_bug114_gc_cell_validate_and_barrier_gen_old_flag_toctou.md) | gc_cell_validate_and_barrier GEN_OLD_FLAG 檢查與 barrier 執行之間存在 TOCTOU | Fixed | Verified |
+| [2026-02-25_ISSUE_bug115_async_handle_missing_scope_validity_check.md](./2026-02-25_ISSUE_bug115_async_handle_missing_scope_validity_check.md) | AsyncHandle 缺少 scope 有效性檢查導致 use-after-free | Fixed | Verified |
+| [2026-02-25_ISSUE_bug116_gcthreadsafecell_borrow_mut_toctou.md](./2026-02-25_ISSUE_bug116_gcthreadsafecell_borrow_mut_toctou.md) | GcThreadSafeCell::borrow_mut() TOCTOU - 兩處 is_incremental_marking_active() 調用導致狀態不一致 | Fixed | Verified |
+| [2026-02-25_ISSUE_bug117_weak_strong_count_missing_is_under_construction_check.md](./2026-02-25_ISSUE_bug117_weak_strong_count_missing_is_under_construction_check.md) | Weak::strong_count() 和 Weak::weak_count() 缺少 is_under_construction 檢查 - 與 Weak::upgrade 行為不一致 | Fixed | Verified |
+| [2026-02-25_ISSUE_bug118_write_guard_drop_toctou.md](./2026-02-25_ISSUE_bug118_write_guard_drop_toctou.md) | Write Guard Drop TOCTOU - 檢查 barrier 狀態與調用 mark_object_black 之间状态可能改变 | Fixed | Not Verified |
+| [2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md](./2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md) | GcBoxWeakRef::upgrade TOCTOU - dropping_state 檢查與 try_inc_ref_from_zero CAS 之間的 Race 導致 Use-After-Free | Invalid | Not Verified |
+| [2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md](./2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md) | GcBoxWeakRef::try_upgrade TOCTOU - is_dead_or_unrooted 檢查與 inc_ref人之間的 Race 導致 Use-After-Free | Fixed | Verified |
+| [2026-02-26_ISSUE_bug121_gcbox_dec_weak_count_zero.md](./2026-02-26_ISSUE_bug121_gcbox_dec_weak_count_zero.md) | GcBox::dec_weak 當 weak_count 為 0 時錯誤地返回 true - 與 Weak::drop 行為不一致 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug122_gcbox_dec_ref_count_zero.md](./2026-02-26_ISSUE_bug122_gcbox_dec_ref_count_zero.md) | GcBox::dec_ref 當 ref_count 為 0 時錯誤地返回 true | Open | Unverified |
-| [2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md) | Incremental Marking mark_root_for_snapshot 缺少 is_allocated 檢查 | Open | Not Verified |
+| [2026-02-26_ISSUE_bug122_stop_all_mutators_infinite_loop.md](./2026-02-26_ISSUE_bug122_stop_all_mutators_infinite_loop.md) | stop_all_mutators_for_snapshot 會在多執行緒環境下無窮迴圈 | Open | Verified |
+| [2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md) | Incremental Marking `mark_root_for_snapshot` 缺少 is_allocated 檢查 | Open | Not Verified |
 | [2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md) | WeakCrossThreadHandle Clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Open | Unverified |
+| [2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md](./2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md) | GcBox::try_inc_ref_from_zero 內部缺少 dropping_state 檢查 - API 設計潛在問題 | Open | Unverified |
+| [2026-02-26_ISSUE_bug126_async_handle_to_gc_toctou_race.md](./2026-02-26_ISSUE_bug126_async_handle_to_gc_toctou_race.md) | AsyncHandle::to_gc TOCTOU - state check 與 inc_ref 非原子操作導致 Use-After-Free | Open | Unverified |
+| [2026-02-26_ISSUE_bug127_gchandle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug127_gchandle_clone_missing_thread_check.md) | GcHandle::clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Open | Unverified |
+| [2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md](./2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md) | GcHandle::is_valid() 未驗證 Root 存在性 - TOCTOU 導致 Resolve 可能失敗 | Open | Unverified |
+| [2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md) | GcVisitorConcurrent::route_reference 缺少 is_allocated 檢查導致錯誤標記 | Open | Unverified |
+| [2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md](./2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md) | WeakCrossThreadHandle::drop 缺少有效性檢查可能導致 UAF | Open | Unverified |
+| [2026-02-26_ISSUE_bug131_gcboxweaktoref_try_upgrade_toctou_dropping_state.md](./2026-02-26_ISSUE_bug131_gcboxweaktoref_try_upgrade_toctou_dropping_state.md) | GcBoxWeakRef::try_upgrade TOCTOU - caller's dropping_state check 與 try_inc_ref_from_zero 之間的 Race | Open | Unverified |

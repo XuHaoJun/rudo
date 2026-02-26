@@ -1,7 +1,7 @@
 # [Bug]: GcBox::is_under_construction() 使用 Relaxed Ordering 導致潜在 Race Condition
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -109,3 +109,9 @@ pub(crate) fn is_under_construction(&self) -> bool {
 3. 透過錯誤的 flag 讀取實現邏輯錯誤或 DoS
 
 修復此問題只需將 `Relaxed` 改為 `Acquire`，這是一個簡單且低風險的改動。
+
+---
+
+## Resolution Note (2026-02-26)
+
+**Fixed.** Changed `is_under_construction()` load from `Ordering::Relaxed` to `Ordering::Acquire` to synchronize with `set_under_construction(false)` (which uses `AcqRel`). Ensures readers observe the cleared flag after construction completes.

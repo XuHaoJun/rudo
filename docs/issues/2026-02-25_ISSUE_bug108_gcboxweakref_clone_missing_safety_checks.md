@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::clone 缺少安全檢查導致潛在 Use-After-Free
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -133,3 +133,18 @@ pub(crate) fn clone(&self) -> Self {
 **Geohot (Exploit 觀點):**
 - 可利用時序在對象構造/銷毀時並發調用 clone
 - 可能造成 use-after-free 場景
+
+---
+
+## Resolution Note (2026-02-26)
+
+**Classification: Invalid** — The fix is already implemented. `GcBoxWeakRef::clone()` in `ptr.rs` (lines 509–555) already performs all the suggested checks:
+
+1. ✓ Null check (returns null weak ref)
+2. ✓ Alignment check (`ptr_addr % alignment != 0`)
+3. ✓ Min address check (`ptr_addr < MIN_VALID_HEAP_ADDRESS`)
+4. ✓ `is_gc_box_pointer_valid(ptr_addr)`
+5. ✓ `has_dead_flag`
+6. ✓ `dropping_state != 0`
+
+The `is_under_construction` check is intentionally omitted (same as `Weak<T>::clone`): `Gc::new_cyclic_weak` passes a Weak to the closure while the object is under construction; the closure may legitimately clone it. No code changes required.

@@ -1,7 +1,7 @@
 # [Bug]: gc_cell_validate_and_barrier GEN_OLD_FLAG 檢查與 barrier 執行之間存在 TOCTOU
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -122,3 +122,9 @@ if !has_gen_old {
 
 **Geohot (Exploit 攻擊觀點):**
 在高負載並發環境中，攻擊者可能嘗試在檢查和執行之間觸發 GC 回收，利用 TOCTOU 繞過 barrier 機制。
+
+---
+
+## Resolution Note (2026-02-26)
+
+**Fixed.** Cached `has_gen_old_flag()` result in both branches (large object and regular block) before the early-exit condition. The barrier decision now uses a single consistent read of the flag, eliminating the TOCTOU window between check and barrier execution.

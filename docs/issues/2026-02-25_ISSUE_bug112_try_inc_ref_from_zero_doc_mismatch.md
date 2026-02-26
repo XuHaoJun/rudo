@@ -1,7 +1,7 @@
 # [Bug]: try_inc_ref_from_zero 文檔與實作不一致 - 聲稱檢查 "fully alive" 但只檢查 dead
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -141,3 +141,9 @@ pub(crate) fn try_inc_ref_from_zero(&self) -> bool {
 
 **Geohot (Exploit 觀點):**
 雖然目前不是直接可利用的問題（因為調用者都做了正確的檢查），但這種類型的規範不一致可能導致未來的開發者犯錯，創建可利用的漏洞。
+
+---
+
+## Resolution Note (2026-02-26)
+
+**Fixed.** Updated documentation to match implementation (Option 1). The doc now states that the transition is only allowed if the object is not dead (`DEAD_FLAG` not set), and adds an explicit **Caller responsibility** note that callers must check `dropping_state()` and `is_under_construction()` before calling. No code changes to the function body.

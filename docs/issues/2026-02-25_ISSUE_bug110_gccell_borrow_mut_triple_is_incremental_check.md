@@ -1,7 +1,7 @@
 # [Bug]: GcCell::borrow_mut 三次調用 is_incremental_marking_active 導致 TOCTOU
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -198,3 +198,9 @@ where
 
 **Geohot (Exploit 觀點):**
 在高負載並發環境中，攻擊者可能利用此 TOCTOU 觸發不一致的 barrier 行為，進一步利用記憶體管理漏洞。
+
+---
+
+## Resolution Note (2026-02-26)
+
+**Fixed.** Cached `is_incremental_marking_active()` once at the start of `borrow_mut` and reused the value for SATB barrier, `gc_cell_validate_and_barrier`, and Dijkstra barrier. All three barrier operations now use a consistent incremental marking state, eliminating the TOCTOU window.

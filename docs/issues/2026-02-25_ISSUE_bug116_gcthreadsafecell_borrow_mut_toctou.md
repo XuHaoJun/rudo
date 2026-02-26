@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::borrow_mut() TOCTOU - 兩處 is_incremental_marking_active() 調用導致狀態不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -126,3 +126,15 @@ where
 
 **Geohot (Exploit 觀點):**
 在高負載並發環境中，攻擊者可能嘗試在兩次檢查之間觸發 GC 狀態改變，利用不一致的 barrier 行為實現記憶體破壞。
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Fixed.
+
+Cached `is_incremental_marking_active()` once at the start of `borrow_mut()` and use it for both:
+1. The SATB capture block (lines 1044–1071)
+2. The write barrier via new `trigger_write_barrier_with_incremental(incremental_active)`
+
+`trigger_write_barrier()` now delegates to `trigger_write_barrier_with_incremental()` with the cached value when called from `borrow_mut()`. Other callers (`borrow_mut_simple`) still use the original `trigger_write_barrier()` which computes the value internally.

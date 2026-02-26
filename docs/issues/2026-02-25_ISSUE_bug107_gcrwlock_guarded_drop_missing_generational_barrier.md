@@ -1,7 +1,7 @@
 # [Bug]: GcRwLockWriteGuard/GcMutexGuard Drop 缺少 Generational Barrier 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -155,3 +155,9 @@ Generational GC 的核心原則是 OLD→YOUNG 引用必須被追蹤，無論是
 
 - bug18/bug59: GcRwLockWriteGuard/GcMutexGuard Drop 缺少 SATB Barrier（已修復）
 - bug98: is_generational_barrier_active() returns false when incremental marking disabled
+
+---
+
+## Resolution Note (2026-02-26)
+
+**Classification: Invalid** — The fix is already implemented. Both `GcRwLockWriteGuard::drop()` and `GcMutexGuard::drop()` in `sync.rs` (lines 408–411 and 650–653) already check `is_generational_barrier_active() || is_incremental_marking_active()` before capturing and marking GC pointers. The behavior matches `trigger_write_barrier()`. No code changes required.

@@ -1,6 +1,6 @@
 # [Bug]: AsyncHandle 缺少 scope 有效性檢查導致 use-after-free
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -162,3 +162,14 @@ pub fn to_gc(self) -> Gc<T> {
 
 **Geohot (Exploit 觀點):**
 攻擊者可利用此漏洞在 scope drop 後讀取舊資料。若記憶體被新 scope 重用，可能造成指標混淆，進一步利用實現任意記憶體讀取。
+
+---
+
+## Resolution (2026-02-27)
+
+**Fixed.** Applied the suggested remediation:
+
+1. **`get()`**: Removed `#[cfg(debug_assertions)]` so scope validity check runs in all builds (debug and release).
+2. **`to_gc()`**: Added scope validity check via `tcb.is_scope_active(self.scope_id)` before accessing the slot.
+
+Added reproduction tests `repro_bug115_async_handle_get_after_scope_drop` and `repro_bug115_async_handle_to_gc_after_scope_drop` in `handlescope_async.rs`. Both pass in debug and release.

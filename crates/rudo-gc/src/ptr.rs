@@ -67,9 +67,10 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Check if the value is currently under construction.
+    /// Uses `Acquire` ordering to synchronize with `set_under_construction(false)` (`AcqRel`).
     #[inline]
     pub(crate) fn is_under_construction(&self) -> bool {
-        (self.weak_count.load(Ordering::Relaxed) & Self::UNDER_CONSTRUCTION_FLAG) != 0
+        (self.weak_count.load(Ordering::Acquire) & Self::UNDER_CONSTRUCTION_FLAG) != 0
     }
 
     /// Set the under-construction flag.
@@ -229,7 +230,11 @@ impl<T: Trace + ?Sized> GcBox<T> {
     ///
     /// This is used by weak upgrades to atomically transition from ref=0 to ref=1
     /// without racing with concurrent collection. The transition is only allowed
-    /// if the object is fully alive (not under construction, not dead).
+    /// if the object is not dead (`DEAD_FLAG` not set).
+    ///
+    /// **Caller responsibility:** The caller must check `dropping_state()` and
+    /// `is_under_construction()` before calling this function. This function does
+    /// not perform those checks internally.
     ///
     /// # Safety
     ///
@@ -1860,7 +1865,8 @@ impl<T: Trace> Weak<T> {
     }
     /// Gets the number of strong `Gc<T>` pointers pointing to this allocation.
     ///
-    /// Returns 0 if the value has been dropped or is currently being dropped.
+    /// Returns 0 if the value has been dropped, is currently being dropped,
+    /// or is under construction (e.g. inside `Gc::new_cyclic_weak`).
     #[must_use]
     pub fn strong_count(&self) -> usize {
         let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
@@ -1874,7 +1880,10 @@ impl<T: Trace> Weak<T> {
 
         unsafe {
             let gc_box = &*ptr.as_ptr();
-            if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 {
+            if gc_box.is_under_construction()
+                || gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+            {
                 0
             } else {
                 gc_box.ref_count().get()
@@ -1884,7 +1893,8 @@ impl<T: Trace> Weak<T> {
 
     /// Gets the number of `Weak<T>` pointers pointing to this allocation.
     ///
-    /// Returns 0 if the value has been dropped or is currently being dropped.
+    /// Returns 0 if the value has been dropped, is currently being dropped,
+    /// or is under construction (e.g. inside `Gc::new_cyclic_weak`).
     #[must_use]
     pub fn weak_count(&self) -> usize {
         let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
@@ -1898,7 +1908,10 @@ impl<T: Trace> Weak<T> {
 
         unsafe {
             let gc_box = &*ptr.as_ptr();
-            if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 {
+            if gc_box.is_under_construction()
+                || gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+            {
                 0
             } else {
                 gc_box.weak_count()

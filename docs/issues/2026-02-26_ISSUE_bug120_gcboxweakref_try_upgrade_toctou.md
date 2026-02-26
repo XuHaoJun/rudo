@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::try_upgrade TOCTOU - is_dead_or_unrooted 檢查與 inc_ref人之間的 Race 導致 Use-After-Free
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -122,3 +122,11 @@ gc_box.inc_ref();
 此問題與 bug119 不同：
 - bug119: GcBoxWeakRef::upgrade 中 dropping_state 檢查與 try_inc_ref_from_zero CAS 之間的 race
 - 本 bug: try_upgrade 中 is_dead_or_unrooted 檢查與 inc_ref()人之間的 race
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Already fixed.
+
+The current `GcBoxWeakRef::try_upgrade()` implementation in `ptr.rs` (lines 580–635) uses `try_inc_ref_if_nonzero()` for the ref_count > 0 path instead of the buggy load-then-inc_ref pattern. The `try_inc_ref_if_nonzero()` method performs an atomic `fetch_update` that only increments when `ref_count > 0 && ref_count < usize::MAX`, returning `false` if ref_count is 0. This eliminates the TOCTOU race described in the issue—no code path calls `inc_ref()` directly after a non-atomic check.

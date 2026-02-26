@@ -158,7 +158,11 @@ impl<T: ?Sized> GcCell<T> {
     {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        if crate::gc::incremental::is_incremental_marking_active() {
+        // Cache incremental marking state once to avoid TOCTOU between check and use
+        // (bug110: triple is_incremental_marking_active call caused inconsistent barrier state)
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+
+        if incremental_active {
             unsafe {
                 let value = &*self.inner.as_ptr();
                 let mut gc_ptrs = Vec::with_capacity(32);
@@ -179,15 +183,11 @@ impl<T: ?Sized> GcCell<T> {
             }
         }
 
-        crate::heap::gc_cell_validate_and_barrier(
-            ptr,
-            "borrow_mut",
-            crate::gc::incremental::is_incremental_marking_active(),
-        );
+        crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut", incremental_active);
 
         let result = self.inner.borrow_mut();
 
-        if crate::gc::incremental::is_incremental_marking_active() {
+        if incremental_active {
             unsafe {
                 let new_value = &*result;
                 let mut new_gc_ptrs = Vec::with_capacity(32);
@@ -1041,7 +1041,11 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     {
         let guard = self.inner.lock();
 
-        if crate::gc::incremental::is_incremental_marking_active() {
+        // Cache incremental marking state once to avoid TOCTOU between SATB capture
+        // and trigger_write_barrier (bug116)
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+
+        if incremental_active {
             let value = &*guard;
             let mut gc_ptrs = Vec::with_capacity(32);
             value.capture_gc_ptrs_into(&mut gc_ptrs);
@@ -1070,7 +1074,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
             }
         }
 
-        self.trigger_write_barrier();
+        self.trigger_write_barrier_with_incremental(incremental_active);
 
         GcThreadSafeRefMut {
             inner: guard,
@@ -1123,9 +1127,16 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 
     #[inline]
     fn trigger_write_barrier(&self) {
+        self.trigger_write_barrier_with_incremental(
+            crate::gc::incremental::is_incremental_marking_active(),
+        );
+    }
+
+    /// Barrier with cached incremental state. Used by `borrow_mut` to avoid TOCTOU (bug116).
+    #[inline]
+    fn trigger_write_barrier_with_incremental(&self, incremental_active: bool) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
         if generational_active || incremental_active {
             crate::heap::unified_write_barrier(ptr, incremental_active);
@@ -1266,12 +1277,18 @@ impl<T: GcCapture + ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
 
 impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
     fn drop(&mut self) {
-        if crate::gc::incremental::is_generational_barrier_active()
-            || crate::gc::incremental::is_incremental_marking_active()
-        {
-            let mut ptrs = Vec::with_capacity(32);
-            (*self.inner).capture_gc_ptrs_into(&mut ptrs);
+        // Cache barrier state at start to avoid TOCTOU: state may change between check and mark.
+        let barrier_active_at_start = crate::gc::incremental::is_generational_barrier_active()
+            || crate::gc::incremental::is_incremental_marking_active();
 
+        let mut ptrs = Vec::with_capacity(32);
+        (*self.inner).capture_gc_ptrs_into(&mut ptrs);
+
+        // Re-check before mark: if state flipped INACTIVE→ACTIVE, we must still mark.
+        let barrier_active_before_mark = crate::gc::incremental::is_generational_barrier_active()
+            || crate::gc::incremental::is_incremental_marking_active();
+
+        if barrier_active_at_start || barrier_active_before_mark {
             for gc_ptr in ptrs {
                 let _ = unsafe {
                     crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)

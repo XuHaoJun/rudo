@@ -571,15 +571,12 @@ impl<T: Trace + 'static> AsyncHandle<T> {
         let tcb = crate::heap::current_thread_control_block()
             .expect("AsyncHandle::get() must be called within a GC thread");
 
-        #[cfg(debug_assertions)]
-        {
-            if !tcb.is_scope_active(self.scope_id) {
-                panic!(
-                    "AsyncHandle used after scope was dropped. \
-                     The AsyncHandleScope that created this handle has been dropped. \
-                     Ensure the scope stays alive as long as any handles are in use."
-                );
-            }
+        if !tcb.is_scope_active(self.scope_id) {
+            panic!(
+                "AsyncHandle used after scope was dropped. \
+                 The AsyncHandleScope that created this handle has been dropped. \
+                 Ensure the scope stays alive as long as any handles are in use."
+            );
         }
 
         let slot = unsafe { &*self.slot };
@@ -669,6 +666,16 @@ impl<T: Trace + 'static> AsyncHandle<T> {
     /// ```
     #[inline]
     pub fn to_gc(self) -> Gc<T> {
+        let tcb = crate::heap::current_thread_control_block()
+            .expect("AsyncHandle::to_gc() must be called within a GC thread");
+
+        if !tcb.is_scope_active(self.scope_id) {
+            panic!(
+                "AsyncHandle::to_gc() called after scope was dropped. \
+                 The AsyncHandleScope that created this handle has been dropped."
+            );
+        }
+
         unsafe {
             let gc_box_ptr = (*self.slot).as_ptr() as *const GcBox<T>;
             let gc_box = &*gc_box_ptr;

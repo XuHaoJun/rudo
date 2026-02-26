@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::upgrade TOCTOU - dropping_state 檢查與 try_inc_ref_from_zero CAS 之間的 Race 導致 Use-After-Free
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -114,3 +114,25 @@ if gc_box.try_inc_ref_from_zero() {
 
 **Geohot (Exploit 攻擊觀點):**
 雖然需要精確的時序控制，但理論上可以通過構造並發場景來觸發此 bug，導致 use-after-free。如果物件記憶體被重新分配，攻擊者可能可以控制指標指向的內容。
+
+---
+
+## Resolution Note (2026-02-26)
+
+**Classification: Invalid** — The suggested fix is already implemented in the codebase.
+
+Both `GcBoxWeakRef::upgrade()` and `GcBoxWeakRef::try_upgrade()` in `ptr.rs` (lines 478–484 and 603–611) already include the second verification after `try_inc_ref_from_zero()` succeeds:
+
+```rust
+if gc_box.try_inc_ref_from_zero() {
+    // Second check: verify object wasn't dropped between check and CAS
+    if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+        // Undo the increment and return None
+        crate::ptr::GcBox::dec_ref(ptr.as_ptr());
+        return None;
+    }
+    return Some(Gc { ... });
+}
+```
+
+This matches the suggested remediation exactly. The race window described in the issue is closed by this post-CAS check. No code changes required.
