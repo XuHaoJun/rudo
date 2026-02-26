@@ -161,9 +161,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
 
             let count = this.ref_count.load(Ordering::Acquire);
             if count == 0 {
-                // Already at zero - this is a bug (double-free or use-after-free)
-                // Return true to prevent further issues
-                return true;
+                return false;
             }
             if count == 1 && this.dropping_state() == 0 {
                 // Last reference and not already marked as dropping
