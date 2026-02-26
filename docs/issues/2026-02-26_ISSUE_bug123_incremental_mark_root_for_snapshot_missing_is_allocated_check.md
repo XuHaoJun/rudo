@@ -1,7 +1,7 @@
 # [Bug]: Incremental Marking `mark_root_for_snapshot` 缺少 is_allocated 檢查
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -122,3 +122,11 @@ if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
 1. 阻止 GC 回收特定物件（透過錯誤標記）
 2. 造成記憶體洩漏
 3. 破壞 heap metadata 導致後續分配問題
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Fixed.
+
+Added `is_allocated(idx)` check in `mark_root_for_snapshot` before marking, matching the pattern used in `mark_object_black`. If the slot was swept (reclaimed by lazy sweep), the function returns early without marking or pushing to the worklist.

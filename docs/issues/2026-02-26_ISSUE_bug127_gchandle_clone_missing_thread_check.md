@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::clone 未驗證執行緒親和性 - 與 resolve() 不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -138,3 +138,13 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
 ## 備註
 
 此問題與 Bug 124（WeakCrossThreadHandle::clone 缺少執行緒檢查）為同一系列問題。應該統一修復這兩個問題，確保 cross-thread handle API 的一致性。
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Fixed.
+
+Added origin-thread check to `GcHandle::clone()` when origin is still alive. When origin has terminated (orphaned handle), clone is allowed from any thread to preserve bug4 test behavior (handles received from `join()`). Uses `origin_tcb.upgrade().is_some()` to distinguish: if TCB exists, require origin thread; if TCB is None (orphaned), allow clone from any thread.
+
+Added `#[track_caller]` for panic location. Added `test_gchandle_clone_wrong_thread_panics` to verify clone panics from non-origin thread.

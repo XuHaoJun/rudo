@@ -1,7 +1,7 @@
 # [Bug]: WeakCrossThreadHandle Clone 未驗證執行緒親和性 - 與 resolve() 不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -138,3 +138,13 @@ impl<T: Trace + 'static> Clone for WeakCrossThreadHandle<T> {
 ## 備註
 
 類似問題可能存在於 `GcHandle::clone()` - 需要驗證該實作是否已有執行緒檢查。
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Fixed.
+
+Added `assert_eq!(current_thread, origin_thread)` to `WeakCrossThreadHandle::clone()` and `#[track_caller]` for panic location. `clone()` now requires origin thread, consistent with `resolve()` and `try_upgrade()`.
+
+Updated `test_weak_clone_across_threads` to clone on origin thread before sending across threads. Added `test_weak_clone_wrong_thread_panics` to verify clone panics from non-origin thread.

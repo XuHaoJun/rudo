@@ -232,9 +232,8 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// without racing with concurrent collection. The transition is only allowed
     /// if the object is not dead (`DEAD_FLAG` not set).
     ///
-    /// **Caller responsibility:** The caller must check `dropping_state()` and
-    /// `is_under_construction()` before calling this function. This function does
-    /// not perform those checks internally.
+    /// This function checks `dropping_state()` internally; callers must still check
+    /// `is_under_construction()` before calling.
     ///
     /// # Safety
     ///
@@ -249,6 +248,11 @@ impl<T: Trace + ?Sized> GcBox<T> {
 
             // Never resurrect a dead object; DEAD_FLAG means value was dropped.
             if (flags & Self::DEAD_FLAG) != 0 {
+                return false;
+            }
+
+            // Object is being dropped - do not allow resurrection (UAF prevention)
+            if self.dropping_state() != 0 {
                 return false;
             }
 
@@ -1986,7 +1990,7 @@ impl<T: Trace> Clone for Weak<T> {
 }
 
 #[inline]
-fn is_gc_box_pointer_valid(ptr_addr: usize) -> bool {
+pub fn is_gc_box_pointer_valid(ptr_addr: usize) -> bool {
     let ptr = ptr_addr as *const u8;
 
     // Fast path: current thread heap.

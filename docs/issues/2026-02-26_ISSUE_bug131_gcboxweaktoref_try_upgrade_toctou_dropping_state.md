@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::try_upgrade TOCTOU - caller's dropping_state check 與 try_inc_ref_from_zero 之間的 Race
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -123,3 +123,15 @@ if gc_box.try_inc_ref_from_zero() {
 - 本 bug: try_upgrade 中調用者的 dropping_state 檢查與 try_inc_ref_from_zero 之間的 TOCTOU
 
 本 bug 是 bug125 的另一個表現形式 - 一個是 API 設計問題，一個是使用上的 TOCTOU。
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Fixed (already addressed in codebase).
+
+`GcBoxWeakRef::try_upgrade()` (ptr.rs:584-636) already implements the suggested fix:
+1. **try_inc_ref_from_zero** (ptr.rs:255-257) checks `dropping_state() != 0` internally — bug125 fix.
+2. **Second check after try_inc_ref_from_zero** (ptr.rs:613-618): if `dropping_state() != 0 || has_dead_flag()`, the increment is undone via `dec_ref` and `None` is returned.
+
+The TOCTOU window is closed by both the internal check in try_inc_ref_from_zero and the post-increment validation in try_upgrade.

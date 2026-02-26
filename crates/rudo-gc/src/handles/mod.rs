@@ -346,11 +346,18 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
     #[inline]
     pub fn to_gc(&self) -> Gc<T> {
         unsafe {
-            let ptr = (*self.slot).as_ptr() as *const u8;
-            let gc: Gc<T> = Gc::from_raw(ptr);
-            let gc_clone = gc.clone();
-            std::mem::forget(gc);
-            gc_clone
+            let gc_box_ptr = (*self.slot).as_ptr() as *const GcBox<T>;
+            let gc_box = &*gc_box_ptr;
+            assert!(
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "Handle::to_gc: cannot convert a dead, dropping, or under construction Gc"
+            );
+            if !gc_box.try_inc_ref_if_nonzero() {
+                panic!("Handle::to_gc: object is being dropped by another thread");
+            }
+            Gc::from_raw(gc_box_ptr as *const u8)
         }
     }
 

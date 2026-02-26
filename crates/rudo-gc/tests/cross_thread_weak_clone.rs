@@ -181,7 +181,7 @@ fn test_weak_clone_no_premature_collection() {
     gc::collect();
 }
 
-/// Test weak handle clone across threads.
+/// Test weak handle can be sent across threads when cloned on origin first.
 #[test]
 fn test_weak_clone_across_threads() {
     use std::sync::mpsc;
@@ -191,16 +191,22 @@ fn test_weak_clone_across_threads() {
 
     assert_eq!(Gc::weak_count(&gc), 1);
 
-    let (sender, receiver) = mpsc::channel();
+    // Clone must happen on origin thread (bug124 fix)
+    let weak_clone = weak_original.clone();
+
+    let (to_thread, from_main) = mpsc::channel();
+    let (to_main, from_thread) = mpsc::channel();
+
+    to_thread.send(weak_clone).unwrap();
 
     let sender_thread = thread::spawn(move || {
-        let weak_clone = weak_original.clone();
-        sender.send(weak_clone).unwrap();
+        let weak_received = from_main.recv().unwrap();
+        to_main.send(weak_received).unwrap();
     });
 
     sender_thread.join().unwrap();
 
-    let weak_received = receiver.recv().unwrap();
+    let weak_received = from_thread.recv().unwrap();
 
     drop(gc);
 
@@ -209,7 +215,7 @@ fn test_weak_clone_across_threads() {
     let resolved = weak_received.try_resolve();
     assert!(
         resolved.is_none(),
-        "try_resolve from wrong thread should return None"
+        "try_resolve should return None after object was collected"
     );
 
     drop(weak_received);
@@ -248,5 +254,19 @@ fn test_weak_try_upgrade_wrong_thread() {
     assert!(
         result.is_err(),
         "try_upgrade should panic when called from wrong thread"
+    );
+}
+
+/// Test that clone panics when called from non-origin thread (bug124).
+#[test]
+fn test_weak_clone_wrong_thread_panics() {
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let weak = gc.weak_cross_thread_handle();
+
+    let result = std::thread::spawn(move || weak.clone()).join();
+
+    assert!(
+        result.is_err(),
+        "clone should panic when called from non-origin thread"
     );
 }

@@ -526,16 +526,18 @@ fn stop_all_mutators_for_snapshot() {
             .active_count
             .load(std::sync::atomic::Ordering::Acquire);
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
-        let ack_count = state.rendezvous_ack_count();
-        let thread_count = registry.threads.len();
 
         // If no threads registered (e.g., after reset), we're the only mutator
         // so we can proceed immediately
-        if thread_count == 0 {
+        if registry.threads.is_empty() {
             break;
         }
 
-        if active == 1 && ack_count >= thread_count {
+        // active == 1 means only the collector is running; all mutators have
+        // reached safepoint and decremented active_count in enter_rendezvous().
+        // The rendezvous_ack_counter was never fully wired: mutators never
+        // increment it, so ack_count >= thread_count would never hold.
+        if active == 1 {
             break;
         }
     }
@@ -565,6 +567,10 @@ unsafe fn mark_root_for_snapshot(ptr: NonNull<GcBox<()>>, visitor: &mut crate::t
     }
 
     if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+        // Skip if slot was swept; avoids marking wrong object when lazy sweep runs concurrently.
+        if !(*header.as_ptr()).is_allocated(idx) {
+            return;
+        }
         let was_marked = (*header.as_ptr()).is_marked(idx);
         if !was_marked {
             (*header.as_ptr()).set_mark(idx);

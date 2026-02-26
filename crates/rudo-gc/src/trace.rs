@@ -176,6 +176,9 @@ impl<'a> GcVisitorConcurrent<'a> {
                     return;
                 }
 
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return;
+                }
                 if (*header.as_ptr()).is_marked(idx) {
                     return;
                 }

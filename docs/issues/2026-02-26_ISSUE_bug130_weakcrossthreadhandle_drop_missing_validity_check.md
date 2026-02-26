@@ -1,7 +1,7 @@
 # [Bug]: WeakCrossThreadHandle::drop 缺少有效性檢查可能導致 UAF
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -160,3 +160,11 @@ impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
 此問題與其他 TOCTOU 問題不同：
 - bug119/120/121: TOCTOU 發生在 upgrade 過程中
 - 本 bug: TOCTOU 發生在 drop 過程中，缺少基本的安全性檢查
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Fixed.
+
+Added `is_gc_box_pointer_valid(ptr_addr)` check in `WeakCrossThreadHandle::drop()` before calling `dec_weak()`, matching the pattern used in `Weak::drop()` (ptr.rs). When the GcBox has been swept and memory may be reused, drop now returns early without dereferencing. Exposed `is_gc_box_pointer_valid` as `pub` in ptr.rs for use by handles/cross_thread.rs.

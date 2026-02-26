@@ -154,6 +154,21 @@ fn test_drop_from_foreign_thread() {
     assert_eq!(resolved.value, 42);
 }
 
+/// Test that clone panics when called from non-origin thread (bug127).
+#[test]
+fn test_gchandle_clone_wrong_thread_panics() {
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let handle = gc.cross_thread_handle();
+
+    #[allow(clippy::redundant_clone)]
+    let result = thread::spawn(move || handle.clone()).join();
+
+    assert!(
+        result.is_err(),
+        "GcHandle::clone should panic when called from non-origin thread"
+    );
+}
+
 /// Test that cloning an unregistered handle panics (Bug 29 - clone/unregister TOCTOU fix).
 #[test]
 #[should_panic(expected = "cannot clone an unregistered GcHandle")]

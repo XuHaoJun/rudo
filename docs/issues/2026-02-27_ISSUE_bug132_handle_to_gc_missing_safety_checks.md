@@ -1,7 +1,7 @@
 # [Bug]: Handle::to_gc 缺少安全檢查可能導致 UAF
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -108,3 +108,13 @@ pub fn to_gc(&self) -> Gc<T> {
 
 **Geohot (Exploit 觀點):**
 攻擊者可能利用此漏洞在物件被 drop 後取得有效 Gc，進一步進行 use-after-free 攻擊。
+
+---
+
+## Resolution (2026-02-27)
+
+**Fixed.** Added the same safety checks as `AsyncHandle::to_gc` to `Handle::to_gc` in `handles/mod.rs`:
+- Assert `!has_dead_flag()`, `dropping_state() == 0`, `!is_under_construction()` before creating `Gc`
+- Call `gc_box.inc_ref()` before `Gc::from_raw()` to match `AsyncHandle` semantics
+
+Reproduction test `repro_bug132_handle_to_gc_after_gc_dropped` in `handlescope_basic.rs` verifies the panic when converting a handle after the original `Gc` was dropped.

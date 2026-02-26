@@ -1,6 +1,6 @@
 # [Bug]: stop_all_mutators_for_snapshot 會在多執行緒環境下無窮迴圈
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -130,3 +130,13 @@ Stop-the-world 握手協議需要確保所有 mutator 執行緒都已停止。`a
 
 **Geohot (Exploit 觀點):**
 這可以被利用作為一種拒絕服務（DoS）攻擊。如果攻擊者能夠控制執行緒數量或 GC 觸發，他們可以導致服務無限期掛起。不過這需要能夠觸發 GC，這在正常操作中可能是可接受的。
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Fixed.
+
+Applied Option 1: removed the broken `ack_count >= thread_count` check. The `rendezvous_ack_counter` was never fully wired—mutator threads never call `increment_rendezvous_ack()` in `enter_rendezvous()`, so `ack_count` stayed at 1 (only the collector incremented it) while `thread_count` was ≥2, making the condition unreachable.
+
+The condition `active == 1` is sufficient: when all mutators reach safepoint they decrement `active_count` in `enter_rendezvous()`, so `active == 1` means only the collector is running. The loop in `stop_all_mutators_for_snapshot` now breaks on `active == 1` only.

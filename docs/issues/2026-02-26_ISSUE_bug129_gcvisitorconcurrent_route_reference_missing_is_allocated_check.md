@@ -1,7 +1,7 @@
 # [Bug]: GcVisitorConcurrent::route_reference 缺少 is_allocated 檢查導致錯誤標記
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -124,5 +124,13 @@ if let Some(idx) = super::heap::ptr_to_object_index(raw.cast()) {
 2. 造成記憶體洩漏
 3. 破壞 heap metadata 導致後續分配問題
 4. 在極端情況下，可能實現 use-after-free
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Fixed.
+
+Added `is_allocated(idx)` check to `GcVisitorConcurrent::route_reference` in `trace.rs` before `is_marked`/`set_mark`, matching the pattern used in `gc/marker.rs` (bug78, bug123). This prevents marking slots that have been swept and reused when lazy sweep runs concurrently with marking.
 
 ---

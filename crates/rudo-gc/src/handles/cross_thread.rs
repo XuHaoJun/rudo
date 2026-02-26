@@ -33,6 +33,7 @@ use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
 
 use crate::heap::{self, HandleId, ThreadControlBlock};
+use crate::ptr::is_gc_box_pointer_valid;
 use crate::ptr::GcBox;
 use crate::ptr::GcBoxWeakRef;
 use crate::trace::Trace;
@@ -90,9 +91,25 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// For strong handles this is `true` while the handle is registered.
     /// Returns `false` if the handle was unregistered. Note: when the origin
     /// thread has terminated, [`resolve()`] will panic (use [`try_resolve()`]).
+    ///
+    /// Checks both `handle_id` and root list presence to match [`resolve()`]
+    /// semantics and avoid TOCTOU where another thread unregisters between
+    /// `is_valid()` and `resolve()`.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.handle_id != HandleId::INVALID
+        if self.handle_id == HandleId::INVALID {
+            return false;
+        }
+        self.origin_tcb.upgrade().map_or_else(
+            || {
+                let orphan = heap::lock_orphan_roots();
+                orphan.contains_key(&(self.origin_thread, self.handle_id))
+            },
+            |tcb| {
+                let roots = tcb.cross_thread_roots.lock().unwrap();
+                roots.strong.contains_key(&self.handle_id)
+            },
+        )
     }
 
     /// Explicitly unregisters this handle from the root set.
@@ -318,9 +335,20 @@ impl<T: Trace + 'static> GcHandle<T> {
 
 #[allow(clippy::significant_drop_tightening)] // Lock must be held through inc_ref
 impl<T: Trace + 'static> Clone for GcHandle<T> {
+    #[track_caller]
     fn clone(&self) -> Self {
         if self.handle_id == HandleId::INVALID {
             panic!("cannot clone an unregistered GcHandle");
+        }
+        // Require origin thread when origin is still alive (consistent with resolve()).
+        // When origin has terminated (orphaned handle), clone is allowed from any thread.
+        if self.origin_tcb.upgrade().is_some() {
+            assert_eq!(
+                std::thread::current().id(),
+                self.origin_thread,
+                "GcHandle::clone() must be called on the origin thread. \
+                 Clone from a different thread is not allowed."
+            );
         }
         let (new_id, origin_tcb) = self.origin_tcb.upgrade().map_or_else(
             || {
@@ -523,7 +551,14 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
 }
 
 impl<T: Trace + 'static> Clone for WeakCrossThreadHandle<T> {
+    #[track_caller]
     fn clone(&self) -> Self {
+        assert_eq!(
+            std::thread::current().id(),
+            self.origin_thread,
+            "WeakCrossThreadHandle::clone() must be called on the origin thread. \
+             Clone from a different thread is not allowed."
+        );
         Self {
             weak: self.weak.clone(),
             origin_tcb: Weak::clone(&self.origin_tcb),
@@ -538,6 +573,10 @@ impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
         let Some(ptr) = ptr else {
             return;
         };
+        let ptr_addr = ptr.as_ptr() as usize;
+        if !is_gc_box_pointer_valid(ptr_addr) {
+            return;
+        }
         unsafe {
             (*ptr.as_ptr()).dec_weak();
         }

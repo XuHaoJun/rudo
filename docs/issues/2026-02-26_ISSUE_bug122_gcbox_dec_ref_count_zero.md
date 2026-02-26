@@ -1,7 +1,7 @@
 # [Bug]: GcBox::dec_ref 當 ref_count 為 0 時錯誤地返回 true
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -112,3 +112,20 @@ if count == 0 {
 
 **Geohot (Exploit 攻擊觀點):**
 目前不可利用（因為調用者不檢查返回值），但如果未來有調用者開始檢查返回值，可能會被利用。
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Invalid — already fixed.
+
+The current `GcBox::dec_ref()` implementation in `ptr.rs` (lines 163–165) already returns `false` when `ref_count == 0`:
+
+```rust
+let count = this.ref_count.load(Ordering::Acquire);
+if count == 0 {
+    return false;
+}
+```
+
+Behavior matches `dec_weak()` as described in the issue. No code change needed.

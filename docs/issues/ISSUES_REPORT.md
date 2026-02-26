@@ -3,16 +3,14 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 113
-- **Open**: 11
-- **Invalid**: 9
+- **Fixed**: 124
+- **Invalid**: 10
 - **Verified**: 1
 
 ### By Tags
-- **Verified**: 110
+- **Verified**: 120
 - **Not Verified**: 8
 - **Not Reproduced**: 7
-- **Unverified**: 9
 
 ## All Issues
 
@@ -141,14 +139,15 @@
 | [2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md](./2026-02-26_ISSUE_bug119_weak_upgrade_toctou_dropping_cas_race.md) | GcBoxWeakRef::upgrade TOCTOU - dropping_state 檢查與 try_inc_ref_from_zero CAS 之間的 Race 導致 Use-After-Free | Invalid | Not Verified |
 | [2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md](./2026-02-26_ISSUE_bug120_gcboxweakref_try_upgrade_toctou.md) | GcBoxWeakRef::try_upgrade TOCTOU - is_dead_or_unrooted 檢查與 inc_ref人之間的 Race 導致 Use-After-Free | Fixed | Verified |
 | [2026-02-26_ISSUE_bug121_gcbox_dec_weak_count_zero.md](./2026-02-26_ISSUE_bug121_gcbox_dec_weak_count_zero.md) | GcBox::dec_weak 當 weak_count 為 0 時錯誤地返回 true - 與 Weak::drop 行為不一致 | Fixed | Verified |
-| [2026-02-26_ISSUE_bug122_gcbox_dec_ref_count_zero.md](./2026-02-26_ISSUE_bug122_gcbox_dec_ref_count_zero.md) | GcBox::dec_ref 當 ref_count 為 0 時錯誤地返回 true | Open | Unverified |
-| [2026-02-26_ISSUE_bug122_stop_all_mutators_infinite_loop.md](./2026-02-26_ISSUE_bug122_stop_all_mutators_infinite_loop.md) | stop_all_mutators_for_snapshot 會在多執行緒環境下無窮迴圈 | Open | Verified |
-| [2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md) | Incremental Marking `mark_root_for_snapshot` 缺少 is_allocated 檢查 | Open | Not Verified |
-| [2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md) | WeakCrossThreadHandle Clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Open | Unverified |
-| [2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md](./2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md) | GcBox::try_inc_ref_from_zero 內部缺少 dropping_state 檢查 - API 設計潛在問題 | Open | Unverified |
-| [2026-02-26_ISSUE_bug126_async_handle_to_gc_toctou_race.md](./2026-02-26_ISSUE_bug126_async_handle_to_gc_toctou_race.md) | AsyncHandle::to_gc TOCTOU - state check 與 inc_ref 非原子操作導致 Use-After-Free | Open | Unverified |
-| [2026-02-26_ISSUE_bug127_gchandle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug127_gchandle_clone_missing_thread_check.md) | GcHandle::clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Open | Unverified |
-| [2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md](./2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md) | GcHandle::is_valid() 未驗證 Root 存在性 - TOCTOU 導致 Resolve 可能失敗 | Open | Unverified |
-| [2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md) | GcVisitorConcurrent::route_reference 缺少 is_allocated 檢查導致錯誤標記 | Open | Unverified |
-| [2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md](./2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md) | WeakCrossThreadHandle::drop 缺少有效性檢查可能導致 UAF | Open | Unverified |
-| [2026-02-26_ISSUE_bug131_gcboxweaktoref_try_upgrade_toctou_dropping_state.md](./2026-02-26_ISSUE_bug131_gcboxweaktoref_try_upgrade_toctou_dropping_state.md) | GcBoxWeakRef::try_upgrade TOCTOU - caller's dropping_state check 與 try_inc_ref_from_zero 之間的 Race | Open | Unverified |
+| [2026-02-26_ISSUE_bug122_gcbox_dec_ref_count_zero.md](./2026-02-26_ISSUE_bug122_gcbox_dec_ref_count_zero.md) | GcBox::dec_ref 當 ref_count 為 0 時錯誤地返回 true | Invalid | Not Verified |
+| [2026-02-26_ISSUE_bug122_stop_all_mutators_infinite_loop.md](./2026-02-26_ISSUE_bug122_stop_all_mutators_infinite_loop.md) | stop_all_mutators_for_snapshot 會在多執行緒環境下無窮迴圈 | Fixed | Verified |
+| [2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md) | Incremental Marking `mark_root_for_snapshot` 缺少 is_allocated 檢查 | Fixed | Verified |
+| [2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md) | WeakCrossThreadHandle Clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Fixed | Verified |
+| [2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md](./2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md) | GcBox::try_inc_ref_from_zero 內部缺少 dropping_state 檢查 - API 設計潛在問題 | Fixed | Verified |
+| [2026-02-26_ISSUE_bug126_async_handle_to_gc_toctou_race.md](./2026-02-26_ISSUE_bug126_async_handle_to_gc_toctou_race.md) | AsyncHandle::to_gc TOCTOU - state check 與 inc_ref 非原子操作導致 Use-After-Free | Fixed | Verified |
+| [2026-02-26_ISSUE_bug127_gchandle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug127_gchandle_clone_missing_thread_check.md) | GcHandle::clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Fixed | Verified |
+| [2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md](./2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md) | GcHandle::is_valid() 未驗證 Root 存在性 - TOCTOU 導致 Resolve 可能失敗 | Fixed | Verified |
+| [2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md) | GcVisitorConcurrent::route_reference 缺少 is_allocated 檢查導致錯誤標記 | Fixed | Verified |
+| [2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md](./2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md) | WeakCrossThreadHandle::drop 缺少有效性檢查可能導致 UAF | Fixed | Verified |
+| [2026-02-26_ISSUE_bug131_gcboxweaktoref_try_upgrade_toctou_dropping_state.md](./2026-02-26_ISSUE_bug131_gcboxweaktoref_try_upgrade_toctou_dropping_state.md) | GcBoxWeakRef::try_upgrade TOCTOU - caller's dropping_state check 與 try_inc_ref_from_zero 之間的 Race | Fixed | Verified |
+| [2026-02-27_ISSUE_bug132_handle_to_gc_missing_safety_checks.md](./2026-02-27_ISSUE_bug132_handle_to_gc_missing_safety_checks.md) | Handle::to_gc 缺少安全檢查可能導致 UAF | Fixed | Verified |

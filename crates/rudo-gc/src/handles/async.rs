@@ -685,7 +685,9 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                     && !gc_box.is_under_construction(),
                 "AsyncHandle::to_gc: cannot convert a dead, dropping, or under construction Gc"
             );
-            gc_box.inc_ref();
+            if !gc_box.try_inc_ref_if_nonzero() {
+                panic!("AsyncHandle::to_gc: object is being dropped by another thread");
+            }
             Gc::from_raw(gc_box_ptr as *const u8)
         }
     }

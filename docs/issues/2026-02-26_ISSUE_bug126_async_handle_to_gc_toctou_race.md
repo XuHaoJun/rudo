@@ -1,7 +1,7 @@
 # [Bug]: AsyncHandle::to_gc TOCTOU - state check 與 inc_ref 非原子操作導致 Use-After-Free
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -183,3 +183,13 @@ pub fn to_gc(self) -> Gc<T> {
 
 **Geohot (Exploit 觀點):**
 攻擊者可以通過精確時序控制來利用此漏洞。如果物件被 drop 後記憶體未被立即重用，攻擊者可能讀取到舊資料。如果記憶體被新物件重用，可能造成指標混淆，進一步實現任意記憶體讀寫。
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Fixed.
+
+Replaced `inc_ref()` with `try_inc_ref_if_nonzero()` in both `AsyncHandle::to_gc()` and `Handle::to_gc()` to eliminate the TOCTOU race window. The atomic `fetch_update` in `try_inc_ref_if_nonzero()` ensures ref_count > 0 is checked and incremented in a single operation. If the object is being dropped (ref_count == 0), the function panics with "object is being dropped by another thread".
+
+Existing tests (including `repro_bug132_handle_to_gc_after_gc_dropped`, `test_async_handle_to_gc`) pass. Race conditions require Miri/TSan for reliable verification; single-threaded tests confirm the fix does not regress normal behavior.

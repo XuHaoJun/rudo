@@ -1,7 +1,7 @@
 # [Bug]: GcBox::try_inc_ref_from_zero 內部缺少 dropping_state 檢查 - API 設計潛在問題
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -191,11 +191,19 @@ pub(crate) fn try_inc_ref_from_zero(&self) -> bool {
 
 ## 修復狀態
 
-- [ ] 已修復
-- [x] 未修復
+- [x] 已修復
+- [ ] 未修復
 
 ## 備註
 
 此問題與 bug119/120 相關，但角度不同：
 - bug119/120 關注的是 upgrade 函數中的 TOCTOU
 - 本 issue 關注的是 try_inc_ref_from_zero 函數內部缺少檢查
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Fixed.
+
+Added `dropping_state()` check inside `GcBox::try_inc_ref_from_zero()` in `ptr.rs`. The function now returns `false` when `self.dropping_state() != 0`, preventing resurrection of objects that are being dropped. Updated docstring to reflect that the function now performs this check internally; callers must still check `is_under_construction()` before calling.

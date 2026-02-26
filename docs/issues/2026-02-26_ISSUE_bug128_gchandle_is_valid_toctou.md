@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::is_valid() 未驗證 Root 存在性 - TOCTOU 導致 Resolve 可能失敗
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -173,3 +173,11 @@ pub fn is_valid(&self) -> bool {
 ## 備註
 
 此問題與 bug127（GcHandle::clone 缺少執行緒檢查）為不同類型的問題。這個是 API 一致性問題，那個是執行緒安全問題。
+
+---
+
+## Resolution (2026-02-27)
+
+**Outcome:** Fixed.
+
+`GcHandle::is_valid()` now checks both `handle_id != HandleId::INVALID` and root list presence (via `roots.strong.contains_key` or `orphan.contains_key` when origin thread terminated), matching `resolve()` semantics. This eliminates the TOCTOU where `is_valid()` could return true while the handle was already unregistered by another thread.
