@@ -1,7 +1,7 @@
 # [Bug]: Gc<T> Drop 存在 Double Drop - dec_ref 與 Drop impl 都呼叫 drop_fn
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

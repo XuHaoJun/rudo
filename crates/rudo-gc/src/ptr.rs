@@ -1512,13 +1512,9 @@ impl<T: Trace> Drop for Gc<T> {
 
         let gc_box_ptr = ptr.as_ptr();
 
-        let is_last = GcBox::<T>::dec_ref(gc_box_ptr);
+        let was_last = GcBox::<T>::dec_ref(gc_box_ptr);
 
-        if is_last {
-            unsafe {
-                ((*gc_box_ptr).drop_fn)(gc_box_ptr.cast::<u8>());
-            }
-        } else {
+        if !was_last {
             notify_dropped_gc();
         }
     }
