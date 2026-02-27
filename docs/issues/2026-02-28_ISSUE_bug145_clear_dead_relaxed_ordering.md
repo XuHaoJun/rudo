@@ -1,7 +1,7 @@
 # [Bug]: GcBox::clear_dead 使用 Relaxed Ordering 導致潛在 Race Condition
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

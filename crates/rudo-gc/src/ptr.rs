@@ -318,7 +318,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// may still exist. Use [`is_dead_or_unrooted()`] to check if the object
     /// is collectible (dead flag set OR no strong refs).
     pub fn has_dead_flag(&self) -> bool {
-        (self.weak_count.load(Ordering::Relaxed) & Self::DEAD_FLAG) != 0
+        (self.weak_count.load(Ordering::Acquire) & Self::DEAD_FLAG) != 0
     }
 
     /// Mark the value as dropped.
@@ -372,7 +372,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
     #[inline]
     pub(crate) fn clear_dead(&self) {
         self.weak_count
-            .fetch_and(!Self::DEAD_FLAG, Ordering::Relaxed);
+            .fetch_and(!Self::DEAD_FLAG, Ordering::Release);
     }
 }
 
