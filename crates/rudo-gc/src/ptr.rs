@@ -419,9 +419,8 @@ impl<T: Trace> GcBox<T> {
     /// Create a weak reference to this `GcBox`.
     #[allow(dead_code)]
     pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
-        // SAFETY: self is a valid GcBox pointer.
         unsafe {
-            if self.is_under_construction() {
+            if self.is_under_construction() || self.has_dead_flag() || self.dropping_state() != 0 {
                 return GcBoxWeakRef {
                     ptr: AtomicNullable::null(),
                 };
