@@ -2656,7 +2656,7 @@ pub fn simple_write_barrier(ptr: *const u8) {
         unsafe {
             let (header, index) =
                 if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
-                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + size {
+                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + h_size + size {
                         return;
                     }
                     let h_ptr = head_addr as *mut PageHeader;
@@ -2849,7 +2849,7 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
         unsafe {
             let (header, index) =
                 if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
-                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + size {
+                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + h_size + size {
                         return;
                     }
                     let h_ptr = head_addr as *mut PageHeader;
