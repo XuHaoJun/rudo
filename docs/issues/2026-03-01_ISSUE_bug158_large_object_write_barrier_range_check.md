@@ -1,7 +1,7 @@
 # [Bug]: large_object_map 範圍檢查錯誤導致寫入屏障漏標大型物件
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
