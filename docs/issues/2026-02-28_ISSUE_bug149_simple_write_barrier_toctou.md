@@ -1,7 +1,7 @@
 # [Bug]: simple_write_barrier TOCTOU - has_gen_old_flag called without caching
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -61,21 +61,30 @@ if (*h_ptr).generation == 0 && !has_gen_old {
 
 ## 🛠️ 建議修復方案 (Suggested Fix / Remediation)
 
-將 `unified_write_barrier` 的 TOCTOU 修復模式應用於 `simple_write_barrier`：
+## ✅ 已修復 (Fixed)
+
+The fix was applied in `heap.rs` lines 2663-2670 and 2685-2693:
 
 ```rust
-// 2664 行附近
+// 2663-2670 行附近 - 快取 flag 避免 TOCTOU
+let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+// Cache flag to avoid TOCTOU between check and barrier (bug149).
 let has_gen_old = (*gc_box_addr).has_gen_old_flag();
 if (*h_ptr).generation == 0 && !has_gen_old {
     return;
 }
 
-// 2687 行附近  
+// 2685-2693 行附近
+let gc_box_addr =
+    (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+// Cache flag to avoid TOCTOU between check and barrier (bug149).
 let has_gen_old = (*gc_box_addr).has_gen_old_flag();
 if (*h.as_ptr()).generation == 0 && !has_gen_old {
     return;
 }
 ```
+
+This matches the fix pattern from bug133 in `unified_write_barrier`.
 
 ---
 

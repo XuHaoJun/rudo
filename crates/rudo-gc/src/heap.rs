@@ -2661,7 +2661,9 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
                     let h_ptr = head_addr as *mut PageHeader;
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
-                    if (*h_ptr).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
+                    // Cache flag to avoid TOCTOU between check and barrier (bug149).
+                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                    if (*h_ptr).generation == 0 && !has_gen_old {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -2684,7 +2686,9 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-                    if (*h.as_ptr()).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
+                    // Cache flag to avoid TOCTOU between check and barrier (bug149).
+                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
                         return;
                     }
                     (h, index)
