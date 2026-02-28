@@ -1,7 +1,7 @@
 # [Bug]: unified_write_barrier 缺少 has_gen_old_flag 快取導致 TOCTOU
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -106,6 +106,30 @@ gen_old flag 的設計是為了 early-exit 優化，但必須正確處理 TOCTOU
 
 ## 驗證準則
 
-- [ ] 確認 `unified_write_barrier` 中有兩處未快取的位置
-- [ ] 檢查其他 barrier 函數是否有相同問題
-- [ ] 確認修復後行為與 `gc_cell_validate_and_barrier` 一致
+- [x] 確認 `unified_write_barrier` 中有兩處未快取的位置
+- [x] 檢查其他 barrier 函數是否有相同問題
+- [x] 確認修復後行為與 `gc_cell_validate_and_barrier` 一致
+
+---
+
+## 修復內容 (2026-02-28)
+
+在 `crates/rudo-gc/src/heap.rs` 中修復：
+
+1. **`unified_write_barrier`** (lines 2853, 2876): 新增 `has_gen_old_flag()` 快取
+2. **`incremental_write_barrier`** (line 2947): 發現也有相同問題，一併修復
+
+修復方式：將 inline 的 `has_gen_old_flag()` 調用改為先快取結果，再使用快取變數。
+
+```rust
+// 修復前
+if (*h_ptr).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
+    return;
+}
+
+// 修復後
+let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+if (*h_ptr).generation == 0 && !has_gen_old {
+    return;
+}
+```

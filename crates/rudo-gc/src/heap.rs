@@ -2850,7 +2850,9 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     }
                     let h_ptr = head_addr as *mut PageHeader;
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
-                    if (*h_ptr).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
+                    // Cache flag to avoid TOCTOU between check and barrier (bug133).
+                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                    if (*h_ptr).generation == 0 && !has_gen_old {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -2873,7 +2875,9 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-                    if (*h.as_ptr()).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
+                    // Cache flag to avoid TOCTOU between check and barrier (bug133).
+                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
                         return;
                     }
                     (h, index)
@@ -2938,9 +2942,11 @@ pub fn incremental_write_barrier(ptr: *const u8) {
             }
 
             // GEN_OLD early-exit: skip only if page young AND object has no gen_old_flag (bug71).
+            // Cache flag to avoid TOCTOU between check and barrier (bug133).
             let gc_box_addr =
                 (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-            if (*header.as_ptr()).generation == 0 && !(*gc_box_addr).has_gen_old_flag() {
+            let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+            if (*header.as_ptr()).generation == 0 && !has_gen_old {
                 return;
             }
 
