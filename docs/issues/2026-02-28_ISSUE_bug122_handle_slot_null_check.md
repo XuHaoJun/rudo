@@ -1,7 +1,7 @@
 # [Bug]: Handle slot 缺少 null 檢查導致潛在 UAF
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
