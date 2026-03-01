@@ -361,10 +361,11 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Clear `GEN_OLD_FLAG`. Used when deallocating so reused slots don't inherit stale state.
+    /// Uses `Release` ordering to synchronize with `has_gen_old_flag()` (Acquire).
     #[inline]
     pub(crate) fn clear_gen_old(&self) {
         self.weak_count
-            .fetch_and(!Self::GEN_OLD_FLAG, Ordering::Relaxed);
+            .fetch_and(!Self::GEN_OLD_FLAG, Ordering::Release);
     }
 
     /// Clear `DEAD_FLAG`. Used when reusing a slot so the new object is not incorrectly
