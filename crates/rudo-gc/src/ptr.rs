@@ -507,6 +507,12 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if !gc_box.try_inc_ref_if_nonzero() {
                 return None;
             }
+            // Post-CAS safety check: verify object wasn't dropped between check and CAS
+            // (same pattern as Weak::upgrade)
+            if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                GcBox::dec_ref(ptr.as_ptr());
+                return None;
+            }
             Some(Gc {
                 ptr: AtomicNullable::new(ptr),
                 _marker: PhantomData,
@@ -631,6 +637,12 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             // ref_count > 0: use atomic try_inc_ref_if_nonzero to avoid TOCTOU with
             // concurrent dec_ref (another thread could drop last ref between check and inc_ref)
             if !gc_box.try_inc_ref_if_nonzero() {
+                return None;
+            }
+            // Post-CAS safety check: verify object wasn't dropped between check and CAS
+            // (same pattern as Weak::try_upgrade)
+            if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                GcBox::dec_ref(ptr.as_ptr());
                 return None;
             }
             crate::gc::notify_created_gc();
