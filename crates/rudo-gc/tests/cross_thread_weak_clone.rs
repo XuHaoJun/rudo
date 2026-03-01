@@ -273,8 +273,8 @@ fn test_weak_clone_wrong_thread_panics() {
 
 /// Test that clone is allowed from any thread when origin has terminated (bug156).
 ///
-/// WeakCrossThreadHandle::clone() should allow cloning from any thread when the
-/// origin thread has exited (orphan handle), matching GcHandle::clone() behavior.
+/// `WeakCrossThreadHandle::clone()` should allow cloning from any thread when the
+/// origin thread has exited (orphan handle), matching `GcHandle::clone()` behavior.
 #[test]
 fn test_weak_clone_after_origin_exits() {
     let weak: rudo_gc::handles::WeakCrossThreadHandle<TestData> = std::thread::spawn(|| {
