@@ -52,10 +52,11 @@ use crate::Trace;
 
 mod private {}
 
-/// Records old GC pointer values to SATB buffer before mutation (when incremental marking is active).
+/// Records old GC pointer values to SATB buffer with pre-cached barrier state.
+/// This avoids TOCTOU by using the cached state instead of re-checking.
 #[inline]
-fn record_satb_old_values<T: GcCapture + ?Sized>(value: &T) {
-    if !is_incremental_marking_active() {
+fn record_satb_old_values_with_state<T: GcCapture + ?Sized>(value: &T, incremental_active: bool) {
+    if !incremental_active {
         return;
     }
     let mut gc_ptrs = Vec::with_capacity(32);
@@ -133,12 +134,13 @@ pub struct GcRwLock<T: ?Sized> {
 
 impl<T: ?Sized> GcRwLock<T> {
     #[inline]
-    fn trigger_write_barrier(&self) {
-        let ptr = std::ptr::from_ref(self).cast::<u8>();
-
-        let incremental_active = is_incremental_marking_active();
-        let generational_active = is_generational_barrier_active();
+    fn trigger_write_barrier_with_state(
+        &self,
+        generational_active: bool,
+        incremental_active: bool,
+    ) {
         if generational_active || incremental_active {
+            let ptr = std::ptr::from_ref(self).cast::<u8>();
             crate::heap::unified_write_barrier(ptr, incremental_active);
         }
     }
@@ -249,9 +251,12 @@ impl<T: ?Sized> GcRwLock<T> {
     where
         T: GcCapture,
     {
+        let incremental_active = is_incremental_marking_active();
+        let generational_active = is_generational_barrier_active();
+
         let guard = self.inner.write();
-        record_satb_old_values(&*guard);
-        self.trigger_write_barrier();
+        record_satb_old_values_with_state(&*guard, incremental_active);
+        self.trigger_write_barrier_with_state(generational_active, incremental_active);
         GcRwLockWriteGuard {
             guard,
             _marker: PhantomData,
@@ -286,9 +291,12 @@ impl<T: ?Sized> GcRwLock<T> {
     where
         T: GcCapture,
     {
+        let incremental_active = is_incremental_marking_active();
+        let generational_active = is_generational_barrier_active();
+
         self.inner.try_write().map(|guard| {
-            record_satb_old_values(&*guard);
-            self.trigger_write_barrier();
+            record_satb_old_values_with_state(&*guard, incremental_active);
+            self.trigger_write_barrier_with_state(generational_active, incremental_active);
             GcRwLockWriteGuard {
                 guard,
                 _marker: PhantomData,
@@ -465,12 +473,13 @@ pub struct GcMutex<T: ?Sized> {
 
 impl<T: ?Sized> GcMutex<T> {
     #[inline]
-    fn trigger_write_barrier(&self) {
-        let ptr = std::ptr::from_ref(self).cast::<u8>();
-
-        let incremental_active = is_incremental_marking_active();
-        let generational_active = is_generational_barrier_active();
+    fn trigger_write_barrier_with_state(
+        &self,
+        generational_active: bool,
+        incremental_active: bool,
+    ) {
         if generational_active || incremental_active {
+            let ptr = std::ptr::from_ref(self).cast::<u8>();
             crate::heap::unified_write_barrier(ptr, incremental_active);
         }
     }
@@ -526,9 +535,12 @@ impl<T: ?Sized> GcMutex<T> {
     where
         T: GcCapture,
     {
+        let incremental_active = is_incremental_marking_active();
+        let generational_active = is_generational_barrier_active();
+
         let guard = self.inner.lock();
-        record_satb_old_values(&*guard);
-        self.trigger_write_barrier();
+        record_satb_old_values_with_state(&*guard, incremental_active);
+        self.trigger_write_barrier_with_state(generational_active, incremental_active);
         GcMutexGuard {
             guard,
             _marker: PhantomData,
@@ -561,9 +573,12 @@ impl<T: ?Sized> GcMutex<T> {
     where
         T: GcCapture,
     {
+        let incremental_active = is_incremental_marking_active();
+        let generational_active = is_generational_barrier_active();
+
         self.inner.try_lock().map(|guard| {
-            record_satb_old_values(&*guard);
-            self.trigger_write_barrier();
+            record_satb_old_values_with_state(&*guard, incremental_active);
+            self.trigger_write_barrier_with_state(generational_active, incremental_active);
             GcMutexGuard {
                 guard,
                 _marker: PhantomData,
