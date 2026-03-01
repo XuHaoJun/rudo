@@ -1197,8 +1197,23 @@ impl<T: Trace> Gc<T> {
             {
                 return None;
             }
+            // Avoid TOCTOU with concurrent drop: atomically increment only when ref_count > 0.
+            if !(*gc_box_ptr).try_inc_ref_if_nonzero() {
+                return None;
+            }
+            // Post-increment safety check: dropping/dead may flip between pre-check and ref bump.
+            if (*gc_box_ptr).has_dead_flag()
+                || (*gc_box_ptr).dropping_state() != 0
+                || (*gc_box_ptr).is_under_construction()
+            {
+                GcBox::dec_ref(gc_box_ptr);
+                return None;
+            }
         }
-        Some(gc.clone())
+        Some(Self {
+            ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(gc_box_ptr) }),
+            _marker: PhantomData,
+        })
     }
 
     /// Get a raw pointer to the data.

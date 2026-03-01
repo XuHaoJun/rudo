@@ -130,8 +130,10 @@ impl GcRootSet {
             })
             .copied()
             .collect();
-        drop(roots);
+        // Clear dirty while still holding the lock so concurrent register/unregister
+        // operations cannot have their updates overwritten.
         self.dirty.store(false, Ordering::Release);
+        drop(roots);
         valid_roots
     }
 

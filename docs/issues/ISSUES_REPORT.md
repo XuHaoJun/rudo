@@ -3,16 +3,16 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 137
-- **Open**: 24
+- **Fixed**: 146
+- **Open**: 15
 - **Invalid**: 11
 - **Verified**: 4
 
 ### By Tags
-- **Verified**: 143
-- **Not Verified**: 11
+- **Verified**: 149
+- **Not Verified**: 13
 - **Not Reproduced**: 8
-- **Unverified**: 14
+- **Unverified**: 6
 
 ## All Issues
 
@@ -163,17 +163,17 @@
 | [2026-02-27_ISSUE_bug134_incremental_enabled_relaxed_ordering.md](./2026-02-27_ISSUE_bug134_incremental_enabled_relaxed_ordering.md) | IncrementalMarkState::enabled 使用 Relaxed ordering 導致 write_barrier_needed 可能返回過時值 | Fixed | Verified |
 | [2026-02-27_ISSUE_bug135_lazy_sweep_gen_old_flag_not_cleared.md](./2026-02-27_ISSUE_bug135_lazy_sweep_gen_old_flag_not_cleared.md) | Lazy Sweep 回收 Slots 時未清除 GEN_OLD_FLAG，導致 slot 重用後 barrier 行為錯誤 | Fixed | Verified |
 | [2026-02-27_ISSUE_bug136_mark_object_missing_is_allocated_check.md](./2026-02-27_ISSUE_bug136_mark_object_missing_is_allocated_check.md) | mark_object 缺少 is_allocated 檢查 - 處理 cross-thread SATB 時可能 UAF | Fixed | Verified |
-| [2026-02-27_ISSUE_bug137_gcvisitor_visit_missing_is_allocated_check.md](./2026-02-27_ISSUE_bug137_gcvisitor_visit_missing_is_allocated_check.md) | GcVisitor::visit 缺少 is_allocated 檢查 - 可能標記已釋放 slot | Open | Unverified |
-| [2026-02-27_ISSUE_bug138_mark_object_minor_missing_is_allocated_check.md](./2026-02-27_ISSUE_bug138_mark_object_minor_missing_is_allocated_check.md) | mark_object_minor 缺少 is_allocated 檢查 - 與 mark_object (bug136) 相同的模式 | Open | Unverified |
-| [2026-02-27_ISSUE_bug139_process_worklist_missing_checks.md](./2026-02-27_ISSUE_bug139_process_worklist_missing_checks.md) | process_worklist 缺少 is_allocated 和 is_marked 檢查 - 可能標記已釋放 slot | Open | Unverified |
-| [2026-02-27_ISSUE_bug140_gc_try_clone_toctou_panic.md](./2026-02-27_ISSUE_bug140_gc_try_clone_toctou_panic.md) | Gc::try_clone 存在 TOCTOU 導致可能 panic 而非返回 None | Open | Unverified |
+| [2026-02-27_ISSUE_bug137_gcvisitor_visit_missing_is_allocated_check.md](./2026-02-27_ISSUE_bug137_gcvisitor_visit_missing_is_allocated_check.md) | GcVisitor::visit 缺少 is_allocated 檢查 - 可能標記已釋放 slot | Fixed | Verified |
+| [2026-02-27_ISSUE_bug138_mark_object_minor_missing_is_allocated_check.md](./2026-02-27_ISSUE_bug138_mark_object_minor_missing_is_allocated_check.md) | mark_object_minor 缺少 is_allocated 檢查 - 與 mark_object (bug136) 相同的模式 | Fixed | Verified |
+| [2026-02-27_ISSUE_bug139_process_worklist_missing_checks.md](./2026-02-27_ISSUE_bug139_process_worklist_missing_checks.md) | process_worklist 缺少 is_allocated 和 is_marked 檢查 - 可能標記已釋放 slot | Fixed | Verified |
+| [2026-02-27_ISSUE_bug140_gc_try_clone_toctou_panic.md](./2026-02-27_ISSUE_bug140_gc_try_clone_toctou_panic.md) | Gc::try_clone 存在 TOCTOU 導致可能 panic 而非返回 None | Fixed | Not Verified |
 | [2026-02-27_ISSUE_bug141_gc_drop_double_drop.md](./2026-02-27_ISSUE_bug141_gc_drop_double_drop.md) | Gc<T> Drop 存在 Double Drop - dec_ref 與 Drop impl 都呼叫 drop_fn | Fixed | Verified |
-| [2026-02-27_ISSUE_bug142_gcrootset_snapshot_dirty_lost_update.md](./2026-02-27_ISSUE_bug142_gcrootset_snapshot_dirty_lost_update.md) | GcRootSet snapshot dirty flag lost update - 新增 root 可能被忽略 | Open | Unverified |
-| [2026-02-27_ISSUE_bug143_clear_gen_old_relaxed_ordering.md](./2026-02-27_ISSUE_bug143_clear_gen_old_relaxed_ordering.md) | GcBox::clear_gen_old 使用 Relaxed Ordering 導致潛在 Race Condition | Open | Unverified |
-| [2026-02-27_ISSUE_bug144_simple_incremental_write_barrier_gen_old_toctou.md](./2026-02-27_ISSUE_bug144_simple_incremental_write_barrier_gen_old_toctou.md) | simple_write_barrier 與 incremental_write_barrier 缺少 has_gen_old_flag 快取導致 TOCTOU | Open | Unverified |
+| [2026-02-27_ISSUE_bug142_gcrootset_snapshot_dirty_lost_update.md](./2026-02-27_ISSUE_bug142_gcrootset_snapshot_dirty_lost_update.md) | GcRootSet snapshot dirty flag lost update - 新增 root 可能被忽略 | Fixed | Not Verified |
+| [2026-02-27_ISSUE_bug143_clear_gen_old_relaxed_ordering.md](./2026-02-27_ISSUE_bug143_clear_gen_old_relaxed_ordering.md) | GcBox::clear_gen_old 使用 Relaxed Ordering 導致潛在 Race Condition | Fixed | Verified |
+| [2026-02-27_ISSUE_bug144_simple_incremental_write_barrier_gen_old_toctou.md](./2026-02-27_ISSUE_bug144_simple_incremental_write_barrier_gen_old_toctou.md) | simple_write_barrier 與 incremental_write_barrier 缺少 has_gen_old_flag 快取導致 TOCTOU | Fixed | Verified |
 | [2026-02-28_ISSUE_bug145_clear_dead_relaxed_ordering.md](./2026-02-28_ISSUE_bug145_clear_dead_relaxed_ordering.md) | GcBox::clear_dead 使用 Relaxed Ordering 導致潛在 Race Condition | Fixed | Verified |
-| [2026-02-28_ISSUE_bug146_gcbox_as_weak_missing_dead_dropping_check.md](./2026-02-28_ISSUE_bug146_gcbox_as_weak_missing_dead_dropping_check.md) | GcBox::as_weak() 缺少 dead_flag / dropping_state 檢查 - 與 Gc::as_weak() 行為不一致 | Open | Verified |
-| [2026-02-28_ISSUE_bug147_gchandle_threadid_reuse_vulnerability.md](./2026-02-28_ISSUE_bug147_gchandle_threadid_reuse_vulnerability.md) | GcHandle 依賴 ThreadId 進行線程認證 - ThreadId 重用導致安全漏洞 | Open | Unverified |
+| [2026-02-28_ISSUE_bug146_gcbox_as_weak_missing_dead_dropping_check.md](./2026-02-28_ISSUE_bug146_gcbox_as_weak_missing_dead_dropping_check.md) | GcBox::as_weak() 缺少 dead_flag / dropping_state 檢查 - 與 Gc::as_weak() 行為不一致 | Fixed | Verified |
+| [2026-02-28_ISSUE_bug147_gchandle_threadid_reuse_vulnerability.md](./2026-02-28_ISSUE_bug147_gchandle_threadid_reuse_vulnerability.md) | GcHandle 依賴 ThreadId 進行線程認證 - ThreadId 重用導致安全漏洞 | Fixed | Verified |
 | [2026-02-28_ISSUE_bug148_async_handle_get_scope_toctou.md](./2026-02-28_ISSUE_bug148_async_handle_get_scope_toctou.md) | AsyncHandle::get() TOCTOU - is_scope_active 檢查與 slot 存取非原子操作導致 Use-After-Free | Open | Unverified |
 | [2026-02-28_ISSUE_bug149_simple_write_barrier_toctou.md](./2026-02-28_ISSUE_bug149_simple_write_barrier_toctou.md) | simple_write_barrier TOCTOU - has_gen_old_flag called without caching | Verified | Verified |
 | [2026-02-28_ISSUE_bug150_mark_dead_under_construction_relaxed.md](./2026-02-28_ISSUE_bug150_mark_dead_under_construction_relaxed.md) | GcBox::mark_dead 使用 Relaxed Ordering 清除 UNDER_CONSTRUCTION_FLAG 導致潜在 Race Condition | Open | Unverified |

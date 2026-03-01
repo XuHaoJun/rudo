@@ -1,6 +1,6 @@
 # [Bug]: GcBox::as_weak() 缺少 dead_flag / dropping_state 檢查 - 與 Gc::as_weak() 行為不一致
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -116,3 +116,19 @@ pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
 
 **Geohot (Exploit 觀點):**
 通過精心設計的時序，可能在物件死亡後仍然增加 weak count，進而影響 GC 的行為。
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Already fixed.
+
+Static analysis confirms the fix is already present in `ptr.rs` at line 424. The current `GcBox::as_weak()` implementation correctly checks all three conditions before calling `inc_weak()`:
+
+```rust
+if self.is_under_construction() || self.has_dead_flag() || self.dropping_state() != 0 {
+    return GcBoxWeakRef { ptr: AtomicNullable::null() };
+}
+```
+
+Behavior now matches `Gc::as_weak()` (line 1394) as described in the issue. No code changes required.

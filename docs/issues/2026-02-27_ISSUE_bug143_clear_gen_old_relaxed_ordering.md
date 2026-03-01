@@ -1,7 +1,7 @@
 # [Bug]: GcBox::clear_gen_old 使用 Relaxed Ordering 導致潛在 Race Condition
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -158,3 +158,11 @@ pub(crate) fn clear_gen_old(&self) {
 2. 尝试影响 GC 的行为时序
 
 但實際利用難度很高，需要精確的時序控制。
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Already fixed.
+
+`GcBox::clear_gen_old()` in `ptr.rs` (line 368) already uses `Ordering::Release`, not `Ordering::Relaxed` as the issue described. The Release/Acquire pairing between `clear_gen_old()` and `has_gen_old_flag()` is correct and documented in the inline comments (lines 363–364). No code changes needed.

@@ -1,7 +1,7 @@
 # [Bug]: process_worklist 缺少 is_allocated 和 is_marked 檢查 - 可能標記已釋放 slot
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -143,3 +143,11 @@ pub fn process_worklist(&mut self) {
 2. 造成記憶體洩漏
 3. 破壞 heap metadata 導致後續分配問題
 4. 在極端情況下，可能實現 use-after-free
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Fixed (together with bug137).
+
+Added `is_allocated(idx)` and `is_marked(idx)` guards in `process_worklist` (`gc/gc.rs`) before the `set_mark` call and the `trace_fn` invocation. This prevents calling `trace_fn` on a slot that was reclaimed by lazy sweep between the time the item was enqueued and the time it was dequeued. Also eliminates the double-counting in `objects_marked` that occurred when an object was marked by `GcVisitor::visit` (which already called `set_mark`) and then re-marked in `process_worklist`. Full test suite passes; clippy clean.

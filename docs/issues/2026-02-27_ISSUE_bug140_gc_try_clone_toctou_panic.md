@@ -1,7 +1,7 @@
 # [Bug]: Gc::try_clone 存在 TOCTOU 導致可能 panic 而非返回 None
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -177,3 +177,13 @@ pub fn try_clone(gc: &Self) -> Option<Self> {
 
 **Geohot (Exploit 攻擊觀點):**
 雖然目前主要影響是 availability（可用性），但在極端情況下攻擊者可能利用這個 panic 來進行 DoS 攻擊。
+
+---
+
+## ✅ Resolution Note (2026-03-01)
+
+- Updated `Gc::try_clone` in `crates/rudo-gc/src/ptr.rs` to avoid calling `clone()` after a separate pre-check.
+- `try_clone` now performs an atomic `try_inc_ref_if_nonzero()` and then runs a post-increment state check (`dead` / `dropping` / `under construction`).
+- If state changes after increment, it rolls back via `GcBox::dec_ref(...)` and returns `None` instead of panicking.
+- Targeted verification run: `cargo test -p rudo-gc --test basic test_try_clone -- --test-threads=1` passed.
+- The exact race window remains hard to deterministically reproduce with a stable test in current harness, so tag remains `Not Verified`.

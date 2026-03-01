@@ -1,7 +1,7 @@
 # [Bug]: GcVisitor::visit 缺少 is_allocated 檢查 - 可能標記已釋放 slot
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -146,3 +146,11 @@ impl Visitor for GcVisitor {
 2. 造成記憶體洩漏
 3. 破壞 heap metadata 導致後續分配問題
 4. 在極端情況下，可能實現 use-after-free
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Fixed.
+
+Added `is_allocated(idx)` guard in `GcVisitor::visit` (`gc/gc.rs`) before the existing `is_marked` check, matching the pattern used in every other marking helper (`mark_object`, `mark_and_trace_incremental`, `mark_root_for_snapshot`, `GcVisitorConcurrent::route_reference`). The guard returns early (null Weak-style) without marking or pushing the pointer when the slot has been reclaimed by lazy sweep. Bug139 (`process_worklist`) was also fixed in the same commit — `is_allocated` and `is_marked` guards added before `set_mark` and `trace_fn` calls. Full test suite passes; clippy clean.

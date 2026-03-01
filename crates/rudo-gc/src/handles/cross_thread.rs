@@ -20,9 +20,10 @@
 //!    `resolve()`, which enforces origin-thread affinity at runtime.
 //!
 //! 2. **Origin-thread enforcement is a hard check, not advisory.** `resolve()`
-//!    compares `std::thread::current().id()` against the stored `origin_thread`.
-//!    This is a panic, not UB — the invariant is enforced before any access
-//!    to `T`.
+//!    first verifies the origin TCB is still alive (the `Weak<ThreadControlBlock>`
+//!    upgrade is the authoritative liveness check — `ThreadId`s can be reused after
+//!    termination), then compares `std::thread::current().id()`. This is a panic,
+//!    not UB — the invariant is enforced before any access to `T`.
 //!
 //! 3. **Root registration keeps the object alive.** The handle holds an
 //!    `Arc<ThreadControlBlock>` and the root entry is stored in the TCB's
@@ -138,8 +139,8 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// # Panics
     ///
     /// Panics if called from a thread other than the origin thread. This includes
-    /// the case where the origin thread has already terminated, since the current
-    /// thread can never match a terminated thread's ID.
+    /// the case where the origin thread has already terminated; the TCB liveness
+    /// check is the authoritative guard (`ThreadId`s can be reused after termination).
     ///
     /// **When the origin thread may have terminated** (e.g., handles passed to a
     /// main thread after a worker joins), use [`try_resolve()`] instead to get
@@ -161,12 +162,22 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// assert_eq!(resolved.value, 42);
     /// ```
     #[track_caller]
-    #[allow(clippy::significant_drop_tightening, clippy::option_if_let_else)] // Lock held through inc_ref; if-let clearer
+    #[allow(clippy::significant_drop_tightening)] // Lock held through inc_ref
     pub fn resolve(&self) -> Gc<T> {
         assert!(
             self.handle_id != HandleId::INVALID,
             "GcHandle::resolve: handle has been unregistered"
         );
+        // Check TCB liveness BEFORE the ThreadId comparison. ThreadIds can be reused
+        // after thread termination, so a new thread with the same ThreadId would
+        // otherwise bypass the origin-thread check and access an orphaned handle.
+        let Some(tcb) = self.origin_tcb.upgrade() else {
+            panic!(
+                "GcHandle::resolve: origin thread has terminated (origin={:?}). \
+                 Use try_resolve() to handle this case gracefully.",
+                self.origin_thread
+            );
+        };
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,
@@ -176,50 +187,26 @@ impl<T: Trace + 'static> GcHandle<T> {
             std::thread::current().id(),
         );
         // Hold lock during check+use to prevent TOCTOU with unregister.
-        if let Some(tcb) = self.origin_tcb.upgrade() {
-            let roots = tcb.cross_thread_roots.lock().unwrap();
-            if !roots.strong.contains_key(&self.handle_id) {
-                panic!("GcHandle::resolve: handle has been unregistered");
-            }
-            unsafe {
-                let gc_box = &*self.ptr.as_ptr();
-                assert!(
-                    !gc_box.is_under_construction(),
-                    "GcHandle::resolve: object is under construction"
-                );
-                assert!(
-                    !gc_box.has_dead_flag(),
-                    "GcHandle::resolve: object has been dropped (dead flag set)"
-                );
-                assert!(
-                    gc_box.dropping_state() == 0,
-                    "GcHandle::resolve: object is being dropped"
-                );
-                gc_box.inc_ref();
-                Gc::from_raw(self.ptr.as_ptr() as *const u8)
-            }
-        } else {
-            let orphan = heap::lock_orphan_roots();
-            if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
-                panic!("GcHandle::resolve: handle has been unregistered");
-            }
-            unsafe {
-                let gc_box = &*self.ptr.as_ptr();
-                assert!(
-                    !gc_box.is_under_construction(),
-                    "GcHandle::resolve: object is under construction"
-                );
-                assert!(
-                    !gc_box.has_dead_flag(),
-                    "GcHandle::resolve: object has been dropped (dead flag set)"
-                );
-                assert!(
-                    gc_box.dropping_state() == 0,
-                    "GcHandle::resolve: object is being dropped"
-                );
-                gc_box.inc_ref();
-                Gc::from_raw(self.ptr.as_ptr() as *const u8)
-            }
+        let roots = tcb.cross_thread_roots.lock().unwrap();
+        if !roots.strong.contains_key(&self.handle_id) {
+            panic!("GcHandle::resolve: handle has been unregistered");
+        }
+        unsafe {
+            let gc_box = &*self.ptr.as_ptr();
+            assert!(
+                !gc_box.is_under_construction(),
+                "GcHandle::resolve: object is under construction"
+            );
+            assert!(
+                !gc_box.has_dead_flag(),
+                "GcHandle::resolve: object has been dropped (dead flag set)"
+            );
+            assert!(
+                gc_box.dropping_state() == 0,
+                "GcHandle::resolve: object is being dropped"
+            );
+            gc_box.inc_ref();
+            Gc::from_raw(self.ptr.as_ptr() as *const u8)
         }
     }
 
@@ -249,47 +236,33 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// }
     /// ```
     #[must_use]
-    #[allow(clippy::significant_drop_tightening, clippy::option_if_let_else)] // Lock held through inc_ref; if-let clearer
+    #[allow(clippy::significant_drop_tightening)] // Lock held through inc_ref
     pub fn try_resolve(&self) -> Option<Gc<T>> {
         if self.handle_id == HandleId::INVALID {
             return None;
         }
+        // Check TCB liveness BEFORE the ThreadId comparison. `ThreadId`s can be reused
+        // after thread termination, so a new thread with the same `ThreadId` would
+        // otherwise bypass the origin-thread check and access an orphaned handle.
+        let tcb = self.origin_tcb.upgrade()?;
         if std::thread::current().id() != self.origin_thread {
             return None;
         }
         // Hold lock during check+use to prevent TOCTOU with unregister.
-        if let Some(tcb) = self.origin_tcb.upgrade() {
-            let roots = tcb.cross_thread_roots.lock().unwrap();
-            if !roots.strong.contains_key(&self.handle_id) {
+        let roots = tcb.cross_thread_roots.lock().unwrap();
+        if !roots.strong.contains_key(&self.handle_id) {
+            return None;
+        }
+        unsafe {
+            let gc_box = &*self.ptr.as_ptr();
+            if gc_box.is_under_construction()
+                || gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+            {
                 return None;
             }
-            unsafe {
-                let gc_box = &*self.ptr.as_ptr();
-                if gc_box.is_under_construction()
-                    || gc_box.has_dead_flag()
-                    || gc_box.dropping_state() != 0
-                {
-                    return None;
-                }
-                gc_box.inc_ref();
-                Some(Gc::from_raw(self.ptr.as_ptr() as *const u8))
-            }
-        } else {
-            let orphan = heap::lock_orphan_roots();
-            if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
-                return None;
-            }
-            unsafe {
-                let gc_box = &*self.ptr.as_ptr();
-                if gc_box.is_under_construction()
-                    || gc_box.has_dead_flag()
-                    || gc_box.dropping_state() != 0
-                {
-                    return None;
-                }
-                gc_box.inc_ref();
-                Some(Gc::from_raw(self.ptr.as_ptr() as *const u8))
-            }
+            gc_box.inc_ref();
+            Some(Gc::from_raw(self.ptr.as_ptr() as *const u8))
         }
     }
 
@@ -490,6 +463,15 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     /// fallible resolution.
     #[track_caller]
     pub fn resolve(&self) -> Option<Gc<T>> {
+        // Check TCB liveness BEFORE the ThreadId comparison to prevent ThreadId
+        // reuse from bypassing origin-thread affinity after the thread terminates.
+        if self.origin_tcb.upgrade().is_none() {
+            panic!(
+                "WeakCrossThreadHandle::resolve: origin thread has terminated (origin={:?}). \
+                 Use try_resolve() instead.",
+                self.origin_thread
+            );
+        }
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,
@@ -506,6 +488,10 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     /// Use this when the origin thread may have terminated.
     #[must_use]
     pub fn try_resolve(&self) -> Option<Gc<T>> {
+        // Check TCB liveness BEFORE the ThreadId comparison. `ThreadId`s can be reused
+        // after thread termination, so a new thread with the same `ThreadId` would
+        // otherwise bypass the origin-thread check.
+        self.origin_tcb.upgrade()?;
         if std::thread::current().id() != self.origin_thread {
             return None;
         }
@@ -540,6 +526,15 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     /// when it has terminated). Prefer [`try_resolve()`] when origin may be dead.
     #[track_caller]
     pub fn try_upgrade(&self) -> Option<Gc<T>> {
+        // Check TCB liveness BEFORE the ThreadId comparison to prevent ThreadId
+        // reuse from bypassing origin-thread affinity after the thread terminates.
+        if self.origin_tcb.upgrade().is_none() {
+            panic!(
+                "WeakCrossThreadHandle::try_upgrade: origin thread has terminated (origin={:?}). \
+                 Use try_resolve() instead.",
+                self.origin_thread
+            );
+        }
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,

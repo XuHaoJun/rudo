@@ -1,7 +1,7 @@
 # [Bug]: simple_write_barrier 與 incremental_write_barrier 缺少 has_gen_old_flag 快取導致 TOCTOU
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -138,3 +138,16 @@ gen_old flag 的設計是為了 early-exit 優化，但必須正確處理 TOCTOU
 
 - Bug133: `unified_write_barrier` TOCTOU - 相同模式，但不同函數
 - Bug114: `gc_cell_validate_and_barrier` TOCTOU 修復 - 正確的實現範例
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Already fixed.
+
+Static analysis of `heap.rs` confirms the fix is in place:
+
+- `simple_write_barrier` (heap.rs:2681, 2706): `has_gen_old_flag()` is cached into `has_gen_old` before the early-exit check in both the large-object path and the regular-object path. Code comments reference "bug149".
+- `incremental_write_barrier` (heap.rs:2968): same caching pattern applied. Code comment references "bug133".
+
+Both functions now match the pattern established by `gc_cell_validate_and_barrier` (bug114). No source code changes required.

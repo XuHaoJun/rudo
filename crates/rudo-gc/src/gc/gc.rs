@@ -2068,6 +2068,10 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
         let offset = ptr_addr as usize - data_start;
         let index = offset / block_size;
 
+        if !(*header.as_ptr()).is_allocated(index) {
+            return;
+        }
+
         if (*header.as_ptr()).is_marked(index) {
             return;
         }
@@ -2932,6 +2936,14 @@ impl GcVisitor {
                 }
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+                    // Skip freed slots (lazy sweep may have reclaimed this between enqueue and
+                    // processing) and already-marked objects to avoid double-counting.
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        continue;
+                    }
+                    if (*header.as_ptr()).is_marked(idx) {
+                        continue;
+                    }
                     (*header.as_ptr()).set_mark(idx);
                     self.objects_marked += 1;
                 } else {
@@ -2967,6 +2979,11 @@ impl Visitor for GcVisitor {
                 }
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
+                    // Skip if slot was swept and potentially reused; avoids UAF when lazy sweep
+                    // runs concurrently with incremental marking (trace_and_mark_object path).
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        return;
+                    }
                     if (*header.as_ptr()).is_marked(idx) {
                         return;
                     }
@@ -3338,5 +3355,49 @@ mod tests {
         crate::collect_full();
 
         assert!(DROP_COUNT.with(std::cell::Cell::get) >= 1);
+    }
+
+    #[test]
+    fn test_mark_object_minor_skips_unallocated_slot() {
+        clear_test_roots();
+
+        let gc = crate::Gc::new(123_i32);
+        let raw = crate::Gc::internal_ptr(&gc);
+        #[allow(clippy::cast_ptr_alignment)]
+        // raw is GcBox<i32>*, cast to GcBox<()>* for erased type
+        let ptr = NonNull::new(raw as *mut GcBox<()>).expect("Gc::internal_ptr must be non-null");
+
+        let (objects_marked, was_marked_while_unallocated) = unsafe {
+            let header = crate::heap::ptr_to_page_header(raw);
+            let idx =
+                crate::heap::ptr_to_object_index(raw).expect("pointer must map to object index");
+
+            (*header.as_ptr()).clear_mark(idx);
+            (*header.as_ptr()).clear_allocated(idx);
+
+            let mut visitor = GcVisitor::new(VisitorKind::Minor);
+            mark_object_minor(ptr, &mut visitor);
+
+            let marked = (*header.as_ptr()).is_marked(idx);
+            let count = visitor.objects_marked();
+
+            // Restore page/object state before assertions so panic won't leave heap corrupted.
+            (*header.as_ptr()).set_allocated(idx);
+            (*header.as_ptr()).clear_mark(idx);
+
+            (count, marked)
+        };
+
+        assert_eq!(
+            objects_marked, 0,
+            "mark_object_minor must not increment count for unallocated slots"
+        );
+        assert!(
+            !was_marked_while_unallocated,
+            "mark_object_minor must not set mark bit for unallocated slots"
+        );
+
+        drop(gc);
+        clear_test_roots();
     }
 }

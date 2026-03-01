@@ -1,7 +1,7 @@
 # [Bug]: mark_object_minor 缺少 is_allocated 檢查 - 與 mark_object (bug136) 相同的模式
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -147,3 +147,20 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
 2. 造成記憶體洩漏
 3. 破壞 heap metadata 導致後續分配問題
 4. 在極端情況下，可能實現 use-after-free
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Fixed and verified.
+
+Applied a minimal guard in `mark_object_minor` (`crates/rudo-gc/src/gc/gc.rs`) to skip slots where `!is_allocated(index)` before checking/setting mark bits.
+
+Added regression unit test `test_mark_object_minor_skips_unallocated_slot` in `gc/gc.rs` that:
+- Simulates a reclaimed slot by clearing `allocated` on a valid object index.
+- Calls `mark_object_minor` on that stale pointer.
+- Verifies no mark bit is set and `objects_marked` is not incremented.
+
+Verification:
+- `cargo test -p rudo-gc --lib test_mark_object_minor_skips_unallocated_slot -- --test-threads=1` ✅
+- `cargo test -p rudo-gc --lib test_minor_collection -- --test-threads=1` ✅
