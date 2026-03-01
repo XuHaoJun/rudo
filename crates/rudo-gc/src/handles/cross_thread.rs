@@ -553,12 +553,16 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
 impl<T: Trace + 'static> Clone for WeakCrossThreadHandle<T> {
     #[track_caller]
     fn clone(&self) -> Self {
-        assert_eq!(
-            std::thread::current().id(),
-            self.origin_thread,
-            "WeakCrossThreadHandle::clone() must be called on the origin thread. \
-             Clone from a different thread is not allowed."
-        );
+        // Require origin thread when origin is still alive (consistent with resolve()).
+        // When origin has terminated (orphaned handle), clone is allowed from any thread.
+        if self.origin_tcb.upgrade().is_some() {
+            assert_eq!(
+                std::thread::current().id(),
+                self.origin_thread,
+                "WeakCrossThreadHandle::clone() must be called on the origin thread. \
+                 Clone from a different thread is not allowed."
+            );
+        }
         Self {
             weak: self.weak.clone(),
             origin_tcb: Weak::clone(&self.origin_tcb),
