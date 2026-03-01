@@ -1,7 +1,7 @@
 # [Bug]: Weak::upgrade 缺少第二次檢查導致 TOCTOU
 
-**Status:** Open
-**Tags:** Verified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -133,3 +133,23 @@ if gc_box.ref_count.compare_exchange_weak(...).is_ok() {
 
 **Geohot (Exploit 觀點):**
 這是一個經典的 TOCTOU 漏洞。攻擊者可以透過精確時序控制，在 upgrade 過程中觸發 concurrent drop，導致 use-after-free。
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Invalid — already fixed.
+
+`Weak::upgrade` in `ptr.rs` (lines 1775–1784) already includes the post-CAS safety check:
+
+```rust
+if gc_box.ref_count.compare_exchange_weak(...).is_ok() {
+    if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+        GcBox::dec_ref(ptr.as_ptr());
+        return None;
+    }
+    // ...
+}
+```
+
+The issue incorrectly claimed this check was missing. See bug168 for the actual unfixed case: `Weak::try_upgrade` lacks the same check.

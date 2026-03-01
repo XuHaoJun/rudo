@@ -414,23 +414,14 @@ impl<T: GcCapture + ?Sized> DerefMut for GcRwLockWriteGuard<'_, T> {
 /// ensuring modifications made while holding the lock are visible to the GC.
 impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
-        // Cache barrier state at start to avoid TOCTOU: state may change between check and mark.
-        let barrier_active_at_start =
-            is_generational_barrier_active() || is_incremental_marking_active();
-
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
 
-        // Re-check before mark: if state flipped INACTIVE→ACTIVE, we must still mark.
-        let barrier_active_before_mark =
-            is_generational_barrier_active() || is_incremental_marking_active();
-
-        if barrier_active_at_start || barrier_active_before_mark {
-            for gc_ptr in ptrs {
-                let _ = unsafe {
-                    crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
-                };
-            }
+        // Always mark when we have ptrs to eliminate TOCTOU: barrier state may change between
+        // any check and mark. mark_object_black is idempotent and safe when barrier is inactive.
+        for gc_ptr in ptrs {
+            let _ =
+                unsafe { crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8) };
         }
     }
 }
@@ -670,23 +661,14 @@ impl<T: GcCapture + ?Sized> DerefMut for GcMutexGuard<'_, T> {
 /// ensuring modifications made while holding the lock are visible to the GC.
 impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
     fn drop(&mut self) {
-        // Cache barrier state at start to avoid TOCTOU: state may change between check and mark.
-        let barrier_active_at_start =
-            is_generational_barrier_active() || is_incremental_marking_active();
-
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
 
-        // Re-check before mark: if state flipped INACTIVE→ACTIVE, we must still mark.
-        let barrier_active_before_mark =
-            is_generational_barrier_active() || is_incremental_marking_active();
-
-        if barrier_active_at_start || barrier_active_before_mark {
-            for gc_ptr in ptrs {
-                let _ = unsafe {
-                    crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
-                };
-            }
+        // Always mark when we have ptrs to eliminate TOCTOU: barrier state may change between
+        // any check and mark. mark_object_black is idempotent and safe when barrier is inactive.
+        for gc_ptr in ptrs {
+            let _ =
+                unsafe { crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8) };
         }
     }
 }

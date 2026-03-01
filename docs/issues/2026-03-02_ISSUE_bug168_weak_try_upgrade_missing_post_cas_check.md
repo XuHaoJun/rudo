@@ -1,6 +1,6 @@
 # [Bug]: Weak::try_upgrade 缺少 CAS 後的第二次檢查導致 TOCTOU
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -125,3 +125,23 @@ if gc_box.ref_count.compare_exchange_weak(...).is_ok() {
 
 **Geohot (Exploit 觀點):**
 這是一個經典的 TOCTOU 漏洞。攻擊者可以透過精確時序控制，在 try_upgrade 過程中觸發 concurrent drop，導致 use-after-free。與 `upgrade` 函數相比，`try_upgrade` 額外檢查了 `usize::MAX` 溢位，但卻遺漏了更重要的第二次狀態檢查。
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Fixed.
+
+Added the post-CAS safety check to `Weak::try_upgrade` in `ptr.rs`, matching the pattern already present in `Weak::upgrade`:
+
+```rust
+if gc_box.ref_count.compare_exchange_weak(...).is_ok() {
+    if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+        GcBox::dec_ref(ptr.as_ptr());
+        return None;
+    }
+    // ...
+}
+```
+
+All Weak-related tests pass. TOCTOU race conditions require Miri/ThreadSanitizer for reliable verification; single-threaded tests pass.

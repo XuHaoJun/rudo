@@ -1,7 +1,7 @@
 # [Bug]: GcRwLockWriteGuard 與 GcMutexGuard Drop TOCTOU 導致 Barrier 遺漏
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -131,4 +131,12 @@ impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
 
 **Geohot (Exploit 觀點):**
 雖然這個 bug 很難利用（需要精確的時序控制），但理論上攻擊者可以通過構造特定的執行緒調度來觸發 use-after-free。建議修復此問題以消除這個攻擊面。
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Fixed.
+
+**Fix:** Applied the same pattern as bug160 (GcThreadSafeRefMut::drop): eliminated TOCTOU by always marking when we have captured ptrs, instead of checking barrier state before marking. The check-then-mark pattern had a race window between the second check and the actual mark. `mark_object_black` is idempotent and safe when barrier is inactive, so always marking removes the race entirely. Updated both `GcRwLockWriteGuard::drop` and `GcMutexGuard::drop` in `sync.rs`.
 

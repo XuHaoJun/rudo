@@ -1860,6 +1860,13 @@ impl<T: Trace> Weak<T> {
                     )
                     .is_ok()
                 {
+                    // Post-CAS safety check: same as Weak::upgrade — re-verify after owning a count
+                    if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                        // SAFETY: we just incremented ref_count via successful CAS;
+                        // dec_ref is the correct way to undo it.
+                        GcBox::dec_ref(ptr.as_ptr());
+                        return None;
+                    }
                     crate::gc::notify_created_gc();
                     return Some(Gc {
                         ptr: AtomicNullable::new(ptr),

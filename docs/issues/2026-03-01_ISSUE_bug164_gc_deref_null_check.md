@@ -1,6 +1,6 @@
 # [Bug]: Gc::deref 未檢查 null 指標導致 Null Pointer Dereference
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -139,3 +139,22 @@ GC 實現中的一致性很重要。`Clone` 和 `try_deref` 都檢查 null，但
 
 **Geohot (Exploit 觀點):**
 攻擊者可以透過構造 null Gc 並觸發解引用來造成程式崩潰（DoS）。雖然不太可能直接造成記憶體損壞，但這是一個可利用的穩定觸發點。
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Already fixed.
+
+The fix was applied in a prior commit. The current `Gc::deref` implementation in `ptr.rs` (lines 1523–1536) correctly checks for null before dereferencing:
+
+```rust
+fn deref(&self) -> &Self::Target {
+    let ptr = self.ptr.load(Ordering::Acquire);
+    assert!(!ptr.is_null(), "Gc::deref: cannot dereference a null Gc");
+    let gc_box_ptr = ptr.as_ptr();
+    // ...
+}
+```
+
+Behavior now matches `Clone` and `try_deref` as described in the issue.

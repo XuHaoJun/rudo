@@ -3,14 +3,13 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 157
-- **Open**: 5
-- **Invalid**: 11
+- **Fixed**: 161
+- **Invalid**: 12
 - **Verified**: 4
 
 ### By Tags
-- **Verified**: 157
-- **Not Verified**: 12
+- **Verified**: 158
+- **Not Verified**: 11
 - **Not Reproduced**: 8
 
 ## All Issues
@@ -186,11 +185,11 @@
 | [2026-03-01_ISSUE_bug158_large_object_write_barrier_range_check.md](./2026-03-01_ISSUE_bug158_large_object_write_barrier_range_check.md) | large_object_map 範圍檢查錯誤導致寫入屏障漏標大型物件 | Fixed | Verified |
 | [2026-03-01_ISSUE_bug159_async_handle_get_unchecked_missing_gcbox_state_check.md](./2026-03-01_ISSUE_bug159_async_handle_get_unchecked_missing_gcbox_state_check.md) | AsyncHandle::get_unchecked() Missing Safety Checks for GcBox State | Fixed | Verified |
 | [2026-03-01_ISSUE_bug160_gcthreadsaferefmut_drop_toctou.md](./2026-03-01_ISSUE_bug160_gcthreadsaferefmut_drop_toctou.md) | GcThreadSafeRefMut::drop TOCTOU 導致 barrier 遺漏 | Fixed | Verified |
-| [2026-03-01_ISSUE_bug161_gcrwlock_gcmutex_drop_toctou.md](./2026-03-01_ISSUE_bug161_gcrwlock_gcmutex_drop_toctou.md) | GcRwLockWriteGuard 與 GcMutexGuard Drop TOCTOU 導致 Barrier 遺漏 | Open | Not Verified |
+| [2026-03-01_ISSUE_bug161_gcrwlock_gcmutex_drop_toctou.md](./2026-03-01_ISSUE_bug161_gcrwlock_gcmutex_drop_toctou.md) | GcRwLockWriteGuard 與 GcMutexGuard Drop TOCTOU 導致 Barrier 遺漏 | Fixed | Verified |
 | [2026-03-01_ISSUE_bug162_unregister_async_scope_toctou.md](./2026-03-01_ISSUE_bug162_unregister_async_scope_toctou.md) | unregister_async_scope 非原子操作導致 TOCTOU - GC 可能遺漏 roots 或 is_scope_active 返回錯誤結果 | Fixed | Verified |
 | [2026-03-01_ISSUE_bug163_slot_reuse_gen_old_flag_not_cleared.md](./2026-03-01_ISSUE_bug163_slot_reuse_gen_old_flag_not_cleared.md) | Slot Reuse Does Not Clear GEN_OLD_FLAG | Verified | Verified |
-| [2026-03-01_ISSUE_bug164_gc_deref_null_check.md](./2026-03-01_ISSUE_bug164_gc_deref_null_check.md) | Gc::deref 未檢查 null 指標導致 Null Pointer Dereference | Open | Verified |
+| [2026-03-01_ISSUE_bug164_gc_deref_null_check.md](./2026-03-01_ISSUE_bug164_gc_deref_null_check.md) | Gc::deref 未檢查 null 指標導致 Null Pointer Dereference | Fixed | Verified |
 | [2026-03-01_ISSUE_bug165_gc_as_ptr_missing_is_under_construction_check.md](./2026-03-01_ISSUE_bug165_gc_as_ptr_missing_is_under_construction_check.md) | Gc::as_ptr 缺少 is_under_construction 檢查 - 導致可能存取未初始化資料 | Fixed | Verified |
-| [2026-03-01_ISSUE_bug166_gcrwlock_gcmutex_write_lock_toctou.md](./2026-03-01_ISSUE_bug166_gcrwlock_gcmutex_write_lock_toctou.md) | GcRwLock/GcMutex write/lock TOCTOU - record_satb_old_values 與 trigger_write_barrier 狀態不一致 | Open | Not Verified |
-| [2026-03-01_ISSUE_bug167_weak_upgrade_missing_second_check.md](./2026-03-01_ISSUE_bug167_weak_upgrade_missing_second_check.md) | Weak::upgrade 缺少第二次檢查導致 TOCTOU | Open | Verified |
-| [2026-03-02_ISSUE_bug168_weak_try_upgrade_missing_post_cas_check.md](./2026-03-02_ISSUE_bug168_weak_try_upgrade_missing_post_cas_check.md) | Weak::try_upgrade 缺少 CAS 後的第二次檢查導致 TOCTOU | Open | Verified |
+| [2026-03-01_ISSUE_bug166_gcrwlock_gcmutex_write_lock_toctou.md](./2026-03-01_ISSUE_bug166_gcrwlock_gcmutex_write_lock_toctou.md) | GcRwLock/GcMutex write/lock TOCTOU - record_satb_old_values 與 trigger_write_barrier 狀態不一致 | Fixed | Verified |
+| [2026-03-01_ISSUE_bug167_weak_upgrade_missing_second_check.md](./2026-03-01_ISSUE_bug167_weak_upgrade_missing_second_check.md) | Weak::upgrade 缺少第二次檢查導致 TOCTOU | Invalid | Not Verified |
+| [2026-03-02_ISSUE_bug168_weak_try_upgrade_missing_post_cas_check.md](./2026-03-02_ISSUE_bug168_weak_try_upgrade_missing_post_cas_check.md) | Weak::try_upgrade 缺少 CAS 後的第二次檢查導致 TOCTOU | Fixed | Verified |
