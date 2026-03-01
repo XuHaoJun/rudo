@@ -968,21 +968,36 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
 ///
 /// Skips marking if the object has been swept (`!is_allocated`), preventing
 /// use-after-free when `GcThreadSafeRefMut::drop` runs concurrently with GC sweep.
+///
+/// Uses optimistic marking with post-CAS validation to fix TOCTOU: we atomically
+/// set the mark via `try_mark`, then re-check `is_allocated`. If the slot was
+/// swept between our initial check and the mark, we roll back the mark.
 #[inline]
 #[allow(clippy::missing_safety_doc)]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
-    if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
-        let header = crate::heap::ptr_to_page_header(ptr);
-        let h = header.as_ptr();
-        // Skip if object was swept; avoids UAF when Drop runs during/concurrent with sweep.
-        if !(*h).is_allocated(idx) {
-            return None;
-        }
-        if !(*h).is_marked(idx) {
-            (*h).set_mark(idx);
-            return Some(idx);
+    let idx = crate::heap::ptr_to_object_index(ptr.cast())?;
+    let header = crate::heap::ptr_to_page_header(ptr);
+    let h = header.as_ptr();
+
+    // Skip if object was swept; avoids UAF when Drop runs during/concurrent with sweep.
+    if !(*h).is_allocated(idx) {
+        return None;
+    }
+
+    loop {
+        match (*h).try_mark(idx) {
+            Ok(false) => return Some(idx), // Already marked by us or another thread
+            Ok(true) => {
+                // We just marked. Re-check is_allocated to fix TOCTOU with lazy sweep.
+                if (*h).is_allocated(idx) {
+                    return Some(idx);
+                }
+                // Slot was swept between our check and try_mark. Roll back.
+                (*h).clear_mark_atomic(idx);
+                return None;
+            }
+            Err(()) => {} // CAS failed, retry
         }
     }
-    None
 }

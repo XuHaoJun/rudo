@@ -1,6 +1,6 @@
 # [Bug]: AsyncHandle::get_unchecked() Missing Safety Checks for GcBox State
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -142,3 +142,11 @@ pub unsafe fn get_unchecked(&self) -> &T {
 
 **Geohot (Exploit 觀點):**
 攻擊者可能利用這個漏洞：若能控制 GC 時機，可在 scope 仍然活著的情況下讓 Gc 被收集，然後讀取已釋放的記憶體（讀取 primitive types 時可能讀到舊資料，若包含指標則可能造成指標混淆）。
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Fixed (same fix as bug 157).
+
+`AsyncHandle::get_unchecked()` now checks `has_dead_flag()`, `dropping_state()`, and `is_under_construction()` before dereferencing, matching `get()` behavior.

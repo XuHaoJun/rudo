@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeRefMut::drop TOCTOU 導致 barrier 遺漏
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -129,3 +129,11 @@ impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
 
 **Geohot (Exploit 觀點):**
 雖然這是並發 bug，但攻擊者可以透過觸發 GC 請求來控制 timing，精確地在第二次檢查後、標記前啟動 incremental marking，實現 memory corruption。
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Fixed.
+
+**Fix:** Eliminated TOCTOU by always marking when we have captured ptrs, instead of checking barrier state before marking. The check-then-mark pattern had a race window between the second check and the actual mark. `mark_object_black` is idempotent and safe when barrier is inactive, so always marking removes the race entirely.

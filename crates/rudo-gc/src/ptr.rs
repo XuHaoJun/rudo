@@ -339,10 +339,14 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// Mark the value as dead during panic cleanup.
     /// Clears `UNDER_CONSTRUCTION_FLAG` and sets `DEAD_FLAG`.
     /// Used when weak references exist and we can't deallocate.
+    ///
+    /// Uses `Release` ordering for both operations so that concurrent threads
+    /// doing `Acquire` loads (e.g. `has_dead_flag`, `is_under_construction`)
+    /// correctly observe the updated state.
     pub(crate) fn mark_dead(&self) {
-        self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Relaxed);
+        self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Release);
         self.weak_count
-            .fetch_and(!Self::UNDER_CONSTRUCTION_FLAG, Ordering::Relaxed);
+            .fetch_and(!Self::UNDER_CONSTRUCTION_FLAG, Ordering::Release);
     }
 
     /// Set `GEN_OLD_FLAG` on promotion. Enables barrier early-exit for young objects.

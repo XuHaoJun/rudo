@@ -1,7 +1,7 @@
 # [Bug]: GcBox::mark_dead 使用 Relaxed Ordering 清除 UNDER_CONSTRUCTION_FLAG 導致潜在 Race Condition
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -111,3 +111,11 @@ pub(crate) fn mark_dead(&self) {
 如果攻擊者能夠控制並發時序，可能利用此 race condition 導致：
 - 錯誤地阻止弱參數升級
 - 在物件構造失敗時仍錯誤地認為物件可用
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Fixed.
+
+Both `fetch_or(DEAD_FLAG)` and `fetch_and(!UNDER_CONSTRUCTION_FLAG)` in `mark_dead()` were updated from `Ordering::Relaxed` to `Ordering::Release` (`ptr.rs:342–349`). This ensures that concurrent threads performing `Acquire` loads via `has_dead_flag()` and `is_under_construction()` correctly observe the updated state. The fix follows the same ordering pattern used by `set_gen_old` (Release) and `set_under_construction(false)` (AcqRel/Release). Full test suite passes with no regressions.

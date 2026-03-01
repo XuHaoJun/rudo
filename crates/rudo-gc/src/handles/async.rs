@@ -571,16 +571,27 @@ impl<T: Trace + 'static> AsyncHandle<T> {
         let tcb = crate::heap::current_thread_control_block()
             .expect("AsyncHandle::get() must be called within a GC thread");
 
-        if !tcb.is_scope_active(self.scope_id) {
-            panic!(
-                "AsyncHandle used after scope was dropped. \
-                 The AsyncHandleScope that created this handle has been dropped. \
-                 Ensure the scope stays alive as long as any handles are in use."
-            );
-        }
+        // `with_scope_lock_if_active` holds the `active_scope_ids` lock for the duration of
+        // the closure, closing the TOCTOU window between the scope-active check and the
+        // `self.slot` dereference.  `unregister_async_scope` must acquire that same lock
+        // before it can remove the scope Arc and free `AsyncScopeData`, so the slot pointer
+        // stays valid throughout the closure.
+        //
+        // SAFETY: scope is confirmed active while the lock is held; `self.slot` points into
+        // `AsyncScopeData::block` which cannot be freed before `active_scope_ids` is released.
+        // The GcBox itself is GC-managed and stays alive as long as the scope keeps it as a root.
+        let gc_box_ptr = tcb
+            .with_scope_lock_if_active(self.scope_id, || unsafe {
+                (*self.slot).as_ptr() as *const GcBox<T>
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "AsyncHandle used after scope was dropped. \
+                     The AsyncHandleScope that created this handle has been dropped. \
+                     Ensure the scope stays alive as long as any handles are in use."
+                )
+            });
 
-        let slot = unsafe { &*self.slot };
-        let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
         unsafe {
             let gc_box = &*gc_box_ptr;
             assert!(
@@ -626,10 +637,22 @@ impl<T: Trace + 'static> AsyncHandle<T> {
     /// }
     /// ```
     #[inline]
+    #[track_caller]
     pub unsafe fn get_unchecked(&self) -> &T {
         let slot = unsafe { &*self.slot };
         let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
-        unsafe { &*gc_box_ptr }.value()
+        assert!(
+            !gc_box_ptr.is_null(),
+            "AsyncHandle::get_unchecked: slot is null"
+        );
+        let gc_box = unsafe { &*gc_box_ptr };
+        assert!(
+            !gc_box.has_dead_flag()
+                && gc_box.dropping_state() == 0
+                && !gc_box.is_under_construction(),
+            "AsyncHandle::get_unchecked: cannot access a dead, dropping, or under construction Gc"
+        );
+        gc_box.value()
     }
 
     /// Converts this handle to a `Gc<T>`.
@@ -669,15 +692,23 @@ impl<T: Trace + 'static> AsyncHandle<T> {
         let tcb = crate::heap::current_thread_control_block()
             .expect("AsyncHandle::to_gc() must be called within a GC thread");
 
-        if !tcb.is_scope_active(self.scope_id) {
-            panic!(
-                "AsyncHandle::to_gc() called after scope was dropped. \
-                 The AsyncHandleScope that created this handle has been dropped."
-            );
-        }
+        // Same TOCTOU fix as `AsyncHandle::get`: hold `active_scope_ids` lock through the
+        // slot dereference so the scope data cannot be freed beneath us.
+        //
+        // SAFETY: scope is active while the lock is held; `self.slot` is valid for the
+        // duration of the closure.
+        let gc_box_ptr = tcb
+            .with_scope_lock_if_active(self.scope_id, || unsafe {
+                (*self.slot).as_ptr() as *const GcBox<T>
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "AsyncHandle::to_gc() called after scope was dropped. \
+                     The AsyncHandleScope that created this handle has been dropped."
+                )
+            });
 
         unsafe {
-            let gc_box_ptr = (*self.slot).as_ptr() as *const GcBox<T>;
             let gc_box = &*gc_box_ptr;
             assert!(
                 !gc_box.has_dead_flag()

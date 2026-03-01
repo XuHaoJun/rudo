@@ -1,7 +1,7 @@
 # [Bug]: mark_object_black TOCTOU - is_allocated 檢查與 set_mark 之间存在 race
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -115,3 +115,16 @@ None
 1. 破壞 GC heap metadata
 2. 造成記憶體洩漏（錯誤標記保留物件）
 3. 在極端情況下，透過 page reuse 實現 use-after-free
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Fixed.
+
+Applied optimistic marking with post-CAS validation in `mark_object_black`:
+1. Use `try_mark` (atomic CAS) instead of `is_marked` + `set_mark` sequence
+2. After successfully marking, re-check `is_allocated`
+3. If slot was swept between check and mark, call `clear_mark_atomic` to roll back
+
+Added `PageHeader::clear_mark_atomic(&self)` for concurrent rollback. Single-threaded tests pass; race requires concurrent lazy sweep + incremental marking to trigger.

@@ -1044,9 +1044,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     {
         let guard = self.inner.lock();
 
-        // Cache incremental marking state once to avoid TOCTOU between SATB capture
-        // and trigger_write_barrier (bug116)
+        // Cache barrier states once to avoid TOCTOU between SATB capture
+        // and trigger_write_barrier (bug116, bug153)
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
         if incremental_active {
             let value = &*guard;
@@ -1077,7 +1078,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
             }
         }
 
-        self.trigger_write_barrier_with_incremental(incremental_active);
+        self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
 
         GcThreadSafeRefMut {
             inner: guard,
@@ -1132,15 +1133,20 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     fn trigger_write_barrier(&self) {
         self.trigger_write_barrier_with_incremental(
             crate::gc::incremental::is_incremental_marking_active(),
+            crate::gc::incremental::is_generational_barrier_active(),
         );
     }
 
-    /// Barrier with cached incremental state. Used by `borrow_mut` to avoid TOCTOU (bug116).
+    /// Barrier with cached incremental and generational state. Used by `borrow_mut` to avoid
+    /// TOCTOU (bug116, bug153).
     #[inline]
-    fn trigger_write_barrier_with_incremental(&self, incremental_active: bool) {
+    fn trigger_write_barrier_with_incremental(
+        &self,
+        incremental_active: bool,
+        generational_active: bool,
+    ) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        let generational_active = crate::gc::incremental::is_generational_barrier_active();
         if generational_active || incremental_active {
             crate::heap::unified_write_barrier(ptr, incremental_active);
         }
@@ -1280,23 +1286,14 @@ impl<T: GcCapture + ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
 
 impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
     fn drop(&mut self) {
-        // Cache barrier state at start to avoid TOCTOU: state may change between check and mark.
-        let barrier_active_at_start = crate::gc::incremental::is_generational_barrier_active()
-            || crate::gc::incremental::is_incremental_marking_active();
-
         let mut ptrs = Vec::with_capacity(32);
         (*self.inner).capture_gc_ptrs_into(&mut ptrs);
 
-        // Re-check before mark: if state flipped INACTIVE→ACTIVE, we must still mark.
-        let barrier_active_before_mark = crate::gc::incremental::is_generational_barrier_active()
-            || crate::gc::incremental::is_incremental_marking_active();
-
-        if barrier_active_at_start || barrier_active_before_mark {
-            for gc_ptr in ptrs {
-                let _ = unsafe {
-                    crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
-                };
-            }
+        // Always mark when we have ptrs to eliminate TOCTOU: barrier state may change between
+        // any check and mark. mark_object_black is idempotent and safe when barrier is inactive.
+        for gc_ptr in ptrs {
+            let _ =
+                unsafe { crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8) };
         }
     }
 }

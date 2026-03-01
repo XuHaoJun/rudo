@@ -23,6 +23,18 @@ fn repro_bug115_async_handle_get_after_scope_drop() {
     });
 }
 
+/// Bug 157/159: `AsyncHandle::get_unchecked()` must check null and `GcBox` state.
+#[test]
+fn repro_bug157_async_handle_get_unchecked_valid_scope() {
+    rudo_gc::test_util::reset();
+    with_heap_and_tcb_arc(|_, tcb| {
+        let scope = AsyncHandleScope::new(tcb);
+        let gc = Gc::new(AsyncTestData { value: 42 });
+        let handle = scope.handle(&gc);
+        assert_eq!(unsafe { handle.get_unchecked().value }, 42);
+    });
+}
+
 /// Bug 115: `AsyncHandle::to_gc()` must check scope validity before accessing slot.
 #[test]
 #[should_panic(expected = "AsyncHandle::to_gc() called after scope was dropped")]

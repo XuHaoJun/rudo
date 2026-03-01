@@ -422,6 +422,26 @@ impl ThreadControlBlock {
         self.active_scope_ids.lock().unwrap().contains(&id)
     }
 
+    /// Run a closure while holding the `active_scope_ids` lock, only if `id` is still active.
+    ///
+    /// Returns `Some(f())` if the scope is active, `None` otherwise.  Holding the lock for
+    /// the duration of `f` closes the TOCTOU window between scope-active check and slot
+    /// access: `unregister_async_scope` must acquire this same lock before it can remove the
+    /// scope Arc and free the scope data.
+    #[inline]
+    pub fn with_scope_lock_if_active<F, R>(&self, id: u64, f: F) -> Option<R>
+    where
+        F: FnOnce() -> R,
+    {
+        let guard = self.active_scope_ids.lock().unwrap();
+        if !guard.contains(&id) {
+            return None;
+        }
+        let result = f();
+        drop(guard);
+        Some(result)
+    }
+
     /// Iterate all handles (sync and async) as GC roots.
     #[allow(clippy::missing_panics_doc)]
     pub fn iterate_all_handles<F>(&self, mut visitor: F)
@@ -1018,6 +1038,15 @@ impl PageHeader {
     /// Clear the mark bit for an object at the given index.
     #[allow(dead_code)]
     pub fn clear_mark(&mut self, index: usize) {
+        let word = index / 64;
+        let bit = index % 64;
+        self.mark_bitmap[word].fetch_and(!(1u64 << bit), Ordering::Release);
+    }
+
+    /// Clear the mark bit atomically (takes `&self` for concurrent use).
+    /// Used when rolling back an optimistic mark after discovering the slot was swept.
+    #[inline]
+    pub fn clear_mark_atomic(&self, index: usize) {
         let word = index / 64;
         let bit = index % 64;
         self.mark_bitmap[word].fetch_and(!(1u64 << bit), Ordering::Release);

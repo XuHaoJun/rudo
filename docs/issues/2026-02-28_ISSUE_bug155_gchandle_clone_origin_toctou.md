@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::clone 存在 TOCTOU Race Condition - origin_thread 檢查與使用之間存在時間窗口
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -142,3 +142,9 @@ struct GcHandle<T: Trace + 'static> {
 
 **Geohot (Exploit 觀點):**
 此漏洞難以實際利用。需要極精確的時機控制才能在生產環境中觸發。但理論上可能作為輔助漏洞，與其他漏洞結合造成更大影響。
+
+---
+
+## Resolution (2026-03-02)
+
+**Fixed.** Applied single-upgrade pattern: `origin_tcb.upgrade()` is now called once and the result stored; `map_or_else` operates on that stored value so check and use observe the same state. Verified via `cross_thread_handle` and `bug4_tcb_leak` tests.

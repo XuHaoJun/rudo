@@ -1,6 +1,6 @@
 # [Bug]: AsyncHandle::get_unchecked() missing safety checks - potential UAF and null dereference
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -129,3 +129,17 @@ This is a soundness bug. The safety invariant cannot be maintained - even if cal
 If an attacker can trigger GC at a precise moment between scope check and dereference, they could potentially:
 - Cause null dereference (DoS)
 - Cause UAF if memory is reused (potential code execution)
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Fixed.
+
+Added safety checks to `AsyncHandle::get_unchecked()` in `handles/async.rs`:
+1. Null check on `gc_box_ptr` before dereference
+2. `has_dead_flag()` check
+3. `dropping_state() == 0` check
+4. `!is_under_construction()` check
+
+Behavior now matches `get()` for GcBox state validation. Reproduction test added: `repro_bug157_async_handle_get_unchecked_valid_scope`.

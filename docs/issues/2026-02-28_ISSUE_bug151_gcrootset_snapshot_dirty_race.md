@@ -1,7 +1,7 @@
 # [Bug]: GcRootSet::snapshot Race Condition - Dirty Flag Cleared After Lock Release
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -207,3 +207,9 @@ pub fn snapshot(&self, heap: &crate::heap::LocalHeap) -> Vec<usize> {
 攻擊者可能利用此 race condition 來：
 - 導致物件被過早回收，進而觸發 use-after-free
 - 或者阻止物件被回收，導致記憶體洩露
+
+---
+
+## Resolution (2026-03-02)
+
+**Fixed.** The code in `crates/rudo-gc/src/tokio/root.rs` already applies the correct fix: `dirty` is cleared **while holding the lock** (line 134) before `drop(roots)` (line 135). The comment explicitly documents this: "Clear dirty while still holding the lock so concurrent register/unregister operations cannot have their updates overwritten." Matches suggested fix Option 1. Tokio integration and multi-runtime tests pass.

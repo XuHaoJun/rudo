@@ -3,16 +3,15 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 146
-- **Open**: 15
+- **Fixed**: 157
+- **Open**: 5
 - **Invalid**: 11
 - **Verified**: 4
 
 ### By Tags
-- **Verified**: 149
-- **Not Verified**: 13
+- **Verified**: 157
+- **Not Verified**: 12
 - **Not Reproduced**: 8
-- **Unverified**: 6
 
 ## All Issues
 
@@ -174,19 +173,19 @@
 | [2026-02-28_ISSUE_bug145_clear_dead_relaxed_ordering.md](./2026-02-28_ISSUE_bug145_clear_dead_relaxed_ordering.md) | GcBox::clear_dead 使用 Relaxed Ordering 導致潛在 Race Condition | Fixed | Verified |
 | [2026-02-28_ISSUE_bug146_gcbox_as_weak_missing_dead_dropping_check.md](./2026-02-28_ISSUE_bug146_gcbox_as_weak_missing_dead_dropping_check.md) | GcBox::as_weak() 缺少 dead_flag / dropping_state 檢查 - 與 Gc::as_weak() 行為不一致 | Fixed | Verified |
 | [2026-02-28_ISSUE_bug147_gchandle_threadid_reuse_vulnerability.md](./2026-02-28_ISSUE_bug147_gchandle_threadid_reuse_vulnerability.md) | GcHandle 依賴 ThreadId 進行線程認證 - ThreadId 重用導致安全漏洞 | Fixed | Verified |
-| [2026-02-28_ISSUE_bug148_async_handle_get_scope_toctou.md](./2026-02-28_ISSUE_bug148_async_handle_get_scope_toctou.md) | AsyncHandle::get() TOCTOU - is_scope_active 檢查與 slot 存取非原子操作導致 Use-After-Free | Open | Unverified |
+| [2026-02-28_ISSUE_bug148_async_handle_get_scope_toctou.md](./2026-02-28_ISSUE_bug148_async_handle_get_scope_toctou.md) | AsyncHandle::get() TOCTOU - is_scope_active 檢查與 slot 存取非原子操作導致 Use-After-Free | Fixed | Verified |
 | [2026-02-28_ISSUE_bug149_simple_write_barrier_toctou.md](./2026-02-28_ISSUE_bug149_simple_write_barrier_toctou.md) | simple_write_barrier TOCTOU - has_gen_old_flag called without caching | Verified | Verified |
-| [2026-02-28_ISSUE_bug150_mark_dead_under_construction_relaxed.md](./2026-02-28_ISSUE_bug150_mark_dead_under_construction_relaxed.md) | GcBox::mark_dead 使用 Relaxed Ordering 清除 UNDER_CONSTRUCTION_FLAG 導致潜在 Race Condition | Open | Unverified |
-| [2026-02-28_ISSUE_bug151_gcrootset_snapshot_dirty_race.md](./2026-02-28_ISSUE_bug151_gcrootset_snapshot_dirty_race.md) | GcRootSet::snapshot Race Condition - Dirty Flag Cleared After Lock Release | Open | Unverified |
-| [2026-02-28_ISSUE_bug152_mark_object_black_toctou.md](./2026-02-28_ISSUE_bug152_mark_object_black_toctou.md) | mark_object_black TOCTOU - is_allocated 檢查與 set_mark 之间存在 race | Open | Unverified |
-| [2026-02-28_ISSUE_bug153_gccell_generational_barrier_not_cached.md](./2026-02-28_ISSUE_bug153_gccell_generational_barrier_not_cached.md) | GcCell::borrow_mut generational barrier state 未緩存導致潛在 TOCTOU | Open | Unverified |
-| [2026-02-28_ISSUE_bug154_weak_cross_thread_handle_drop_missing_state_check.md](./2026-02-28_ISSUE_bug154_weak_cross_thread_handle_drop_missing_state_check.md) | WeakCrossThreadHandle::drop 缺少 dropping_state 和 dead flag 檢查 | Open | Unverified |
-| [2026-02-28_ISSUE_bug155_gchandle_clone_origin_toctou.md](./2026-02-28_ISSUE_bug155_gchandle_clone_origin_toctou.md) | GcHandle::clone 存在 TOCTOU Race Condition - origin_thread 檢查與使用之間存在時間窗口 | Open | Verified |
-| [2026-03-01_ISSUE_bug156_weak_cross_thread_handle_clone_orphan_not_allowed.md](./2026-03-01_ISSUE_bug156_weak_cross_thread_handle_clone_orphan_not_allowed.md) | WeakCrossThreadHandle::clone 不允許跨執行緒複製已終止的 origin handle | Open | Verified |
-| [2026-03-01_ISSUE_bug157_async_handle_get_unchecked_missing_safety_checks.md](./2026-03-01_ISSUE_bug157_async_handle_get_unchecked_missing_safety_checks.md) | AsyncHandle::get_unchecked() missing safety checks - potential UAF and null dereference | Open | Verified |
+| [2026-02-28_ISSUE_bug150_mark_dead_under_construction_relaxed.md](./2026-02-28_ISSUE_bug150_mark_dead_under_construction_relaxed.md) | GcBox::mark_dead 使用 Relaxed Ordering 清除 UNDER_CONSTRUCTION_FLAG 導致潜在 Race Condition | Fixed | Verified |
+| [2026-02-28_ISSUE_bug151_gcrootset_snapshot_dirty_race.md](./2026-02-28_ISSUE_bug151_gcrootset_snapshot_dirty_race.md) | GcRootSet::snapshot Race Condition - Dirty Flag Cleared After Lock Release | Fixed | Verified |
+| [2026-02-28_ISSUE_bug152_mark_object_black_toctou.md](./2026-02-28_ISSUE_bug152_mark_object_black_toctou.md) | mark_object_black TOCTOU - is_allocated 檢查與 set_mark 之间存在 race | Fixed | Verified |
+| [2026-02-28_ISSUE_bug153_gccell_generational_barrier_not_cached.md](./2026-02-28_ISSUE_bug153_gccell_generational_barrier_not_cached.md) | GcCell::borrow_mut generational barrier state 未緩存導致潛在 TOCTOU | Fixed | Verified |
+| [2026-02-28_ISSUE_bug154_weak_cross_thread_handle_drop_missing_state_check.md](./2026-02-28_ISSUE_bug154_weak_cross_thread_handle_drop_missing_state_check.md) | WeakCrossThreadHandle::drop 缺少 dropping_state 和 dead flag 檢查 | Fixed | Verified |
+| [2026-02-28_ISSUE_bug155_gchandle_clone_origin_toctou.md](./2026-02-28_ISSUE_bug155_gchandle_clone_origin_toctou.md) | GcHandle::clone 存在 TOCTOU Race Condition - origin_thread 檢查與使用之間存在時間窗口 | Fixed | Verified |
+| [2026-03-01_ISSUE_bug156_weak_cross_thread_handle_clone_orphan_not_allowed.md](./2026-03-01_ISSUE_bug156_weak_cross_thread_handle_clone_orphan_not_allowed.md) | WeakCrossThreadHandle::clone 不允許跨執行緒複製已終止的 origin handle | Fixed | Verified |
+| [2026-03-01_ISSUE_bug157_async_handle_get_unchecked_missing_safety_checks.md](./2026-03-01_ISSUE_bug157_async_handle_get_unchecked_missing_safety_checks.md) | AsyncHandle::get_unchecked() missing safety checks - potential UAF and null dereference | Fixed | Verified |
 | [2026-03-01_ISSUE_bug158_large_object_write_barrier_range_check.md](./2026-03-01_ISSUE_bug158_large_object_write_barrier_range_check.md) | large_object_map 範圍檢查錯誤導致寫入屏障漏標大型物件 | Fixed | Verified |
-| [2026-03-01_ISSUE_bug159_async_handle_get_unchecked_missing_gcbox_state_check.md](./2026-03-01_ISSUE_bug159_async_handle_get_unchecked_missing_gcbox_state_check.md) | AsyncHandle::get_unchecked() Missing Safety Checks for GcBox State | Open | Verified |
-| [2026-03-01_ISSUE_bug160_gcthreadsaferefmut_drop_toctou.md](./2026-03-01_ISSUE_bug160_gcthreadsaferefmut_drop_toctou.md) | GcThreadSafeRefMut::drop TOCTOU 導致 barrier 遺漏 | Open | Not Verified |
+| [2026-03-01_ISSUE_bug159_async_handle_get_unchecked_missing_gcbox_state_check.md](./2026-03-01_ISSUE_bug159_async_handle_get_unchecked_missing_gcbox_state_check.md) | AsyncHandle::get_unchecked() Missing Safety Checks for GcBox State | Fixed | Verified |
+| [2026-03-01_ISSUE_bug160_gcthreadsaferefmut_drop_toctou.md](./2026-03-01_ISSUE_bug160_gcthreadsaferefmut_drop_toctou.md) | GcThreadSafeRefMut::drop TOCTOU 導致 barrier 遺漏 | Fixed | Verified |
 | [2026-03-01_ISSUE_bug161_gcrwlock_gcmutex_drop_toctou.md](./2026-03-01_ISSUE_bug161_gcrwlock_gcmutex_drop_toctou.md) | GcRwLockWriteGuard 與 GcMutexGuard Drop TOCTOU 導致 Barrier 遺漏 | Open | Not Verified |
 | [2026-03-01_ISSUE_bug162_unregister_async_scope_toctou.md](./2026-03-01_ISSUE_bug162_unregister_async_scope_toctou.md) | unregister_async_scope 非原子操作導致 TOCTOU - GC 可能遺漏 roots 或 is_scope_active 返回錯誤結果 | Fixed | Verified |
 | [2026-03-01_ISSUE_bug163_slot_reuse_gen_old_flag_not_cleared.md](./2026-03-01_ISSUE_bug163_slot_reuse_gen_old_flag_not_cleared.md) | Slot Reuse Does Not Clear GEN_OLD_FLAG | Verified | Verified |
@@ -194,3 +193,4 @@
 | [2026-03-01_ISSUE_bug165_gc_as_ptr_missing_is_under_construction_check.md](./2026-03-01_ISSUE_bug165_gc_as_ptr_missing_is_under_construction_check.md) | Gc::as_ptr 缺少 is_under_construction 檢查 - 導致可能存取未初始化資料 | Fixed | Verified |
 | [2026-03-01_ISSUE_bug166_gcrwlock_gcmutex_write_lock_toctou.md](./2026-03-01_ISSUE_bug166_gcrwlock_gcmutex_write_lock_toctou.md) | GcRwLock/GcMutex write/lock TOCTOU - record_satb_old_values 與 trigger_write_barrier 狀態不一致 | Open | Not Verified |
 | [2026-03-01_ISSUE_bug167_weak_upgrade_missing_second_check.md](./2026-03-01_ISSUE_bug167_weak_upgrade_missing_second_check.md) | Weak::upgrade 缺少第二次檢查導致 TOCTOU | Open | Verified |
+| [2026-03-02_ISSUE_bug168_weak_try_upgrade_missing_post_cas_check.md](./2026-03-02_ISSUE_bug168_weak_try_upgrade_missing_post_cas_check.md) | Weak::try_upgrade 缺少 CAS 後的第二次檢查導致 TOCTOU | Open | Verified |

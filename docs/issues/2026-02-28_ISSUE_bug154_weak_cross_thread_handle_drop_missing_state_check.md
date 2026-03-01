@@ -1,7 +1,7 @@
 # [Bug]: WeakCrossThreadHandle::drop 缺少 dropping_state 和 dead flag 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -153,3 +153,11 @@ impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
 
 **Geohot (Exploit 觀點):**
 在極端並發場景下，缺少狀態檢查可能允許對正在被 drop 的物件進行操作，這可能被利用來觸發不確定的行為。雖然實際 exploit 困難，但添加檢查可以消除這個攻擊面。
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Fixed and verified.
+
+Added `has_dead_flag()` and `dropping_state() != 0` checks before calling `dec_weak()` in `WeakCrossThreadHandle::drop` (`handles/cross_thread.rs`). Behavior now matches `GcBoxWeakRef::clone` and other weak-ref operations. All cross-thread weak tests pass.

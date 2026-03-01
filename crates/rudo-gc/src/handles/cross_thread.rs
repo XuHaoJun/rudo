@@ -313,17 +313,11 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
         if self.handle_id == HandleId::INVALID {
             panic!("cannot clone an unregistered GcHandle");
         }
+        // Single upgrade to avoid TOCTOU: check and use must observe the same state.
         // Require origin thread when origin is still alive (consistent with resolve()).
         // When origin has terminated (orphaned handle), clone is allowed from any thread.
-        if self.origin_tcb.upgrade().is_some() {
-            assert_eq!(
-                std::thread::current().id(),
-                self.origin_thread,
-                "GcHandle::clone() must be called on the origin thread. \
-                 Clone from a different thread is not allowed."
-            );
-        }
-        let (new_id, origin_tcb) = self.origin_tcb.upgrade().map_or_else(
+        let origin_tcb = self.origin_tcb.upgrade();
+        let (new_id, origin_tcb) = origin_tcb.map_or_else(
             || {
                 let (new_id, ok) =
                     heap::clone_orphan_root_with_inc_ref(
@@ -337,6 +331,12 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
                 (new_id, Weak::clone(&self.origin_tcb))
             },
             |tcb| {
+                assert_eq!(
+                    std::thread::current().id(),
+                    self.origin_thread,
+                    "GcHandle::clone() must be called on the origin thread. \
+                     Clone from a different thread is not allowed."
+                );
                 let mut roots = tcb.cross_thread_roots.lock().unwrap();
                 if !roots.strong.contains_key(&self.handle_id) {
                     panic!("cannot clone an unregistered GcHandle");
@@ -577,7 +577,11 @@ impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
             return;
         }
         unsafe {
-            (*ptr.as_ptr()).dec_weak();
+            let gc_box = &*ptr.as_ptr();
+            if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 {
+                return;
+            }
+            gc_box.dec_weak();
         }
     }
 }

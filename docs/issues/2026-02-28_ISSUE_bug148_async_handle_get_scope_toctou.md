@@ -1,7 +1,7 @@
 # [Bug]: AsyncHandle::get() TOCTOU - is_scope_active 檢查與 slot 存取非原子操作導致 Use-After-Free
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -178,3 +178,27 @@ pub fn get(&self) -> &T {
 
 **Geohot (Exploit 觀點):**
 攻擊者可以通過精確時序控制來利用此漏洞。如果 scope 被 drop 但記憶體未被立即重用，攻擊者可能讀取到舊資料。如果記憶體被新物件重用，可能造成指標混淆，進一步實現任意記憶體讀寫。
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Fixed and verified.
+
+**Root cause confirmed:** `AsyncHandle::get()` and `AsyncHandle::to_gc()` both called
+`tcb.is_scope_active()` (which acquires and immediately releases `active_scope_ids` lock),
+then accessed `self.slot` without the lock — leaving a race window where the scope could
+be dropped and `AsyncScopeData` freed between the check and the dereference.
+
+**Fix applied** in `crates/rudo-gc/src/handles/async.rs` and `src/heap.rs`:
+
+1. Added `ThreadControlBlock::with_scope_lock_if_active()` — runs a closure while holding
+   the `active_scope_ids` lock, returning `None` if the scope is no longer active.  Because
+   `unregister_async_scope` must acquire this same lock before it can remove the scope Arc
+   (and thus free `AsyncScopeData`), holding it for the duration of the closure guarantees
+   `self.slot` remains valid throughout the dereference.
+
+2. Replaced the open-coded `is_scope_active()` + slot-access pattern in both `get()` and
+   `to_gc()` with `with_scope_lock_if_active(…)`, so the TOCTOU window is eliminated.
+
+**Tests:** Full test suite (`bash test.sh`) passes. Clippy clean.

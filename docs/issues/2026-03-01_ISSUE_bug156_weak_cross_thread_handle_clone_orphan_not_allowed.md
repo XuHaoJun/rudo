@@ -1,6 +1,6 @@
 # [Bug]: WeakCrossThreadHandle::clone 不允許跨執行緒複製已終止的 origin handle
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -138,3 +138,16 @@ impl<T: Trace + 'static> Clone for WeakCrossThreadHandle<T> {
 
 **Geohot (Exploit 觀點):**
 這不是安全漏洞，但會造成可用性問題。攻擊者無法利用這個問題，但使用者可能會因為这个不一致的行為而感到困惑。
+
+---
+
+## Resolution (2026-03-02)
+
+The fix was already present in the codebase. `WeakCrossThreadHandle::clone()` at
+`crates/rudo-gc/src/handles/cross_thread.rs:415-431` correctly checks
+`origin_tcb.upgrade().is_some()` before asserting origin-thread affinity. When
+origin has terminated (orphan handle), clone is allowed from any thread, matching
+`GcHandle::clone()` behavior.
+
+Added regression test `test_weak_clone_after_origin_exits` in
+`crates/rudo-gc/tests/cross_thread_weak_clone.rs` to verify this behavior.

@@ -1,7 +1,7 @@
 # [Bug]: GcCell::borrow_mut generational barrier state 未緩存導致潛在 TOCTOU
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -132,3 +132,11 @@ fn trigger_write_barrier_with_incremental(&self) {
 
 - bug116: GcCell::borrow_mut TOCTOU (已修復 incremental_active 緩存)
 - bug133: unified_write_barrier missing gen_old_flag cache
+
+---
+
+## Resolution (2026-03-02)
+
+**Outcome:** Fixed.
+
+Applied Option 1 from the suggested fix: cache `generational_active` alongside `incremental_active` in `GcThreadSafeCell::borrow_mut()` at the same point, and pass both to `trigger_write_barrier_with_incremental()`. Updated the function signature to accept `generational_active` as a second parameter. `trigger_write_barrier()` (used by `borrow_mut_simple`) now fetches both values fresh and passes both. Behavior matches `GcCell::borrow_mut()` (line 164–165).
