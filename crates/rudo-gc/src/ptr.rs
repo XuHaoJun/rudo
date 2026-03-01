@@ -1458,6 +1458,7 @@ impl<T: Trace> Deref for Gc<T> {
 
     fn deref(&self) -> &Self::Target {
         let ptr = self.ptr.load(Ordering::Acquire);
+        assert!(!ptr.is_null(), "Gc::deref: cannot dereference a null Gc");
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
             assert!(
