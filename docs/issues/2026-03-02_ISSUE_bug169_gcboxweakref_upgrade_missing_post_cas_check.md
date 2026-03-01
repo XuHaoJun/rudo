@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::upgrade/try_upgrade 缺少 ref_count > 0 路徑的 CAS 後檢查導致 TOCTOU UAF
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
