@@ -1,7 +1,7 @@
 # [Bug]: mark_object 缺少 is_allocated 檢查 - 處理 cross-thread SATB 時可能 UAF
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -135,3 +135,17 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
 2. 造成記憶體洩漏
 3. 破壞 heap metadata 導致後續分配問題
 4. 在極端情況下，可能實現 use-after-free
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Fixed.
+
+Added `is_allocated(idx)` guard in `gc/gc.rs` before `is_marked` / `set_mark` in both:
+- `mark_object` (line ~2341)
+- `mark_and_trace_incremental` (line ~2365)
+
+This mirrors the existing pattern in `mark_object_black` (incremental.rs:976–990) which already had the correct check with the comment "Skip if object was swept; avoids UAF when Drop runs during/concurrent with sweep."
+
+Full test suite passes with no regressions.

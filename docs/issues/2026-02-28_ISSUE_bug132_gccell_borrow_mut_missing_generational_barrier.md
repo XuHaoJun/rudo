@@ -1,7 +1,7 @@
 # [Bug]: GcCell::borrow_mut 缺少 Generational Barrier 檢查，與 GcRwLockWriteGuard 行為不一致
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -167,3 +167,15 @@ Generational barrier 的核心目的是記錄 OLD→YOUNG 引用。當新的 GC 
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可以通過觸發 generational barrier 模式並在borrow_mut 期間觀察不一致的行為來利用此 bug。雖然實際利用需要精確的時序控制，但這是可能的攻擊向量。
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Fixed.
+
+**Root cause confirmed:** `GcCell::borrow_mut` in `cell.rs` (lines 155–211) only checked `incremental_active` when deciding whether to mark new GC pointers after mutation, missing the `generational_active` case.
+
+**Fix applied:** Added `let generational_active = crate::gc::incremental::is_generational_barrier_active();` and combined both flags into `let barrier_active = generational_active || incremental_active;`. The "mark new pointers" block now uses `barrier_active`, matching the pattern in `GcRwLockWriteGuard::drop` and `GcMutexGuard::drop`. The SATB old-value capture block remains gated on `incremental_active` only (SATB is incremental-specific).
+
+**Verification:** Full test suite passes (`bash test.sh`). Clippy reports no warnings.

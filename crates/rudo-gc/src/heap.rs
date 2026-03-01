@@ -240,6 +240,17 @@ pub fn clone_orphan_root_with_inc_ref(
     if !orphan.contains_key(&(thread_id, source_handle_id)) {
         return (HandleId::INVALID, false);
     }
+    // SAFETY: ptr came from a live GcHandle whose orphan entry still exists in the table.
+    // The orphan lock is held here, preventing concurrent removal of the entry.
+    unsafe {
+        let gc_box = &*ptr.as_ptr();
+        assert!(
+            !gc_box.has_dead_flag()
+                && gc_box.dropping_state() == 0
+                && !gc_box.is_under_construction(),
+            "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle (orphan)"
+        );
+    }
     let new_id = allocate_orphan_handle_id();
     orphan.insert((thread_id, new_id), ptr.as_ptr() as usize);
     unsafe {

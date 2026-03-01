@@ -431,12 +431,12 @@ impl IncrementalMarkState {
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::Relaxed)
+        self.enabled.load(Ordering::Acquire)
     }
 
     pub fn set_config(&self, config: IncrementalConfig) {
         *self.config.lock() = config;
-        self.enabled.store(config.enabled, Ordering::Relaxed);
+        self.enabled.store(config.enabled, Ordering::Release);
     }
 
     #[cfg(feature = "tracing")]
@@ -490,9 +490,7 @@ pub fn is_write_barrier_active() -> bool {
 
 pub fn write_barrier_needed() -> bool {
     let state = IncrementalMarkState::global();
-    state.enabled.load(Ordering::Relaxed)
-        && !state.fallback_requested()
-        && is_write_barrier_active()
+    state.is_enabled() && !state.fallback_requested() && is_write_barrier_active()
 }
 
 /// Returns true when the generational write barrier should record OLD→YOUNG references.

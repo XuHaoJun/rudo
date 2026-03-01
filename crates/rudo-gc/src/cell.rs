@@ -158,9 +158,12 @@ impl<T: ?Sized> GcCell<T> {
     {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        // Cache incremental marking state once to avoid TOCTOU between check and use
+        // Cache barrier states once to avoid TOCTOU between check and use.
         // (bug110: triple is_incremental_marking_active call caused inconsistent barrier state)
+        // (bug132: generational barrier also requires marking new pointers)
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        let barrier_active = generational_active || incremental_active;
 
         if incremental_active {
             unsafe {
@@ -187,7 +190,7 @@ impl<T: ?Sized> GcCell<T> {
 
         let result = self.inner.borrow_mut();
 
-        if incremental_active {
+        if barrier_active {
             unsafe {
                 let new_value = &*result;
                 let mut new_gc_ptrs = Vec::with_capacity(32);

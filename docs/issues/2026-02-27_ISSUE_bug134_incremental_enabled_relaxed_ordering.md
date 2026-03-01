@@ -1,7 +1,7 @@
 # [Bug]: IncrementalMarkState::enabled 使用 Relaxed ordering 導致 write_barrier_needed 可能返回過時值
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -151,3 +151,17 @@ pub fn write_barrier_needed() -> bool {
 
 **Geohot (Exploit 觀點):**
 在即時通訊或高效能運算等高並發場景，這個 race 可能被利用來觸發物件過早回收，進而導致 use-after-free。雖然需要精確時序，但理論上是可利用的。
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Fixed.
+
+Three changes applied to `crates/rudo-gc/src/gc/incremental.rs`:
+
+1. `is_enabled()` (line 434): `Relaxed` → `Acquire` — ensures threads observe the latest `enabled` value before gating on it.
+2. `set_config()` (line 439): `Relaxed` → `Release` — ensures the store is visible to all threads that subsequently load with `Acquire`.
+3. `write_barrier_needed()` (line 493): replaced the direct `state.enabled.load(Ordering::Relaxed)` with `state.is_enabled()`, which now uses `Acquire`.
+
+The `Acquire`/`Release` pair establishes a happens-before edge between the config setter and any thread reading `enabled` to decide whether to fire a write barrier. All tests pass.

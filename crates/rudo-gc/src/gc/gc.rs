@@ -2339,6 +2339,11 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
         }
 
         if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+            // Skip if slot was swept and potentially reused; avoids UAF when lazy sweep
+            // runs concurrently with cross-thread SATB buffer processing.
+            if !(*header.as_ptr()).is_allocated(idx) {
+                return;
+            }
             if (*header.as_ptr()).is_marked(idx) {
                 return;
             }
@@ -2367,6 +2372,11 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
             return;
         }
 
+        // Skip if slot was swept and potentially reused; avoids UAF when lazy sweep
+        // runs concurrently with cross-thread SATB buffer processing.
+        if !(*header.as_ptr()).is_allocated(idx) {
+            return;
+        }
         if (*header.as_ptr()).is_marked(idx) {
             return;
         }
@@ -2518,6 +2528,8 @@ unsafe fn lazy_sweep_page(
             } else {
                 ((*gc_box_ptr).drop_fn)(obj_ptr);
                 (*gc_box_ptr).set_dead();
+                // Clear GEN_OLD_FLAG so reused slots don't inherit stale barrier state (bug135).
+                (*gc_box_ptr).clear_gen_old();
 
                 #[allow(clippy::cast_ptr_alignment)]
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
@@ -2640,6 +2652,8 @@ unsafe fn lazy_sweep_page_all_dead(
                 }
             } else {
                 ((*gc_box_ptr).drop_fn)(obj_ptr);
+                // Clear GEN_OLD_FLAG so reused slots don't inherit stale barrier state (bug135).
+                (*gc_box_ptr).clear_gen_old();
 
                 #[allow(clippy::cast_ptr_alignment)]
                 let obj_cast = obj_ptr.cast::<Option<u16>>();

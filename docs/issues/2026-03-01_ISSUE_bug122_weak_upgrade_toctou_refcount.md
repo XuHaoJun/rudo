@@ -1,6 +1,6 @@
 # [Bug]: Weak::upgrade TOCTOU race when ref_count > 0
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -122,3 +122,19 @@ This is a soundness bug - it can lead to use-after-free, which is undefined beha
 
 **Geohot (Exploit 觀點):**
 The race window is small but exploitable. An attacker could use techniques like thread spinning or timing attacks to increase the likelihood of hitting the race. The consequence is a classic UAF which can be leveraged for code execution.
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Fixed.
+
+**Fix location:** `crates/rudo-gc/src/ptr.rs` — `Weak::upgrade()`
+
+**Root cause confirmed:** `dec_ref` with `count==1` calls `try_mark_dropping()` (sets `dropping_state=1`) then `drop_fn_for` (sets DEAD_FLAG, calls `drop_in_place`) **without decrementing `ref_count`**. The pre-CAS checks (dropping_state, dead_flag) could both pass, then the CAS succeeds (ref_count never changed from 1), resulting in a strong reference to freed memory.
+
+**Fix:** Added a post-CAS safety check immediately after the successful `compare_exchange_weak`. If either `dropping_state != 0` or `has_dead_flag()` is set, the increment is undone via `dec_ref` and `None` is returned. The GcBox header (which contains these flags) remains valid after `drop_in_place` because the allocation stays live until `weak_count` reaches 0 — making this read always safe.
+
+This mirrors the double-check pattern already used in `GcBoxWeakRef::upgrade()` for the zero-to-one CAS transition (lines 488–494 of `ptr.rs`).
+
+Full test suite passes with no regressions (`bash test.sh`). Clippy clean.

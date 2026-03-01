@@ -1,7 +1,7 @@
 # [Bug]: Lazy Sweep 回收 Slots 時未清除 GEN_OLD_FLAG，導致 slot 重用後 barrier 行為錯誤
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -121,4 +121,12 @@ fn main() {
 攻擊者可能利用此 bug 進行記憶體佈局攻擊。如果能控制 lazy sweep 時序，可能故意留下 GEN_OLD_FLAG 來：
 1. 繞過 write barrier
 2. 導致年輕物件被錯誤回收（memory leak as DoS）
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Fixed.
+
+Added `clear_gen_old()` calls in both `lazy_sweep_page` and `lazy_sweep_page_all_dead` in `crates/rudo-gc/src/gc/gc.rs`, immediately after the drop and before the slot is pushed onto the free list (mirroring `LocalHeap::dealloc()` at heap.rs:2608). All 22 lazy sweep tests and the full test suite pass.
 

@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::is_valid() 未檢查 GcBox 存活狀態 - 導致 False Positive
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Reproduced
 
 ---
 
@@ -181,3 +181,15 @@ pub fn is_valid(&self) -> bool {
 
 - bug128: GcHandle::is_valid() TOCTOU - 已修復 root list 檢查
 - bug39: GcHandle::resolve() missing validity check
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Invalid.
+
+The issue incorrectly assumes that `is_valid() == true` can coexist with `has_dead_flag()`, `dropping_state() != 0`, or `is_under_construction()` on the underlying `GcBox`. This is impossible by design: registering a `GcHandle` as a **strong root** prevents the GC from collecting or dropping the object while the root entry remains in the root list. Therefore, whenever `is_valid()` returns `true`, the GcBox state checks inside `resolve()` will always pass.
+
+**Existing test confirms this:** `test_handle_keeps_alive` (in `tests/cross_thread_handle.rs`) drops the original `Gc<T>`, runs `collect_full()`, and then calls `resolve()` — which succeeds. This demonstrates that the handle root actively keeps the object alive, making the "is_valid() true but resolve() panics" scenario impossible.
+
+The only way `resolve()` can panic when `is_valid()` is `true` is a **thread mismatch** (called from the wrong thread), which is intentionally orthogonal to `is_valid()` — the handle's validity is thread-agnostic by design. No source code changes required.

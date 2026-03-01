@@ -1752,6 +1752,17 @@ impl<T: Trace> Weak<T> {
                     )
                     .is_ok()
                 {
+                    // Post-CAS safety check: `dec_ref` marks dropping (sets dropping_state=1)
+                    // and calls drop_fn_for (which sets DEAD_FLAG then drop_in_place) *without*
+                    // decrementing ref_count, so our CAS can succeed while the value is freed.
+                    // Re-read the flags now that we own a count; the GcBox header remains valid
+                    // (allocation stays live until weak_count reaches 0).
+                    if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                        // SAFETY: we just incremented ref_count via successful CAS;
+                        // dec_ref is the correct way to undo it.
+                        GcBox::dec_ref(ptr.as_ptr());
+                        return None;
+                    }
                     crate::gc::notify_created_gc();
                     return Some(Gc {
                         ptr: AtomicNullable::new(ptr),
@@ -2340,12 +2351,17 @@ impl<K: Trace + 'static, V: Trace + 'static> GcCapture for Ephemeron<K, V> {
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
         // Ephemeron semantics: only capture when key is alive (matches Trace).
         // When key is dead, value can be collected; capturing would incorrectly retain it.
-        if self.is_key_alive() {
+        //
+        // Use try_upgrade() *first* to atomically confirm key liveness and obtain a
+        // strong reference. The previous is_key_alive() + try_upgrade() pattern had a
+        // TOCTOU window: the key could die after is_key_alive() returned true but before
+        // try_upgrade() ran, leaving the key's GC pointers uncaptured in the SATB buffer.
+        if let Some(key_gc) = self.key.try_upgrade() {
+            // Key is alive; we hold a strong ref that keeps it alive for this call.
+            key_gc.capture_gc_ptrs_into(ptrs);
             self.value.capture_gc_ptrs_into(ptrs);
-            if let Some(key_gc) = self.key.try_upgrade() {
-                key_gc.capture_gc_ptrs_into(ptrs);
-            }
         }
+        // If key is dead, value can be collected — capture nothing (ephemeron semantics).
     }
 }
 

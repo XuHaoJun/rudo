@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::clone 缺少對 orphan root 的安全檢查
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -111,3 +111,27 @@ unsafe {
 
 **Geohot (Exploit 觀點):**
 如果在對象處於特定狀態時進行 clone，可能會繞過 GC 的安全檢查。雖然此時不太可能有記憶體安全問題，但這是潛在的攻擊面。
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Fixed.
+
+**Fix location:** `crates/rudo-gc/src/heap.rs` — `clone_orphan_root_with_inc_ref()`
+
+Added the same three safety assertions that the non-orphan path uses (lines 376–381 of `cross_thread.rs`), placed **before** the new orphan entry is inserted and before `inc_ref()` is called. The checks run while the orphan lock is held (preventing TOCTOU with concurrent removal):
+
+```rust
+unsafe {
+    let gc_box = &*ptr.as_ptr();
+    assert!(
+        !gc_box.has_dead_flag()
+            && gc_box.dropping_state() == 0
+            && !gc_box.is_under_construction(),
+        "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle (orphan)"
+    );
+}
+```
+
+Full test suite passes with no regressions (`bash test.sh`). Clippy clean.

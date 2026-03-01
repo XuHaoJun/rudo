@@ -1,7 +1,7 @@
 # [Bug]: Ephemeron GcCapture TOCTOU 導致 Key GC 指標可能被遺漏捕獲
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -169,5 +169,19 @@ fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
 
 ## 修復狀態
 
-- [ ] 已修復
-- [x] 未修復
+- [x] 已修復
+- [ ] 未修復
+
+---
+
+## Resolution (2026-03-01)
+
+**Outcome:** Fixed.
+
+**Fix location:** `crates/rudo-gc/src/ptr.rs` — `GcCapture for Ephemeron<K, V>::capture_gc_ptrs_into()`
+
+**Root cause confirmed:** The old `is_key_alive()` + `try_upgrade()` pattern had a TOCTOU window: `is_key_alive()` could return `true`, then the key could die (last strong ref dropped) before `try_upgrade()` ran, causing `try_upgrade()` to return `None` and leaving the key's GC pointers uncaptured in the SATB buffer.
+
+**Fix:** Replaced the two-step check with a single `try_upgrade()` call first. If it returns `Some(key_gc)`, the key is atomically confirmed alive (we hold a strong ref preventing collection during the capture), and we capture both `key_gc` and `value`. If it returns `None`, the key is dead and we capture nothing — consistent with ephemeron semantics. This matches the suggested Option 1 from the issue.
+
+Full test suite passes with no regressions (`bash test.sh`). Clippy clean.
