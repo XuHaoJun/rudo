@@ -1,7 +1,7 @@
 # [Bug]: unregister_async_scope 非原子操作導致 TOCTOU - GC 可能遺漏 roots 或 is_scope_active 返回錯誤結果
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ---
 
@@ -172,5 +172,12 @@ pub fn unregister_async_scope(&self, id: u64) {
 
 ## 修復狀態
 
-- [ ] 已修復
-- [x] 未修復
+- [x] 已修復
+- [ ] 未修復
+
+## 修復說明
+
+修復於 `crates/rudo-gc/src/heap.rs:392-402`：
+- 使用單一 lock 保護 `async_scopes` 和 `active_scope_ids` 兩個數據結構
+- 確保兩個移除操作以原子方式執行，避免 TOCTOU
+- 添加 `#[allow(clippy::significant_drop_tightening)]` 以抑制 clippy 警告

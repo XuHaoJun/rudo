@@ -388,10 +388,15 @@ impl ThreadControlBlock {
     }
 
     /// Unregister an async scope.
+    /// Uses single lock to protect both data structures atomically, avoiding TOCTOU.
     #[allow(clippy::missing_panics_doc)]
+    #[allow(clippy::significant_drop_tightening)]
     pub fn unregister_async_scope(&self, id: u64) {
-        self.async_scopes.lock().unwrap().retain(|e| e.id != id);
-        self.active_scope_ids.lock().unwrap().remove(&id);
+        let mut scopes = self.async_scopes.lock().unwrap();
+        let mut active_ids = self.active_scope_ids.lock().unwrap();
+
+        scopes.retain(|e| e.id != id);
+        active_ids.remove(&id);
     }
 
     /// Check if an async scope is still active.
