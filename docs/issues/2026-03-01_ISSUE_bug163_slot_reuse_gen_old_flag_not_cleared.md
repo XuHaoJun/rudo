@@ -1,7 +1,7 @@
 # [Bug]: Slot Reuse Does Not Clear GEN_OLD_FLAG
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
