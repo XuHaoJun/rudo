@@ -1211,19 +1211,63 @@ impl<T: Trace> Gc<T> {
     /// behaviour. Use [`Gc::try_deref`] for a safe alternative.
     pub fn as_ptr(&self) -> *const T {
         let ptr = self.ptr.load(Ordering::Acquire);
+        assert!(!ptr.is_null(), "Gc::as_ptr: cannot get ptr of a dead Gc");
         let gc_box_ptr = ptr.as_ptr();
-        // SAFETY: ptr is not null (checked in callers), and ptr is valid
-        unsafe { std::ptr::addr_of!((*gc_box_ptr).value) }
+        unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::as_ptr: cannot get ptr of a dead, dropping, or under construction Gc"
+            );
+            std::ptr::addr_of!((*gc_box_ptr).value)
+        }
     }
 
     /// Get the internal `GcBox` pointer.
     pub fn internal_ptr(gc: &Self) -> *const u8 {
-        gc.ptr.load(Ordering::Acquire).as_ptr() as *const u8
+        let ptr = gc.ptr.load(Ordering::Acquire);
+        assert!(
+            !ptr.is_null(),
+            "Gc::internal_ptr: cannot get ptr of a dead Gc"
+        );
+        let gc_box_ptr = ptr.as_ptr();
+        unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::internal_ptr: cannot get ptr of a dead, dropping, or under construction Gc"
+            );
+            gc_box_ptr as *const u8
+        }
     }
 
     /// Check if two Gcs point to the same allocation.
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
-        this.ptr.load(Ordering::Acquire).as_ptr() == other.ptr.load(Ordering::Acquire).as_ptr()
+        let this_ptr = this.ptr.load(Ordering::Acquire);
+        let other_ptr = other.ptr.load(Ordering::Acquire);
+
+        if this_ptr.is_null() || other_ptr.is_null() {
+            return this_ptr.as_ptr() == other_ptr.as_ptr();
+        }
+
+        let this_gc_box_ptr = this_ptr.as_ptr();
+        let other_gc_box_ptr = other_ptr.as_ptr();
+
+        unsafe {
+            if (*this_gc_box_ptr).has_dead_flag()
+                || (*this_gc_box_ptr).dropping_state() != 0
+                || (*this_gc_box_ptr).is_under_construction()
+                || (*other_gc_box_ptr).has_dead_flag()
+                || (*other_gc_box_ptr).dropping_state() != 0
+                || (*other_gc_box_ptr).is_under_construction()
+            {
+                panic!("Gc::ptr_eq: cannot compare dead, dropping, or under construction Gc");
+            }
+        }
+
+        this_ptr.as_ptr() == other_ptr.as_ptr()
     }
 
     /// Get the current reference count.

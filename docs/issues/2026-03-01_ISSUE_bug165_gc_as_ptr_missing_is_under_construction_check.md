@@ -1,7 +1,7 @@
 # [Bug]: Gc::as_ptr 缺少 is_under_construction 檢查 - 導致可能存取未初始化資料
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -138,3 +138,16 @@ pub fn as_ptr(&self) -> *const T {
 - bug89: Gc::clone 缺少 is_under_construction 檢查
 - bug92: Gc::downgrade 缺少 is_under_construction 檢查
 - bug95: Gc::ref_count/weak_count 缺少 is_under_construction 檢查
+
+---
+
+## 修復紀錄
+
+### 2026-03-01
+**修復方式**: 在 `ptr.rs` 中為 `as_ptr()`, `internal_ptr()`, 和 `ptr_eq()` 添加了與其他 API 一致的檢查：
+- null 檢查
+- `has_dead_flag()` 檢查
+- `dropping_state()` 檢查  
+- `is_under_construction()` 檢查
+
+現在這些函數的行為與 `Gc::ref_count()`, `Gc::weak_count()`, `Gc::downgrade()` 等其他 API 一致。
