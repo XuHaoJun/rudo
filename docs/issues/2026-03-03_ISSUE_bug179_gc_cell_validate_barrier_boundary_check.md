@@ -1,6 +1,6 @@
 # [Bug]: gc_cell_validate_and_barrier large object boundary check off-by-h_size
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

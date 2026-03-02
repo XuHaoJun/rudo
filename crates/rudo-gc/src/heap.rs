@@ -2777,7 +2777,7 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
             let (h, index) = if let Some(&(head_addr, size, h_size)) =
                 heap.large_object_map.get(&page_addr)
             {
-                if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + size {
+                if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + h_size + size {
                     return;
                 }
                 let h_ptr = head_addr as *mut PageHeader;
