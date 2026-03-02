@@ -1,7 +1,7 @@
 # [Bug]: AsyncGcHandle::downcast_ref 缺少 Scope 驗證 - 與 AsyncHandle::get() 行為不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
