@@ -288,6 +288,10 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// ```
     #[must_use]
     pub fn downgrade(&self) -> WeakCrossThreadHandle<T> {
+        assert!(
+            self.handle_id != HandleId::INVALID,
+            "GcHandle::downgrade: cannot downgrade an unregistered GcHandle"
+        );
         unsafe {
             let gc_box = &*self.ptr.as_ptr();
             assert!(
