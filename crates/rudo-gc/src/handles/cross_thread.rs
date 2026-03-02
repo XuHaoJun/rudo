@@ -578,7 +578,10 @@ impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
         }
         unsafe {
             let gc_box = &*ptr.as_ptr();
-            if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 {
+            if gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+                || gc_box.is_under_construction()
+            {
                 return;
             }
             gc_box.dec_weak();

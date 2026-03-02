@@ -1,7 +1,7 @@
 # [Bug]: WeakCrossThreadHandle::drop 缺少 is_under_construction 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
