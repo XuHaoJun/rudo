@@ -1146,6 +1146,7 @@ impl GcScope {
 
                 AsyncGcHandle {
                     slot: slot_ptr,
+                    scope_id: scope.id(),
                     type_id: tracked.type_id,
                 }
             })
@@ -1243,6 +1244,7 @@ impl Default for GcScope {
 /// ```
 pub struct AsyncGcHandle {
     slot: *const HandleSlot,
+    scope_id: u64,
     type_id: TypeId,
 }
 
@@ -1285,8 +1287,14 @@ impl AsyncGcHandle {
     #[inline]
     pub fn downcast_ref<T: Trace + 'static>(&self) -> Option<&T> {
         if self.type_id == TypeId::of::<T>() {
-            let slot = unsafe { &*self.slot };
-            let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
+            let tcb = crate::heap::current_thread_control_block()
+                .expect("AsyncGcHandle::downcast_ref() must be called within a GC thread");
+
+            let gc_box_ptr = tcb.with_scope_lock_if_active(self.scope_id, || unsafe {
+                let slot = &*self.slot;
+                slot.as_ptr() as *const GcBox<T>
+            })?;
+
             unsafe {
                 let gc_box = &*gc_box_ptr;
                 if gc_box.is_under_construction()
