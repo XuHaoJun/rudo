@@ -2,6 +2,7 @@
 
 **Status:** Open
 **Tags:** Verified
+**Duplicate Check:** Also relates to bug163 (GEN_OLD_FLAG not cleared) - same code location (heap.rs:2206-2212)
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
