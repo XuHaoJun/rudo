@@ -1,6 +1,6 @@
 # [Bug]: Mark Scanning Functions TOCTOU - is_allocated 檢查與 set_mark 之间存在 race
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

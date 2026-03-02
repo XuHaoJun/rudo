@@ -684,7 +684,7 @@ impl PerThreadMarkQueue {
         let header_size = PageHeader::header_size(block_size);
         let obj_count = unsafe { (*header).obj_count } as usize;
 
-        for i in 0..obj_count {
+        for mut i in 0..obj_count {
             if unsafe { (*header).is_allocated(i) && !(*header).is_marked(i) } {
                 if kind == VisitorKind::Minor && unsafe { (*header).generation } > 0 {
                     continue;
@@ -694,10 +694,25 @@ impl PerThreadMarkQueue {
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                unsafe { (*header).set_mark(i) };
-                marked += 1;
-
-                self.push(gc_box_ptr.as_ptr());
+                // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep
+                unsafe {
+                    loop {
+                        match (*header).try_mark(i) {
+                            Ok(false) => break, // Already marked
+                            Ok(true) => {
+                                // Re-check is_allocated to fix TOCTOU
+                                if !(*header).is_allocated(i) {
+                                    (*header).clear_mark_atomic(i);
+                                    break;
+                                }
+                                marked += 1;
+                                self.push(gc_box_ptr.as_ptr());
+                                break;
+                            }
+                            Err(()) => {} // CAS failed, retry
+                        }
+                    }
+                }
             }
         }
 

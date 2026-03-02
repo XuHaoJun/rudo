@@ -801,17 +801,31 @@ unsafe fn scan_page_for_marked_refs(
     let obj_count = (*header).obj_count as usize;
     let mut refs_found = 0;
 
-    for i in 0..obj_count {
+    for mut i in 0..obj_count {
         if (*header).is_allocated(i) && !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
-            refs_found += 1;
-            (*header).set_mark(i);
-            #[allow(clippy::cast_ptr_alignment)]
-            #[allow(clippy::unnecessary_cast)]
-            #[allow(clippy::ptr_as_ptr)]
-            let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-            if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
-                state.push_work(gc_box);
+            // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep
+            loop {
+                match (*header).try_mark(i) {
+                    Ok(false) => break, // Already marked
+                    Ok(true) => {
+                        // Re-check is_allocated to fix TOCTOU
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
+                        refs_found += 1;
+                        #[allow(clippy::cast_ptr_alignment)]
+                        #[allow(clippy::unnecessary_cast)]
+                        #[allow(clippy::ptr_as_ptr)]
+                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                        if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
+                            state.push_work(gc_box);
+                        }
+                        break;
+                    }
+                    Err(()) => {} // CAS failed, retry
+                }
             }
         }
     }
@@ -910,10 +924,17 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
     let header_size = crate::heap::PageHeader::header_size(block_size);
     let obj_count = (*header).obj_count as usize;
 
-    for i in 0..obj_count {
+    for mut i in 0..obj_count {
         if (*header).is_allocated(i) && !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
+            // set_mark returns true if we successfully marked - use it as try_mark
+            // But we still need to re-check is_allocated after successful mark
             if (*header).set_mark(i) {
+                // Re-check is_allocated to fix TOCTOU with lazy sweep
+                if !(*header).is_allocated(i) {
+                    (*header).clear_mark_atomic(i);
+                    continue;
+                }
                 #[allow(clippy::cast_ptr_alignment)]
                 #[allow(clippy::unnecessary_cast)]
                 #[allow(clippy::ptr_as_ptr)]
