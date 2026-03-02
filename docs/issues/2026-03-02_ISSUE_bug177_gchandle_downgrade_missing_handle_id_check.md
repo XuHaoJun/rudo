@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::downgrade 缺少 handle_id 有效性檢查
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
