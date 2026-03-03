@@ -1,7 +1,7 @@
 # [Bug]: is_gc_heap_pointer has UB due to dereferencing potentially invalid pointer without validation
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 
 ## 威脅模型評估 (Threat Model Assessment)
@@ -125,3 +125,19 @@ Dereferencing an invalid pointer is undefined behavior even in unsafe Rust. The 
 
 **Geohot (Exploit 攻擊觀點):**
 If this dead code is ever re-enabled without fixing, it could be exploited to read arbitrary memory or cause crashes.
+
+---
+
+## 驗證記錄 (Verification Record)
+
+**驗證日期:** 2026-03-04
+**驗證人員:** opencode
+
+### 驗證結果
+
+確認 bug 存在於 `crates/rudo-gc/src/cell.rs:1235-1253`:
+
+1. 函數 `is_gc_heap_pointer` 確實存在於 cell.rs 第 1235-1253 行
+2. 函數在沒有驗證指標是否在 heap 範圍內的情況下直接解引用 `(*header.as_ptr()).magic`
+3. 對比 heap.rs 中的 `incremental_write_barrier` 函數（第 2971 行），該函數正確地先檢查 heap bounds
+4. 這個 UB bug 確實存在，如果這些 dead code 函數被重新啟用，會造成問題
