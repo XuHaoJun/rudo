@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::borrow_mut 缺少即時標記 - 與 GcCell 行為不一致
 
 **Status:** Open
-**Tags:** Not Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -141,5 +141,33 @@ if barrier_active {
 **Rustacean (Soundness 觀點):**
 這不會導致明確的 UB（記憶體仍然有效），但會導致記憶體安全問題：物件被錯誤回收後可能被重用，導致 use-after-free。這種 bug 很難調試，因為它是並發的且依賴時序。
 
-**Geohot (Exploit 觀點):**
+**Geohot (Exploit 攻擊觀點):**
 攻擊者可以透過精確控制 GC 時機來利用這個 race window。雖然難度較高，但這是一個確實存在的攻擊面。需要仔細考慮在何處添加同步點。
+
+---
+
+## 驗證記錄 (Verification Record)
+
+**驗證日期:** 2026-03-04
+**驗證人員:** Code Analysis
+
+### 驗證結果
+
+確認 bug 存在於 `crates/rudo-gc/src/cell.rs:1041-1087`:
+
+1. **GcCell::borrow_mut()** (lines 193-207): 
+   - 獲取可變引用後，立即捕獲新的 GC 指針並調用 `mark_object_black()`
+   - 這是正確的實現
+
+2. **GcThreadSafeCell::borrow_mut()** (lines 1041-1087):
+   - 獲取 MutexGuard 後，記錄 SATB 舊值 (lines 1052-1078)
+   - 觸發 write barrier (line 1081)
+   - **但是沒有立即標記新的 GC 指針！**
+   - 標記被延遲到 `GcThreadSafeRefMut::drop()` (lines 1276-1288)
+
+3. **Race Condition 確認:**
+   - 在 `borrow_mut()` 返回和 `GcThreadSafeRefMut` 被 drop 之間存在時間窗口
+   - 在此窗口期間，如果 GC 啟動標記，新指標可能未被標記
+   - 這與 `GcCell::borrow_mut()` 的行為不一致
+
+**結論:** Bug 確認存在，需要修復以確保 `GcThreadSafeCell::borrow_mut()` 與 `GcCell::borrow_mut()` 行為一致。
