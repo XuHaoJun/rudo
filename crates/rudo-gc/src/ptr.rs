@@ -2117,15 +2117,15 @@ impl<T: Trace> Drop for Weak<T> {
             return;
         }
 
-        // SAFETY: Use raw pointer access to weak_count field directly.
-        // This is critical for Stacked Borrows compliance: when Weak::drop is called
-        // during the drop of a value inside a GcBox (e.g., a struct containing Weak<T>),
-        // the GcBox's value field is under a mutable borrow from drop_in_place.
-        // Creating a reference to the whole GcBox via (*ptr.as_ptr()).dec_weak() would
-        // violate Stacked Borrows because it conflicts with the existing mutable borrow.
-        // By using addr_of! to get the address of weak_count directly, we avoid
-        // creating a reference to the GcBox and thus avoid the borrow conflict.
         unsafe {
+            let gc_box = &*ptr.as_ptr();
+            if gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+                || gc_box.is_under_construction()
+            {
+                return;
+            }
+
             let weak_count_ptr = std::ptr::addr_of!((*ptr.as_ptr()).weak_count);
 
             let mut current = (*weak_count_ptr).load(Ordering::Relaxed);
