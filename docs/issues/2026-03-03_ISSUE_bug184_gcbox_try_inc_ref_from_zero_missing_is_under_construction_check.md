@@ -1,7 +1,7 @@
 # [Bug]: GcBox::try_inc_ref_from_zero 缺少 is_under_construction 檢查 - 可能在物件構造過程中錯誤复活
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
