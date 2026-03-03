@@ -54,11 +54,11 @@ fn test_handle_clone_after_origin_exits() {
     collect_full();
 }
 
-/// Regression test for Bug 185: GcHandle concurrent drop.
+/// Regression test for Bug 185: `GcHandle` concurrent drop.
 ///
-/// Each clone has its own handle_id and holds one ref. When multiple clones
+/// Each clone has its own `handle_id` and holds one ref. When multiple clones
 /// drop concurrently from different threads, each correctly removes its own
-/// root entry and calls dec_ref once. No double dec_ref.
+/// root entry and calls `dec_ref` once. No double `dec_ref`.
 ///
 /// See: docs/issues/2026-03-03_ISSUE_bug185_gchandle_drop_double_dec_ref.md
 #[test]
@@ -73,11 +73,9 @@ fn test_bug185_concurrent_drop_of_clones() {
     .unwrap();
 
     // Clone 8 times (orphan path - origin is dead)
-    let clones: Vec<GcHandle<Data>> = (0..8).map(|_| handle.clone()).collect();
-
     let barrier = Arc::new(Barrier::new(8));
-    let threads: Vec<_> = clones
-        .into_iter()
+    let threads: Vec<_> = (0..8)
+        .map(|_| handle.clone())
         .map(|h| {
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
