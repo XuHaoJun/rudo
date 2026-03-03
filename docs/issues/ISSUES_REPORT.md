@@ -194,3 +194,4 @@
 | [2026-03-01_ISSUE_bug167_weak_upgrade_missing_second_check.md](./2026-03-01_ISSUE_bug167_weak_upgrade_missing_second_check.md) | Weak::upgrade 缺少第二次檢查導致 TOCTOU | Invalid | Not Verified |
 | [2026-03-02_ISSUE_bug168_weak_try_upgrade_missing_post_cas_check.md](./2026-03-02_ISSUE_bug168_weak_try_upgrade_missing_post_cas_check.md) | Weak::try_upgrade 缺少 CAS 後的第二次檢查導致 TOCTOU | Fixed | Verified |
 | [2026-03-02_ISSUE_bug169_gcboxweakref_upgrade_missing_post_cas_check.md](./2026-03-02_ISSUE_bug169_gcboxweakref_upgrade_missing_post_cas_check.md) | GcBoxWeakRef::upgrade/try_upgrade 缺少 ref_count > 0 路徑的 CAS 後檢查導致 TOCTOU UAF | Open | Unverified |
+| [2026-03-03_ISSUE_bug188_gchandle_downgrade_toctou.md](./2026-03-03_ISSUE_bug188_gchandle_downgrade_toctou.md) | GcHandle::downgrade TOCTOU - 缺少 Lock Protection Between State Check and inc_weak | Open | Unverified |
