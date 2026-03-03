@@ -256,6 +256,12 @@ impl<T: Trace + ?Sized> GcBox<T> {
                 return false;
             }
 
+            // Object is under construction - do not allow resurrection
+            // This prevents incorrect inc_ref during Gc::new_cyclic_weak
+            if self.is_under_construction() {
+                return false;
+            }
+
             if ref_count != 0 {
                 return false;
             }
