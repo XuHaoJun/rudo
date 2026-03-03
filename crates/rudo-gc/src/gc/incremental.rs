@@ -132,11 +132,14 @@ impl Default for IncrementalConfig {
 /// The `worklist` field is reserved for future parallel marking coordination and
 /// is currently unused.
 ///
-/// **Important**: The `unsafe impl Sync` declaration is intentionally removed.
-/// When parallel marking is implemented, proper synchronization (Mutex or atomic
-/// operations) must be added to the `worklist` field before it can be safely accessed
-/// from multiple threads. The blanket `unsafe impl Sync` was removed because the
-/// `UnsafeCell<SegQueue>` does not provide thread-safe interior mutability.
+/// **Important**: The `unsafe impl Sync` declaration was previously removed but has been
+/// restored with proper safety justification. The worklist field is accessed single-threaded
+/// from the GC thread during synchronized mark slices, and proper safety rationale is provided
+/// at the impl site (see lines 219-232).
+///
+/// When parallel marking is implemented:
+/// 1. The `worklist` field MUST be protected with proper synchronization
+/// 2. Concurrent access without synchronization is undefined behavior
 ///
 /// # Usage
 ///

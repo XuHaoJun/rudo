@@ -1,7 +1,7 @@
 # [Bug]: IncrementalMarkState Documentation Inconsistent - Comment Says impl Removed But Code Has It
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
