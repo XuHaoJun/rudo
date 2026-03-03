@@ -1,7 +1,7 @@
 # [Bug]: GcBox::dec_ref 缺少 is_under_construction 檢查 - 可能導致提前釋放構造中的物件
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -144,3 +144,9 @@ pub fn dec_ref(self_ptr: *mut Self) -> bool {
 
 **Geohot (Exploit 攻擊觀點):**
 如果存在某個 code path 可以讓攻擊者控制時序，在物件構造過程中觸發 `dec_ref`，則可能導致 UAF。但目前來看，正常調用路徑難以觸發此問題。
+
+---
+
+## Resolution (2026-03-03)
+
+**Fixed.** Added `is_under_construction()` check to `GcBox::dec_ref()` in `ptr.rs` (after dead_flag check, before ref_count load). Returns `false` early when object is under construction, consistent with `Gc::clone`, `Gc::downgrade`, `Weak::upgrade`, and other similar functions. Full test suite and Clippy pass.

@@ -1,6 +1,6 @@
 # [Bug]: GcBox::try_inc_ref_from_zero 缺少 is_under_construction 檢查 - 可能在物件構造過程中錯誤复活
 
-**Status:** Verified
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -169,3 +169,9 @@ if self.is_under_construction() {
 
 **Geohot (Exploit 攻擊觀點):**
 如果存在某個 code path 可以讓攻擊者控制時序，在物件構造過程中觸發 `try_inc_ref_from_zero`，則可能導致 UAF。但目前來看，正常調用路徑難以觸發此問題。
+
+---
+
+## Resolution (2026-03-03)
+
+The `is_under_construction()` check was already present in `GcBox::try_inc_ref_from_zero()` (ptr.rs:264-267). The docstring was outdated—it stated "callers must still check `is_under_construction()` before calling" even though the function now performs this check internally. Updated the docstring to: "This function checks `dropping_state()` and `is_under_construction()` internally."

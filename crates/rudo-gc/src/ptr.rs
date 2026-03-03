@@ -159,6 +159,11 @@ impl<T: Trace + ?Sized> GcBox<T> {
                 // by the sweep phase, not by this dec_ref.
                 return false;
             }
+            if this.is_under_construction() {
+                // Object is under construction (e.g., during Gc::new_cyclic_weak).
+                // Do not decrement ref_count; return false to avoid premature drop.
+                return false;
+            }
 
             let count = this.ref_count.load(Ordering::Acquire);
             if count == 0 {
@@ -232,8 +237,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// without racing with concurrent collection. The transition is only allowed
     /// if the object is not dead (`DEAD_FLAG` not set).
     ///
-    /// This function checks `dropping_state()` internally; callers must still check
-    /// `is_under_construction()` before calling.
+    /// This function checks `dropping_state()` and `is_under_construction()` internally.
     ///
     /// # Safety
     ///

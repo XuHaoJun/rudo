@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::downgrade() Missing handle_id INVALID Check
 
-**Status:** Verified
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -137,3 +137,9 @@ pub fn downgrade(&self) -> WeakCrossThreadHandle<T> {
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可能利用這個不一致性來繞過某些檢查。雖然不太可能直接導致安全問題，但 API 不一致可能在某些情況下被利用。
+
+---
+
+## Resolution (2026-03-03)
+
+**Fixed.** The `handle_id != HandleId::INVALID` check was added to `GcHandle::downgrade()` in `cross_thread.rs` (lines 293–296). The test `test_downgrade_unregistered_handle_panics` in `cross_thread_handle.rs` verifies that downgrading an unregistered handle panics with "cannot downgrade an unregistered GcHandle".

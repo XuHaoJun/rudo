@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::drop Double dec_ref Race Condition - 跨執行緒同時 Drop 導致引用計數錯誤
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Reproduced
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -187,3 +187,15 @@ static DROP_LOCK: Mutex<HashMap<ThreadId, HandleId>> = Mutex::new(HashMap::new()
 - bug103: GcHandle inc_ref TOCTOU race (類似模式但影響不同操作)
 - bug29: GcHandle clone/unregister race (已被修復)
 - bug72: GcHandle resolve unregistered handle UB (提及 Drop early return)
+
+---
+
+## Resolution (2026-03-03)
+
+**Outcome:** Invalid — misidentified.
+
+The issue assumes that when multiple `GcHandle` clones drop concurrently, they share the same `handle_id` and would race, causing double `dec_ref`. This is incorrect.
+
+**Design:** Each `GcHandle` clone receives a **unique** `handle_id` via `roots.allocate_id()` (TCB path) or `heap::allocate_orphan_handle_id()` (orphan path). Each clone holds one ref and has its own root entry. When N clones drop, each removes its own `handle_id` from the root table and calls `dec_ref` once — correctly, N times for N refs.
+
+**Verification:** Added `test_bug185_concurrent_drop_of_clones` in `tests/bug4_tcb_leak.rs`: 8 clones dropped concurrently from 8 threads via `Barrier`. Test passes; no double dec_ref, no crash.

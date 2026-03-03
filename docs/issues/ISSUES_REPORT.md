@@ -3,16 +3,14 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 176
-- **Open**: 5
-- **Invalid**: 12
-- **Verified**: 8
+- **Fixed**: 183
+- **Invalid**: 14
+- **Verified**: 4
 
 ### By Tags
-- **Verified**: 177
+- **Verified**: 180
 - **Not Verified**: 11
-- **Not Reproduced**: 8
-- **Unverified**: 5
+- **Not Reproduced**: 10
 
 ## All Issues
 
@@ -196,10 +194,10 @@
 | [2026-03-01_ISSUE_bug166_gcrwlock_gcmutex_write_lock_toctou.md](./2026-03-01_ISSUE_bug166_gcrwlock_gcmutex_write_lock_toctou.md) | GcRwLock/GcMutex write/lock TOCTOU - record_satb_old_values 與 trigger_write_barrier 狀態不一致 | Fixed | Verified |
 | [2026-03-01_ISSUE_bug167_weak_upgrade_missing_second_check.md](./2026-03-01_ISSUE_bug167_weak_upgrade_missing_second_check.md) | Weak::upgrade 缺少第二次檢查導致 TOCTOU | Invalid | Not Verified |
 | [2026-03-02_ISSUE_bug168_weak_try_upgrade_missing_post_cas_check.md](./2026-03-02_ISSUE_bug168_weak_try_upgrade_missing_post_cas_check.md) | Weak::try_upgrade 缺少 CAS 後的第二次檢查導致 TOCTOU | Fixed | Verified |
-| [2026-03-02_ISSUE_bug169_gcboxweakref_upgrade_missing_post_cas_check.md](./2026-03-02_ISSUE_bug169_gcboxweakref_upgrade_missing_post_cas_check.md) | GcBoxWeakRef::upgrade/try_upgrade 缺少 ref_count > 0 路徑的 CAS 後檢查導致 TOCTOU UAF | Verified | Verified |
+| [2026-03-02_ISSUE_bug169_gcboxweakref_upgrade_missing_post_cas_check.md](./2026-03-02_ISSUE_bug169_gcboxweakref_upgrade_missing_post_cas_check.md) | GcBoxWeakRef::upgrade/try_upgrade 缺少 ref_count > 0 路徑的 CAS 後檢查導致 TOCTOU UAF | Fixed | Verified |
 | [2026-03-02_ISSUE_bug170_gcthreadsafecell_generational_barrier_large_object_index.md](./2026-03-02_ISSUE_bug170_gcthreadsafecell_generational_barrier_large_object_index.md) | GcThreadSafeCell generational_write_barrier 對大型物件的 index 計算可能錯誤 | Fixed | Verified |
 | [2026-03-02_ISSUE_bug171_slot_allocation_gen_old_flag_not_cleared.md](./2026-03-02_ISSUE_bug171_slot_allocation_gen_old_flag_not_cleared.md) | Slot Allocation in try_pop_from_page Does Not Clear GEN_OLD_FLAG | Fixed | Verified |
-| [2026-03-02_ISSUE_bug172_gchandle_downgrade_missing_handle_id_check.md](./2026-03-02_ISSUE_bug172_gchandle_downgrade_missing_handle_id_check.md) | GcHandle::downgrade() Missing handle_id INVALID Check | Verified | Verified |
+| [2026-03-02_ISSUE_bug172_gchandle_downgrade_missing_handle_id_check.md](./2026-03-02_ISSUE_bug172_gchandle_downgrade_missing_handle_id_check.md) | GcHandle::downgrade() Missing handle_id INVALID Check | Fixed | Verified |
 | [2026-03-02_ISSUE_bug172_large_object_allocation_missing_ref_count_initialization.md](./2026-03-02_ISSUE_bug172_large_object_allocation_missing_ref_count_initialization.md) | Large Object Allocation Missing ref_count/weak_count Initialization | Fixed | Verified |
 | [2026-03-02_ISSUE_bug173_gcthreadsafecell_borrow_mut_simple_toctou.md](./2026-03-02_ISSUE_bug173_gcthreadsafecell_borrow_mut_simple_toctou.md) | GcThreadSafeCell::borrow_mut_simple TOCTOU - barrier state not cached | Fixed | Verified |
 | [2026-03-02_ISSUE_bug174_slot_reuse_under_construction_flag_not_cleared.md](./2026-03-02_ISSUE_bug174_slot_reuse_under_construction_flag_not_cleared.md) | Slot Reuse 時未清除 UNDER_CONSTRUCTION_FLAG 導致新物件被錯誤標記為建構中 | Fixed | Verified |
@@ -212,10 +210,10 @@
 | [2026-03-03_ISSUE_bug180_register_async_scope_toctou.md](./2026-03-03_ISSUE_bug180_register_async_scope_toctou.md) | register_async_scope 雙鎖 TOCTOU 導致 inconsistent scope state | Fixed | Verified |
 | [2026-03-03_ISSUE_bug181_gcrwlock_guarded_drop_toctou.md](./2026-03-03_ISSUE_bug181_gcrwlock_guarded_drop_toctou.md) | GcRwLockWriteGuard 與 GcMutexGuard Drop 實現存在 TOCTOU - capture_gc_ptrs_into 與 mark_object_black 之间存在 Race | Fixed | Verified |
 | [2026-03-03_ISSUE_bug182_weak_drop_missing_state_checks.md](./2026-03-03_ISSUE_bug182_weak_drop_missing_state_checks.md) | Weak::drop 缺少 has_dead_flag、dropping_state 和 is_under_construction 檢查 | Fixed | Verified |
-| [2026-03-03_ISSUE_bug183_gcbox_dec_ref_missing_is_under_construction_check.md](./2026-03-03_ISSUE_bug183_gcbox_dec_ref_missing_is_under_construction_check.md) | GcBox::dec_ref 缺少 is_under_construction 檢查 - 可能導致提前釋放構造中的物件 | Open | Unverified |
-| [2026-03-03_ISSUE_bug184_gcbox_try_inc_ref_from_zero_missing_is_under_construction_check.md](./2026-03-03_ISSUE_bug184_gcbox_try_inc_ref_from_zero_missing_is_under_construction_check.md) | GcBox::try_inc_ref_from_zero 缺少 is_under_construction 檢查 - 可能在物件構造過程中錯誤复活 | Verified | Verified |
-| [2026-03-03_ISSUE_bug185_gchandle_drop_double_dec_ref.md](./2026-03-03_ISSUE_bug185_gchandle_drop_double_dec_ref.md) | GcHandle::drop Double dec_ref Race Condition - 跨執行緒同時 Drop 導致引用計數錯誤 | Open | Unverified |
-| [2026-03-03_ISSUE_bug186_gchandle_clone_insert_before_construction_check.md](./2026-03-03_ISSUE_bug186_gchandle_clone_insert_before_construction_check.md) | GcHandle::clone() 在 is_under_construction 檢查前插入 root 導致記憶體洩漏 | Open | Unverified |
-| [2026-03-03_ISSUE_bug187_gchandle_drop_double_dec_ref_race.md](./2026-03-03_ISSUE_bug187_gchandle_drop_double_dec_ref_race.md) | GcHandle::drop Double dec_ref Race Condition - 跨執行緒同時 Drop 導致引用計數錯誤 | Verified | Verified |
-| [2026-03-03_ISSUE_bug188_gchandle_downgrade_toctou.md](./2026-03-03_ISSUE_bug188_gchandle_downgrade_toctou.md) | GcHandle::downgrade TOCTOU - Missing Lock Protection Between State Check and inc_weak | Open | Unverified |
-| [2026-03-03_ISSUE_bug189_weak_crossthread_is_valid_missing_origin_check.md](./2026-03-03_ISSUE_bug189_weak_crossthread_is_valid_missing_origin_check.md) | WeakCrossThreadHandle::is_valid() Missing Origin Thread Check - Inconsistent with resolve() | Open | Unverified |
+| [2026-03-03_ISSUE_bug183_gcbox_dec_ref_missing_is_under_construction_check.md](./2026-03-03_ISSUE_bug183_gcbox_dec_ref_missing_is_under_construction_check.md) | GcBox::dec_ref 缺少 is_under_construction 檢查 - 可能導致提前釋放構造中的物件 | Fixed | Verified |
+| [2026-03-03_ISSUE_bug184_gcbox_try_inc_ref_from_zero_missing_is_under_construction_check.md](./2026-03-03_ISSUE_bug184_gcbox_try_inc_ref_from_zero_missing_is_under_construction_check.md) | GcBox::try_inc_ref_from_zero 缺少 is_under_construction 檢查 - 可能在物件構造過程中錯誤复活 | Fixed | Verified |
+| [2026-03-03_ISSUE_bug185_gchandle_drop_double_dec_ref.md](./2026-03-03_ISSUE_bug185_gchandle_drop_double_dec_ref.md) | GcHandle::drop Double dec_ref Race Condition - 跨執行緒同時 Drop 導致引用計數錯誤 | Invalid | Not Reproduced |
+| [2026-03-03_ISSUE_bug186_gchandle_clone_insert_before_construction_check.md](./2026-03-03_ISSUE_bug186_gchandle_clone_insert_before_construction_check.md) | GcHandle::clone() 在 is_under_construction 檢查前插入 root 導致記憶體洩漏 | Fixed | Verified |
+| [2026-03-03_ISSUE_bug187_gchandle_drop_double_dec_ref_race.md](./2026-03-03_ISSUE_bug187_gchandle_drop_double_dec_ref_race.md) | GcHandle::drop Double dec_ref Race Condition - 跨執行緒同時 Drop 導致引用計數錯誤 | Invalid | Not Reproduced |
+| [2026-03-03_ISSUE_bug188_gchandle_downgrade_toctou.md](./2026-03-03_ISSUE_bug188_gchandle_downgrade_toctou.md) | GcHandle::downgrade TOCTOU - Missing Lock Protection Between State Check and inc_weak | Fixed | Verified |
+| [2026-03-03_ISSUE_bug189_weak_crossthread_is_valid_missing_origin_check.md](./2026-03-03_ISSUE_bug189_weak_crossthread_is_valid_missing_origin_check.md) | WeakCrossThreadHandle::is_valid() Missing Origin Thread Check - Inconsistent with resolve() | Fixed | Verified |

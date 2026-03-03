@@ -292,15 +292,40 @@ impl<T: Trace + 'static> GcHandle<T> {
             self.handle_id != HandleId::INVALID,
             "GcHandle::downgrade: cannot downgrade an unregistered GcHandle"
         );
-        unsafe {
-            let gc_box = &*self.ptr.as_ptr();
-            assert!(
-                !gc_box.has_dead_flag()
-                    && gc_box.dropping_state() == 0
-                    && !gc_box.is_under_construction(),
-                "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle"
-            );
-            gc_box.inc_weak();
+        // Hold lock during check-and-inc_weak to prevent TOCTOU with unregister/drop.
+        // Same pattern as GcHandle::clone() and GcHandle::resolve().
+        if let Some(tcb) = self.origin_tcb.upgrade() {
+            let roots = tcb.cross_thread_roots.lock().unwrap();
+            if !roots.strong.contains_key(&self.handle_id) {
+                panic!("GcHandle::downgrade: handle has been unregistered");
+            }
+            unsafe {
+                let gc_box = &*self.ptr.as_ptr();
+                assert!(
+                    !gc_box.has_dead_flag()
+                        && gc_box.dropping_state() == 0
+                        && !gc_box.is_under_construction(),
+                    "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle"
+                );
+                gc_box.inc_weak();
+            }
+            drop(roots);
+        } else {
+            let orphan = heap::lock_orphan_roots();
+            if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                panic!("GcHandle::downgrade: handle has been unregistered");
+            }
+            unsafe {
+                let gc_box = &*self.ptr.as_ptr();
+                assert!(
+                    !gc_box.has_dead_flag()
+                        && gc_box.dropping_state() == 0
+                        && !gc_box.is_under_construction(),
+                    "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle (orphan)"
+                );
+                gc_box.inc_weak();
+            }
+            drop(orphan);
         }
         WeakCrossThreadHandle {
             weak: GcBoxWeakRef::new(self.ptr),
@@ -345,9 +370,8 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
                 if !roots.strong.contains_key(&self.handle_id) {
                     panic!("cannot clone an unregistered GcHandle");
                 }
-                let new_id = roots.allocate_id();
-                roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());
-                // inc_ref for new handle while holding lock (prevents TOCTOU with unregister)
+                // Check before insert (matches Gc::cross_thread_handle): avoid orphaned root
+                // entry if assert panics.
                 unsafe {
                     let gc_box = &*self.ptr.as_ptr();
                     assert!(
@@ -356,7 +380,12 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
                             && !gc_box.is_under_construction(),
                         "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle"
                     );
-                    gc_box.inc_ref();
+                }
+                let new_id = roots.allocate_id();
+                roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());
+                // inc_ref for new handle while holding lock (prevents TOCTOU with unregister)
+                unsafe {
+                    (*self.ptr.as_ptr()).inc_ref();
                 }
                 drop(roots);
                 (new_id, Arc::downgrade(&tcb))
@@ -440,17 +469,23 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
         self.origin_thread
     }
 
-    /// Returns `true` if `upgrade()` would succeed.
+    /// Returns `true` if `resolve()` / `try_resolve()` would succeed.
     ///
-    /// This checks whether the underlying object is still alive and not being
-    /// dropped. Note that even if `is_valid()` returns `true`, another thread
-    /// may collect the object immediately after this call returns.
-    /// Use `upgrade()` (which atomically transitions `ref_count`) to safely
-    /// obtain a strong reference.
+    /// This checks whether the origin thread is still alive and the underlying
+    /// object is still alive and not being dropped. Consistent with
+    /// `resolve()` and `try_resolve()`: returns `false` if the origin thread
+    /// has terminated.
+    ///
+    /// Note that even if `is_valid()` returns `true`, another thread may
+    /// collect the object immediately after this call returns. Use
+    /// `resolve()` or `try_resolve()` to atomically obtain a strong reference.
     ///
     /// Can be called from any thread (doesn't access `T`).
     #[must_use]
     pub fn is_valid(&self) -> bool {
+        if self.origin_tcb.upgrade().is_none() {
+            return false;
+        }
         self.weak.upgrade().is_some()
     }
 

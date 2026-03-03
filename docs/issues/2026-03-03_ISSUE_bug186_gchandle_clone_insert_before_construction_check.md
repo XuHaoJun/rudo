@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::clone() 在 is_under_construction 檢查前插入 root 導致記憶體洩漏
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -141,3 +141,9 @@ unsafe {
 - 記憶體洩漏可用於 DoS 攻擊
 - 攻擊者可能透過大量觸發此場景來耗盡記憶體
 - 需要在物件構造過程中精確時機，難以穩定利用
+
+---
+
+## Resolution (2026-03-03)
+
+**Fixed.** Moved the `has_dead_flag`, `dropping_state`, and `is_under_construction` checks before `roots.strong.insert()` in `GcHandle::clone()`, matching the order in `Gc::cross_thread_handle()`. This prevents orphaned root entries when the assert panics. All cross_thread_handle and GcHandle tests pass.

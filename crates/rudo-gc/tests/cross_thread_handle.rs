@@ -274,6 +274,29 @@ fn test_weak_is_valid_after_gc() {
     assert!(!weak.is_valid());
 }
 
+/// Test weak handle `is_valid()` returns false when origin thread has terminated (bug189).
+#[test]
+fn test_weak_is_valid_after_origin_thread_terminated() {
+    let (sender, receiver) = mpsc::channel();
+
+    let origin = thread::spawn(move || {
+        let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+        let weak = gc.weak_cross_thread_handle();
+        sender.send(weak).unwrap();
+        // Thread exits here; origin_tcb will be dropped
+    });
+
+    let weak = receiver.recv().unwrap();
+    origin.join().unwrap();
+
+    // is_valid() must return false when origin thread has terminated,
+    // consistent with try_resolve() returning None and resolve() panicking.
+    assert!(
+        !weak.is_valid(),
+        "is_valid() should return false when origin thread has terminated"
+    );
+}
+
 /// Test weak handle `try_resolve()` returns None after GC collection.
 #[test]
 fn test_weak_try_resolve_after_gc() {

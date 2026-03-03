@@ -1,6 +1,6 @@
 # [Bug]: GcBoxWeakRef::upgrade/try_upgrade 缺少 ref_count > 0 路徑的 CAS 後檢查導致 TOCTOU UAF
 
-**Status:** Verified
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -147,3 +147,18 @@ Some(Gc {
 
 **Geohot (Exploit 觀點):**
 這是一個經典的 TOCTOU 漏洞。與 Weak::try_upgrade 的 bug (bug168) 不同，這個漏洞影響的是內部的 GcBoxWeakRef，可能會被 GcHandle 和 CrossThreadHandle 的使用者觸發。攻擊者可以透過精確時序控制，在 upgrade 過程中觸發 concurrent drop，導致 use-after-free。
+
+---
+
+## Resolution (2026-03-03)
+
+The fix is already present in the codebase. Both `GcBoxWeakRef::upgrade()` (ptr.rs:546–551) and `GcBoxWeakRef::try_upgrade()` (ptr.rs:678–683) include the post-CAS safety check after `try_inc_ref_if_nonzero()`:
+
+```rust
+if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+    GcBox::dec_ref(ptr.as_ptr());
+    return None;
+}
+```
+
+Full test suite passes. Marked as Fixed.
