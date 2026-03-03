@@ -392,10 +392,13 @@ impl ThreadControlBlock {
     /// plan to drop their Arc - use `Arc::clone()` if continued access needed.
     /// Both the caller and TCB hold independent Arc references.
     #[allow(clippy::missing_panics_doc)]
+    #[allow(clippy::significant_drop_tightening)]
     pub fn register_async_scope(&self, id: u64, data: Arc<AsyncScopeData>) {
         let entry = AsyncScopeEntry { id, data };
-        self.async_scopes.lock().unwrap().push(entry);
-        self.active_scope_ids.lock().unwrap().insert(id);
+        let mut scopes = self.async_scopes.lock().unwrap();
+        let mut active_ids = self.active_scope_ids.lock().unwrap();
+        scopes.push(entry);
+        active_ids.insert(id);
     }
 
     /// Unregister an async scope.

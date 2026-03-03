@@ -1,7 +1,21 @@
 # [Bug]: register_async_scope 雙鎖 TOCTOU 導致 inconsistent scope state
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
+
+---
+
+## 修復狀態
+
+- [x] 已修復
+- [ ] 未修復
+
+## 修復內容
+
+在 `crates/rudo-gc/src/heap.rs` 的 `register_async_scope` 函數中：
+- 將兩個獨立的 lock 調用改為嵌套 lock，與 `unregister_async_scope` 保持一致
+- 添加 `#[allow(clippy::significant_drop_tightening)]` 屬性
+- 修復位置：第 395-401 行
 
 ---
 
