@@ -1,7 +1,7 @@
 # [Bug]: Slot Allocation in try_pop_from_page Does Not Clear GEN_OLD_FLAG
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -126,3 +126,11 @@ unsafe {
 
 **Geohot (Exploit 觀點):**
 - The stale flag could potentially be exploited if there's code that behaves differently based on `has_gen_old_flag()`
+
+---
+
+## Resolution (2026-03-03)
+
+**Outcome:** Fixed.
+
+Added `(*gc_box_ptr).clear_gen_old()` in `try_pop_from_page` (heap.rs) immediately after `clear_dead()`, matching the dealloc path (heap.rs:2640) and sweep paths (gc.rs:2536, 2660). Ensures new objects in reclaimed slots never inherit stale `GEN_OLD_FLAG` from the previous occupant.

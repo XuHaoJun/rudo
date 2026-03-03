@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::borrow_mut_simple TOCTOU - barrier state not cached
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -112,3 +112,9 @@ where
 實際利用這個 bug 非常困難：
 - 需要極精確的時序控制
 - 即使觸發，影響也只是 barrier 行為不一致，不太可能直接導致可利用的記憶體錯誤
+
+---
+
+## Resolution (2026-03-03)
+
+Fixed by caching `incremental_active` and `generational_active` in `borrow_mut_simple` before calling `trigger_write_barrier_with_incremental`, matching the pattern used in `borrow_mut()` (bug116, bug153). Removed the now-unused `trigger_write_barrier` helper. All GcThreadSafeCell tests pass.

@@ -1104,7 +1104,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     where
         T: Trace,
     {
-        self.trigger_write_barrier();
+        // Cache barrier states once to avoid TOCTOU (bug116, bug153, bug173)
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
         self.inner.lock()
     }
 
@@ -1127,14 +1130,6 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     #[inline]
     pub fn borrow_mut_gen_only(&self) -> parking_lot::MutexGuard<'_, T> {
         self.inner.lock()
-    }
-
-    #[inline]
-    fn trigger_write_barrier(&self) {
-        self.trigger_write_barrier_with_incremental(
-            crate::gc::incremental::is_incremental_marking_active(),
-            crate::gc::incremental::is_generational_barrier_active(),
-        );
     }
 
     /// Barrier with cached incremental and generational state. Used by `borrow_mut` to avoid
@@ -1198,23 +1193,17 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                 let is_large = heap.large_object_map.contains_key(&page_addr);
 
                 if is_large {
-                    if let Some(&(head_addr, _, _)) = heap.large_object_map.get(&page_addr) {
+                    if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr)
+                    {
+                        let ptr_addr = ptr as usize;
+                        if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + h_size + size {
+                            return;
+                        }
                         let header = head_addr as *mut crate::heap::PageHeader;
                         if (*header).magic == MAGIC_GC_PAGE && (*header).generation > 0 {
-                            let block_size = (*header).block_size as usize;
-                            let header_size = (*header).header_size as usize;
-                            let header_page_addr = head_addr;
-                            let ptr_addr = ptr as usize;
-
-                            if ptr_addr >= header_page_addr + header_size {
-                                let offset = ptr_addr - (header_page_addr + header_size);
-                                let index = offset / block_size;
-
-                                if index < (*header).obj_count as usize {
-                                    (*header).set_dirty(index);
-                                    heap.add_to_dirty_pages(NonNull::new_unchecked(header));
-                                }
-                            }
+                            // For large objects, always use index 0 (matches unified_write_barrier).
+                            (*header).set_dirty(0);
+                            heap.add_to_dirty_pages(NonNull::new_unchecked(header));
                         }
                     }
                 } else {

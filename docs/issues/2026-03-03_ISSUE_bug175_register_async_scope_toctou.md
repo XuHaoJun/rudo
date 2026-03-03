@@ -1,7 +1,13 @@
 # [Bug]: register_async_scope 雙鎖 TOCTOU 導致 inconsistent scope state
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
+
+---
+
+## Resolution Note (2026-03-03)
+
+Duplicate of bug180. The fix was already applied: `register_async_scope` in `heap.rs` (lines 396–402) acquires both `async_scopes` and `active_scope_ids` locks before modifying either structure, matching the suggested fix. No code change needed.
 
 ---
 

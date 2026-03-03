@@ -1,6 +1,6 @@
 # [Bug]: AsyncGcHandle::downcast_ref 缺少 Scope 驗證 - 與 AsyncHandle::get() 行為不一致
 
-**Status:** Verified
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -127,3 +127,9 @@ pub fn downcast_ref<T: Trace + 'static>(&self) -> Option<&T> {
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可以通過精確的時序控制來觸發此 use-after-free，進而實現記憶體佈局控制。
+
+---
+
+## Resolution Note (2026-03-03)
+
+**Fixed.** The implementation in `handles/async.rs:1288-1312` already uses `with_scope_lock_if_active()` to validate scope before accessing `self.slot`. The `?` operator returns `None` when the scope is inactive, matching the suggested fix. Behavior is consistent with `AsyncHandle::get()` (bug148).

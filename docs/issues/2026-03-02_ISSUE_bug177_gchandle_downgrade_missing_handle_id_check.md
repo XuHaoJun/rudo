@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::downgrade 缺少 handle_id 有效性檢查
 
-**Status:** Verified
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -161,3 +161,9 @@ pub fn downgrade(&self) -> Result<WeakCrossThreadHandle<T>, HandleError> {
 
 **Geohot (Exploit 攻擊觀點):**
 在極端情況下，錯誤的 weak_count 可能被利用來影響 GC 回收行為，但目前看來難以利用。
+
+---
+
+## Resolution (2026-03-03)
+
+**Fixed.** `GcHandle::downgrade` in `handles/cross_thread.rs` already includes the `handle_id != HandleId::INVALID` check (lines 292–295), consistent with `clone`, `resolve`, and `try_resolve`. Added regression test `test_downgrade_unregistered_handle_panics` in `tests/cross_thread_handle.rs`.

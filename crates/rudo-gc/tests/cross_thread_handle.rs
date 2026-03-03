@@ -179,6 +179,16 @@ fn test_clone_unregistered_handle_panics() {
     let _ = handle.clone();
 }
 
+/// Test that downgrading an unregistered handle panics (Bug 177 - `handle_id` check).
+#[test]
+#[should_panic(expected = "cannot downgrade an unregistered GcHandle")]
+fn test_downgrade_unregistered_handle_panics() {
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let mut handle = gc.cross_thread_handle();
+    handle.unregister();
+    let _ = handle.downgrade();
+}
+
 /// Test clone-then-unregister: cloned handle keeps object alive (expected behavior).
 #[test]
 fn test_clone_then_unregister_cloned_keeps_alive() {

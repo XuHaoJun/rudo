@@ -385,6 +385,15 @@ impl<T: Trace + ?Sized> GcBox<T> {
         self.weak_count
             .fetch_and(!Self::DEAD_FLAG, Ordering::Release);
     }
+
+    /// Clear `UNDER_CONSTRUCTION_FLAG`. Used when reusing a slot so the new object is not
+    /// incorrectly marked as under construction. Must be called before the slot is used for
+    /// a new allocation (e.g. after a slot from `Gc::new_cyclic_weak` is reclaimed).
+    #[inline]
+    pub(crate) fn clear_under_construction(&self) {
+        self.weak_count
+            .fetch_and(!Self::UNDER_CONSTRUCTION_FLAG, Ordering::Release);
+    }
 }
 
 impl<T: Trace> GcBox<T> {
@@ -448,6 +457,24 @@ impl GcBox<()> {
 
     /// A no-op trace function for already-dropped objects.
     pub(crate) const unsafe fn no_op_trace(_ptr: *const u8, _visitor: &mut GcVisitor) {}
+
+    /// Initialize the `GcBox` header at the given raw pointer.
+    /// Used by `alloc_large` when pre-initializing memory for defense-in-depth.
+    /// Caller must ensure ptr is valid and points to uninitialized `GcBox` memory.
+    ///
+    /// # Safety
+    /// The pointer must be valid for writes and properly aligned.
+    #[inline]
+    pub(crate) unsafe fn init_header_at(ptr: *mut Self) {
+        // SAFETY: Caller guarantees ptr is valid and properly aligned.
+        unsafe {
+            std::ptr::addr_of_mut!((*ptr).ref_count).write(AtomicUsize::new(1));
+            std::ptr::addr_of_mut!((*ptr).weak_count).write(AtomicUsize::new(0));
+            std::ptr::addr_of_mut!((*ptr).drop_fn).write(Self::no_op_drop);
+            std::ptr::addr_of_mut!((*ptr).trace_fn).write(Self::no_op_trace);
+            std::ptr::addr_of_mut!((*ptr).is_dropping).write(AtomicUsize::new(0));
+        }
+    }
 }
 
 /// Internal weak reference type for cross-thread handles.

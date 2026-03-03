@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell generational_write_barrier 對大型物件的 index 計算可能錯誤
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -122,3 +122,11 @@ if is_large {
 **Geohot (Exploit 觀點):**
 - 這是一個邏輯錯誤，可能被利用來影響 GC 時序
 - 但不太可能直接導致安全漏洞
+
+---
+
+## Resolution (2026-03-03)
+
+**Outcome:** Fixed.
+
+`GcThreadSafeCell::generational_write_barrier` was computing `index = offset / block_size` for large objects, which could produce non-zero indices and mark the wrong slot. The fix aligns with `unified_write_barrier` (heap.rs): for large objects, always use `index 0`. Also added the bounds check `ptr_addr < head_addr + h_size || ptr_addr >= head_addr + h_size + size` for consistency.

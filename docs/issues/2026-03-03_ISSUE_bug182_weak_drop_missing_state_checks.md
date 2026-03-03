@@ -1,7 +1,13 @@
 # [Bug]: Weak::drop 缺少 has_dead_flag、dropping_state 和 is_under_construction 檢查
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
+
+---
+
+## Resolution Note (2026-03-03)
+
+The fix described in this issue is **already present** in the current codebase. In `ptr.rs` lines 2155–2159, `Weak::drop` correctly checks `has_dead_flag()`, `dropping_state()`, and `is_under_construction()` before calling `dec_weak`. The implementation matches `WeakCrossThreadHandle::drop` in `cross_thread.rs`. Weak-related tests (`weak_memory_reclaim`, `weak`) pass.
 
 ---
 

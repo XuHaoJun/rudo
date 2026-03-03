@@ -412,13 +412,21 @@ impl<T: GcCapture + ?Sized> DerefMut for GcRwLockWriteGuard<'_, T> {
 /// Drop implementation for write guards.
 /// Captures and marks GC pointers on drop to satisfy SATB when incremental marking is active,
 /// ensuring modifications made while holding the lock are visible to the GC.
+///
+/// # TOCTOU between capture and mark
+///
+/// There is a window between `capture_gc_ptrs_into` and `mark_object_black` where lazy sweep
+/// may reclaim and reuse a slot. `mark_object_black` handles this internally: it checks
+/// `is_allocated` before marking and uses post-CAS validation to roll back if the slot was
+/// swept between check and mark. No explicit pre-check is needed here.
 impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
 
         // Always mark when we have ptrs to eliminate TOCTOU: barrier state may change between
-        // any check and mark. mark_object_black is idempotent and safe when barrier is inactive.
+        // any check and mark. mark_object_black is idempotent and safe when barrier is inactive;
+        // it also handles swept slots via is_allocated check and post-CAS validation.
         for gc_ptr in ptrs {
             let _ =
                 unsafe { crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8) };
@@ -659,13 +667,21 @@ impl<T: GcCapture + ?Sized> DerefMut for GcMutexGuard<'_, T> {
 /// Drop implementation for mutex guards.
 /// Captures and marks GC pointers on drop to satisfy SATB when incremental marking is active,
 /// ensuring modifications made while holding the lock are visible to the GC.
+///
+/// # TOCTOU between capture and mark
+///
+/// There is a window between `capture_gc_ptrs_into` and `mark_object_black` where lazy sweep
+/// may reclaim and reuse a slot. `mark_object_black` handles this internally: it checks
+/// `is_allocated` before marking and uses post-CAS validation to roll back if the slot was
+/// swept between check and mark. No explicit pre-check is needed here.
 impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
     fn drop(&mut self) {
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
 
         // Always mark when we have ptrs to eliminate TOCTOU: barrier state may change between
-        // any check and mark. mark_object_black is idempotent and safe when barrier is inactive.
+        // any check and mark. mark_object_black is idempotent and safe when barrier is inactive;
+        // it also handles swept slots via is_allocated check and post-CAS validation.
         for gc_ptr in ptrs {
             let _ =
                 unsafe { crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8) };

@@ -1,7 +1,7 @@
 # [Bug]: Large Object Allocation Missing ref_count/weak_count Initialization
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -133,3 +133,9 @@ std::ptr::addr_of_mut!((*gc_box_ptr).is_dropping)
 - If attacker can control memory layout, they could set specific ref_count values
 - Could potentially trigger premature collection or prevent collection
 - The uninitialized memory could leak sensitive data if not zeroed
+
+---
+
+## Resolution (2026-03-03)
+
+**Fixed.** Added `GcBox::<()>::init_header_at()` in `ptr.rs` to initialize `ref_count`, `weak_count`, `is_dropping`, `drop_fn`, and `trace_fn` at a raw pointer. `alloc_large` in `heap.rs` now calls this helper for defense-in-depth. All large object tests pass.

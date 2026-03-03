@@ -1,7 +1,7 @@
 # [Bug]: GcRwLockWriteGuard 與 GcMutexGuard Drop 實現存在 TOCTOU - capture_gc_ptrs_into 與 mark_object_black 之间存在 Race
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ---
 
@@ -129,3 +129,13 @@ impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
 - 這個問題的嚴重程度較低，因為 `mark_object_black` 已經有防護
 - 建議是添加明確的檢查以提高代碼清晰度
 - 或者在文檔中說明這個行為是預期的
+
+---
+
+## Resolution (2026-03-03)
+
+**Outcome:** Fixed via documentation.
+
+The TOCTOU window between `capture_gc_ptrs_into` and `mark_object_black` is already handled by `mark_object_black` itself: it checks `is_allocated` before marking and uses post-CAS validation to roll back if the slot was swept between check and mark (see `gc/incremental.rs:999-1024`). Adding an explicit pre-check would introduce another TOCTOU (check-then-call) and would be redundant.
+
+Documentation was added to both `GcRwLockWriteGuard` and `GcMutexGuard` Drop implementations explaining that `mark_object_black` handles swept slots internally, so no explicit pre-check is needed.

@@ -2206,12 +2206,15 @@ impl LocalHeap {
         // SAFETY: Caller guarantees header is valid.
         unsafe { (*header).set_allocated(idx as usize) };
 
-        // Clear DEAD_FLAG so reused slot is not incorrectly marked as dead.
+        // Clear DEAD_FLAG, GEN_OLD_FLAG, and UNDER_CONSTRUCTION_FLAG so reused slot is not
+        // incorrectly marked. (UNDER_CONSTRUCTION_FLAG can be set by Gc::new_cyclic_weak.)
         // SAFETY: obj_ptr points to a valid GcBox slot (was in free list).
         #[allow(clippy::cast_ptr_alignment)]
         unsafe {
             let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
             (*gc_box_ptr).clear_dead();
+            (*gc_box_ptr).clear_gen_old();
+            (*gc_box_ptr).clear_under_construction();
         }
 
         // Clear ALL_DEAD flag since we're allocating a new live object
@@ -2417,15 +2420,14 @@ impl LocalHeap {
             // Mark the single object as allocated
             (*header.as_ptr()).set_allocated(0);
 
-            // Initialize the GcBox with no-op drop/trace to prevent crashes if
-            // the caller doesn't properly initialize the GcBox (e.g., when using
-            // low-level alloc API directly in tests).
+            // Initialize the GcBox header for defense-in-depth. Ensures ref_count,
+            // weak_count, is_dropping, drop_fn, and trace_fn are set even if the
+            // caller doesn't fully initialize (e.g., low-level alloc API in tests).
+            // Uninitialized atomics could cause incorrect reference counting or
+            // use-after-free when memory is reused.
             #[allow(clippy::cast_ptr_alignment)]
             let gc_box_ptr = ptr.as_ptr().add(h_size).cast::<crate::ptr::GcBox<()>>();
-            std::ptr::addr_of_mut!((*gc_box_ptr).drop_fn)
-                .write(crate::ptr::GcBox::<()>::no_op_drop);
-            std::ptr::addr_of_mut!((*gc_box_ptr).trace_fn)
-                .write(crate::ptr::GcBox::<()>::no_op_trace);
+            crate::ptr::GcBox::<()>::init_header_at(gc_box_ptr);
         }
 
         let page_ptr = header; // header is NonNull
@@ -2636,8 +2638,12 @@ impl LocalHeap {
                                 unsafe { ((*gc_box_ptr).drop_fn)(obj_ptr) };
                             }
 
-                            // Clear GEN_OLD_FLAG so reused slots don't inherit stale barrier state.
-                            unsafe { (*gc_box_ptr).clear_gen_old() }
+                            // Clear GEN_OLD_FLAG and UNDER_CONSTRUCTION_FLAG so reused slots
+                            // don't inherit stale state.
+                            unsafe {
+                                (*gc_box_ptr).clear_gen_old();
+                                (*gc_box_ptr).clear_under_construction();
+                            }
 
                             // Add back to free list
                             unsafe {

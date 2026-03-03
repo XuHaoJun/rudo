@@ -1,6 +1,6 @@
 # [Bug]: Slot Reuse 時未清除 UNDER_CONSTRUCTION_FLAG 導致新物件被錯誤標記為建構中
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 **Duplicate Check:** Also relates to bug163 (GEN_OLD_FLAG not cleared) - same code location (heap.rs:2206-2212)
 
@@ -123,3 +123,15 @@ unsafe {
 
 **Geohot (Exploit 觀點):**
 在極端的並發情況下，如果攻擊者能控制 slot reuse 的時序，可能能夠利用這個 bug 來阻止正常的 Weak 升級。但實際利用難度較高。
+
+---
+
+## Resolution (2026-03-03)
+
+**Outcome:** Fixed.
+
+Added `clear_under_construction()` to `GcBox` in `ptr.rs` and invoked it in both slot-reuse paths:
+1. **General slot reuse** (`heap.rs` try_pop_from_page): Clear DEAD_FLAG, GEN_OLD_FLAG, and UNDER_CONSTRUCTION_FLAG so reused slots do not inherit stale state.
+2. **Small-object dealloc path** (`heap.rs` dealloc): Clear GEN_OLD_FLAG and UNDER_CONSTRUCTION_FLAG when returning slots to the free list.
+
+Behavior now matches `clear_dead` and `clear_gen_old`. Verified by existing cyclic_weak tests.

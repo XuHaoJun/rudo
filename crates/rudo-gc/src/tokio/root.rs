@@ -161,6 +161,20 @@ impl GcRootSet {
 
     /// Checks if a pointer is currently registered as a root.
     ///
+    /// # TOCTOU race
+    ///
+    /// This function has a time-of-check-time-of-use (TOCTOU) race: the lock is
+    /// released before returning, so the result may be stale by the time the
+    /// caller uses it. If another thread calls `unregister(ptr)` between the
+    /// check and the use, the caller may incorrectly treat the pointer as a
+    /// root when it is not, potentially leading to use-after-free.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that between the call and any use of the result,
+    /// no other thread calls `unregister(ptr)` on the same pointer. In
+    /// single-threaded contexts this is trivially satisfied.
+    ///
     /// # Panics
     ///
     /// This function does not panic.
@@ -171,9 +185,9 @@ impl GcRootSet {
     ///
     /// # Returns
     ///
-    /// `true` if the pointer is registered, `false` otherwise
+    /// `true` if the pointer was registered at call time, `false` otherwise
     #[inline]
-    pub fn is_registered(&self, ptr: usize) -> bool {
+    pub unsafe fn is_registered(&self, ptr: usize) -> bool {
         let roots = self.roots.lock().unwrap();
         roots.contains(&ptr)
     }
@@ -230,7 +244,7 @@ mod tests {
 
         set.register(0x1234);
         assert_eq!(set.len(), 1);
-        assert!(set.is_registered(0x1234));
+        assert!(unsafe { set.is_registered(0x1234) });
         assert!(set.is_dirty());
 
         set.register(0x1234); // Duplicate - should not increment
@@ -238,7 +252,7 @@ mod tests {
 
         set.unregister(0x1234);
         assert!(set.is_empty());
-        assert!(!set.is_registered(0x1234));
+        assert!(!unsafe { set.is_registered(0x1234) });
     }
 
     #[test]
@@ -264,7 +278,7 @@ mod tests {
         set.clear();
 
         assert!(set.is_empty());
-        assert!(!set.is_registered(0x1000));
-        assert!(!set.is_registered(0x2000));
+        assert!(!unsafe { set.is_registered(0x1000) });
+        assert!(!unsafe { set.is_registered(0x2000) });
     }
 }

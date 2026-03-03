@@ -1,7 +1,7 @@
 # [Bug]: GcRootSet::is_registered 存在 TOCTOU Race Condition
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -154,3 +154,18 @@ fn main() {
 3. 利用錯誤的 root 狀態資訊進行進一步利用
 
 此問題雖然不如 GcHandle resolve TOCTOU 嚴重，但仍然是並髮 GC 系統中的潛在漏洞。
+
+---
+
+## Resolution (2026-03-03)
+
+**Outcome:** Fixed.
+
+Implemented Option 3 from the suggested fixes: marked `is_registered` as `unsafe` and added documentation for the TOCTOU race. The caller must ensure that between the call and any use of the result, no other thread calls `unregister(ptr)` on the same pointer. In single-threaded contexts (e.g., tests) this is trivially satisfied.
+
+Changes:
+- `GcRootSet::is_registered` is now `pub unsafe fn` with a `# Safety` section documenting the TOCTOU invariant
+- Added `# TOCTOU race` section explaining the lock-release-before-return behavior
+- Updated all call sites (root.rs tests, tokio_integration.rs) to use `unsafe { set.is_registered(ptr) }`
+
+Production GC code uses `snapshot()` (which holds the lock during the entire operation), not `is_registered`. The fix documents the limitation for any future concurrent use.
