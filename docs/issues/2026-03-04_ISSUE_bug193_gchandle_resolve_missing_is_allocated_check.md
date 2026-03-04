@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::resolve 缺少 is_allocated 檢查 - 可能訪問錯誤物件
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -148,4 +148,24 @@ unsafe {
 - bug78: Parallel marking 缺少 is_allocated 檢查（已修復）
 - bug39: GcHandle::resolve() 缺少有效性檢查（已修復，但缺少 is_allocated）
 - bug135: Lazy sweep gen_old_flag 未清除（已修復）
+
+---
+
+## ✅ 驗證記錄 (Verification Record)
+
+**Date:** 2026-03-04
+
+**驗證結果:** Bug 已確認存在
+
+**驗證方法:**
+1. 檢查 `crates/rudo-gc/src/handles/cross_thread.rs` 中的 `resolve()` (line 166-211) 和 `try_resolve()` (line 240-267)
+2. 確認代碼檢查了:
+   - `is_under_construction()` (line 197)
+   - `has_dead_flag()` (line 201)
+   - `dropping_state()` (line 205)
+3. 確認**缺少** `is_allocated()` 檢查
+
+**對比:** 其他模組（如 incremental.rs, marker.rs, gc.rs）都有正確的 `is_allocated` 檢查，但 handles/cross_thread.rs 缺少此檢查。
+
+**結論:** 此 bug 與 bug193 描述一致，確認存在。
 
