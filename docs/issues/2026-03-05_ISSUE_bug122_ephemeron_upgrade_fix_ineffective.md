@@ -1,6 +1,6 @@
 # [Bug]: Ephemeron::upgrade() fix is ineffective - _key_gc variable is immediately dropped
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
