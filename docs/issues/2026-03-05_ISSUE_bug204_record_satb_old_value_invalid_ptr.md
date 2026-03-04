@@ -1,7 +1,7 @@
 # [Bug]: record_satb_old_value 記錄已釋放物件 - 當 allocating_thread_id 為 0 時仍推送指標
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
