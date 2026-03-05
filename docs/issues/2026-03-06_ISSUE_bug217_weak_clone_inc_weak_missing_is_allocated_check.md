@@ -112,6 +112,11 @@ if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
 **R. Kent Dybvig (GC 架構觀點):**
 這是經典的 TOCTOU 漏洞，與 lazy sweep 的並發執行有關。修復方案應參考 bug206 的修復方式，兩者是同一模式。
 
+**額外發現 - 相同 bug 模式的其他位置:**
+- `ptr.rs:562-606` - `GcBoxWeakRef::clone()` - 同樣在 `inc_weak()` 後缺少 `is_allocated()` 檢查
+- `cross_thread.rs:310` - `GcHandle::downgrade()` - 在 roots 鎖內調用 `inc_weak()` 後缺少檢查
+- `cross_thread.rs:326` - `GcHandle::downgrade()` - 在 orphan 路徑中調用 `inc_weak()` 後缺少檢查
+
 **Rustacean (Soundness 觀點):**
 這可能導致 weak count 管理錯誤，雖然不會直接導致 UAF，但會導致物件無法正確釋放。
 
