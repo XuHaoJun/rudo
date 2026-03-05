@@ -221,7 +221,7 @@
 | [2026-03-05_ISSUE_bug190_large_object_path_missing_magic_check.md](./2026-03-05_ISSUE_bug190_large_object_path_missing_magic_check.md) | gc_cell_validate_and_barrier 與 unified_write_barrier 大型物件路徑缺少 MAGIC 驗證 | Fixed | Verified |
 | [2026-03-05_ISSUE_bug205_find_gc_box_from_ptr_large_object_missing_magic_check.md](./2026-03-05_ISSUE_bug205_find_gc_box_from_ptr_large_object_missing_magic_check.md) | find_gc_box_from_ptr 大型物件路徑缺少 MAGIC 驗證 | Verified | Verified |
 | [2026-03-05_ISSUE_bug206_gchandle_resolve_inc_ref_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug206_gchandle_resolve_inc_ref_missing_is_allocated_check.md) | GcHandle::resolve inc_ref 缺少 is_allocated 檢查 | Open | Verified |
-| [2026-03-05_ISSUE_bug207_gc_deref_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug207_gc_deref_missing_is_allocated_check.md) | Gc::deref 缺少 is_allocated 檢查 | Open | Verified |
+| [2026-03-05_ISSUE_bug207_gc_deref_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug207_gc_deref_missing_is_allocated_check.md) | Gc::deref 缺少 is_allocated 檢查 | Fixed | Verified |
 | [2026-03-05_ISSUE_bug208_weak_strong_count_missing_is_gc_box_pointer_valid_check.md](./2026-03-05_ISSUE_bug208_weak_strong_count_missing_is_gc_box_pointer_valid_check.md) | Weak::strong_count 缺少 is_gc_box_pointer_valid 檢查 | Open | Unverified |
 | [2026-03-05_ISSUE_bug209_weak_raw_addr_ptr_eq_missing_is_gc_box_pointer_valid_check.md](./2026-03-05_ISSUE_bug209_weak_raw_addr_ptr_eq_missing_is_gc_box_pointer_valid_check.md) | Weak::raw_addr 與 Weak::ptr_eq 缺少 is_gc_box_pointer_valid 檢查 | Open | Unverified |
 | [2026-03-05_ISSUE_bug210_handle_to_gc_missing_post_check.md](./2026-03-05_ISSUE_bug210_handle_to_gc_missing_post_check.md) | Handle::to_gc 缺少 post-increment 安全檢查 (TOCTOU) | Open | Verified |
