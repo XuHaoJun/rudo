@@ -5,7 +5,7 @@
 ### By Status
 - **Fixed**: 183
 - **Invalid**: 14
-- **Open**: 1
+- **Open**: 2
 - **Verified**: 5
 
 ### By Tags
@@ -227,3 +227,4 @@
 | [2026-03-05_ISSUE_bug210_handle_to_gc_missing_post_check.md](./2026-03-05_ISSUE_bug210_handle_to_gc_missing_post_check.md) | Handle::to_gc 缺少 post-increment 安全檢查 (TOCTOU) | Open | Verified |
 | [2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md) | gc_cell_validate_and_barrier 缺少 is_allocated 檢查 | Open | Verified |
 | [2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md) | simple_write_barrier 缺少 is_allocated 檢查 | Open | Unverified |
+| [2026-03-06_ISSUE_bug215_mark_page_dirty_for_ptr_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug215_mark_page_dirty_for_ptr_missing_is_allocated_check.md) | mark_page_dirty_for_ptr 缺少 is_allocated 檢查 | Open | Unverified |
