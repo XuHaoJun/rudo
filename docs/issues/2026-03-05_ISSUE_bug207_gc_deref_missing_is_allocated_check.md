@@ -1,7 +1,7 @@
 # [Bug]: Gc::deref 缺少 is_allocated 檢查導致 Slot Reuse 後存取錯誤物件
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
