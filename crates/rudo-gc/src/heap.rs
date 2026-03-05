@@ -2790,6 +2790,12 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                     return;
                 }
                 let h_ptr = head_addr as *mut PageHeader;
+
+                // Validate MAGIC to ensure the large_object_map entry is valid (bug190).
+                if (*h_ptr).magic != MAGIC_GC_PAGE {
+                    return;
+                }
+
                 let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                 // Skip barrier only if page is young AND object has no gen_old_flag (bug71).
                 // Cache flag to avoid TOCTOU between check and barrier (bug114).
@@ -2907,6 +2913,12 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                         return;
                     }
                     let h_ptr = head_addr as *mut PageHeader;
+
+                    // Validate MAGIC to ensure the large_object_map entry is valid (bug190).
+                    if (*h_ptr).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     // Cache flag to avoid TOCTOU between check and barrier (bug133).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();

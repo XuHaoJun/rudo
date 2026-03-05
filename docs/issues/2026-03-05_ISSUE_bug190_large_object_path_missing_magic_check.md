@@ -1,7 +1,7 @@
 # [Bug]: gc_cell_validate_and_barrier 與 unified_write_barrier 大型物件路徑缺少 MAGIC 驗證
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -113,3 +113,24 @@ if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) 
 
 **Geohot (Exploit 觀點):**
 此問題難以直接利用，因為需要先破壞 `large_object_map`。但如果攻擊者能夠控制該映射（例如透過其他記憶體損壞漏洞），則可能利用此處缺乏驗證來進一步擴大攻擊面。
+
+---
+
+## 驗證記錄 (Verification Record)
+
+**驗證日期:** 2026-03-05
+**驗證人員:** opencode
+
+### 驗證結果
+
+確認 bug 存在於 `crates/rudo-gc/src/heap.rs`:
+
+1. **`gc_cell_validate_and_barrier`** (lines 2768-2881):
+   - 大型物件路徑 (lines 2786-2818): 從 `large_object_map.get(&page_addr)` 獲取 header 後直接使用 `(*h_ptr).generation` 和 `(*h_ptr).owner_thread`，**無 MAGIC 檢查**
+   - 小型物件路徑 (line 2823): 有 `if (*h).magic != MAGIC_GC_PAGE { return; }` 檢查
+
+2. **`unified_write_barrier`** (lines 2890-2953):
+   - 大型物件路徑 (lines 2904-2916): 從 `large_object_map.get(&page_addr)` 獲取 header 後直接使用 `(*h_ptr).generation`，**無 MAGIC 檢查**
+   - 小型物件路徑 (line 2919): 有 `if (*h.as_ptr()).magic != MAGIC_GC_PAGE { return; }` 檢查
+
+**結論:** Bug 確認存在，需要修復以確保所有路徑都驗證 MAGIC。
