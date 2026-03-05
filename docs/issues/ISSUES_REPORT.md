@@ -5,10 +5,10 @@
 ### By Status
 - **Fixed**: 183
 - **Invalid**: 14
-- **Verified**: 4
+- **Verified**: 5
 
 ### By Tags
-- **Verified**: 180
+- **Verified**: 181
 - **Not Verified**: 11
 - **Not Reproduced**: 10
 
@@ -218,3 +218,4 @@
 | [2026-03-03_ISSUE_bug188_gchandle_downgrade_toctou.md](./2026-03-03_ISSUE_bug188_gchandle_downgrade_toctou.md) | GcHandle::downgrade TOCTOU - Missing Lock Protection Between State Check and inc_weak | Fixed | Verified |
 | [2026-03-03_ISSUE_bug189_weak_crossthread_is_valid_missing_origin_check.md](./2026-03-03_ISSUE_bug189_weak_crossthread_is_valid_missing_origin_check.md) | WeakCrossThreadHandle::is_valid() Missing Origin Thread Check - Inconsistent with resolve() | Fixed | Verified |
 | [2026-03-05_ISSUE_bug190_large_object_path_missing_magic_check.md](./2026-03-05_ISSUE_bug190_large_object_path_missing_magic_check.md) | gc_cell_validate_and_barrier 與 unified_write_barrier 大型物件路徑缺少 MAGIC 驗證 | Open | Not Verified |
+| [2026-03-05_ISSUE_bug205_find_gc_box_from_ptr_large_object_missing_magic_check.md](./2026-03-05_ISSUE_bug205_find_gc_box_from_ptr_large_object_missing_magic_check.md) | find_gc_box_from_ptr 大型物件路徑缺少 MAGIC 驗證 | Verified | Verified |
