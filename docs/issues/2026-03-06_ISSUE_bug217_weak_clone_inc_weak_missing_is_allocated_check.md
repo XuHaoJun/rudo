@@ -1,7 +1,7 @@
 # [Bug]: Weak::clone 缺少 inc_weak 後的 is_allocated 檢查導致 TOCTOU
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -127,5 +127,11 @@ if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
 
 ## 修復狀態
 
-- [ ] 已修復
-- [x] 未修復
+- [x] 已修復
+- [ ] 未修復
+
+## 修復內容
+
+在 `Weak::clone()` (`ptr.rs`) 和 `GcBoxWeakRef::clone()` (`ptr.rs`) 中的 `inc_weak()` 之後添加 `is_allocated()` 檢查：
+- 如果 slot 已被 lazy sweep 回收，則回滾 inc_weak 並返回 null Weak
+- 修復位置：`ptr.rs` (Weak::clone 在約 line 2127 後，GcBoxWeakRef::clone 在約 line 601 後)

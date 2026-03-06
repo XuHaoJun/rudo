@@ -599,6 +599,16 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             }
 
             (*ptr.as_ptr()).inc_weak();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    (*ptr.as_ptr()).dec_weak();
+                    return Self {
+                        ptr: AtomicNullable::null(),
+                    };
+                }
+            }
         }
         Self {
             ptr: AtomicNullable::new(ptr),
@@ -2125,6 +2135,16 @@ impl<T: Trace> Clone for Weak<T> {
                 };
             }
             (*ptr.as_ptr()).inc_weak();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    (*ptr.as_ptr()).dec_weak();
+                    return Self {
+                        ptr: AtomicNullable::null(),
+                    };
+                }
+            }
         }
         Self {
             ptr: AtomicNullable::new(ptr),
