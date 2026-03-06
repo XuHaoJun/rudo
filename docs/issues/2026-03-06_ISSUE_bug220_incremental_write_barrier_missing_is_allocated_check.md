@@ -1,7 +1,7 @@
 # [Bug]: incremental_write_barrier 缺少 is_allocated 檢查與大物件處理
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
