@@ -1,6 +1,6 @@
 # [Bug]: Slot Reuse Does Not Clear GEN_OLD_FLAG
 
-**Status:** Verified
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -151,3 +151,14 @@ This is not a soundness bug per se - the objects are still valid. However, it's 
 The stale flag could potentially be exploited if there's code that behaves differently based on `has_gen_old_flag()`. Combined with other bugs, this could lead to:
 - Confusion in barrier behavior
 - Potential for confused-deputy style attacks if any security-critical code relies on generational separation
+
+---
+
+## 修復紀錄
+
+### 2026-03-06
+**修復方式**: 在 `sweep_phase2_reclaim` (gc.rs:2282) 添加 `clear_gen_old()` 調用，與 `try_pop_from_page` (heap.rs:2216)、lazy sweep paths (gc.rs:2536, 2660) 保持一致。
+
+確保回收的 slot 不會繼承前一個物件的 GEN_OLD_FLAG。
+
+注意：`try_pop_from_page` 的 bug 早已修復（heap.rs:2216），本次修復針對 `sweep_phase2_reclaim` 函數。

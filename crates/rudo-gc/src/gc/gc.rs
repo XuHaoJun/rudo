@@ -2279,6 +2279,7 @@ fn sweep_phase2_reclaim(
                         free_head = Some(u16::try_from(i).unwrap());
 
                         (*header).clear_allocated(i);
+                        (*gc_box_ptr).clear_gen_old();
                         reclaimed += 1;
                         is_alloc = false;
                         continue;
