@@ -1,7 +1,7 @@
 # [Bug]: Weak::try_upgrade Post-CAS 缺少 is_under_construction 檢查
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ---
 
