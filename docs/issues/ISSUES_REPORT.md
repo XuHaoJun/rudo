@@ -5,7 +5,7 @@
 ### By Status
 - **Fixed**: 183
 - **Invalid**: 14
-- **Open**: 2
+- **Open**: 14
 - **Verified**: 5
 
 ### By Tags
@@ -228,3 +228,8 @@
 | [2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md) | gc_cell_validate_and_barrier 缺少 is_allocated 檢查 | Open | Verified |
 | [2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md) | simple_write_barrier 缺少 is_allocated 檢查 | Open | Unverified |
 | [2026-03-06_ISSUE_bug215_mark_page_dirty_for_ptr_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug215_mark_page_dirty_for_ptr_missing_is_allocated_check.md) | mark_page_dirty_for_ptr 缺少 is_allocated 檢查 | Open | Unverified |
+| [2026-03-06_ISSUE_bug216_gcboxweakref_may_be_valid_missing_is_gc_box_pointer_valid_check.md](./2026-03-06_ISSUE_bug216_gcboxweakref_may_be_valid_missing_is_gc_box_pointer_valid_check.md) | GcBoxWeakRef::may_be_valid 缺少 is_gc_box_pointer_valid 檢查 | Open | Unverified |
+| [2026-03-06_ISSUE_bug217_weak_clone_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug217_weak_clone_inc_weak_missing_is_allocated_check.md) | Weak::clone inc_weak 缺少 is_allocated 檢查 | Open | Unverified |
+| [2026-03-06_ISSUE_bug218_gchandle_downgrade_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug218_gchandle_downgrade_inc_weak_missing_is_allocated_check.md) | GcHandle::downgrade inc_weak 缺少 is_allocated 檢查 | Open | Unverified |
+| [2026-03-06_ISSUE_bug219_gc_weak_cross_thread_handle_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug219_gc_weak_cross_thread_handle_inc_weak_missing_is_allocated_check.md) | GcWeakCrossThreadHandle inc_weak 缺少 is_allocated 檢查 | Open | Unverified |
+| [2026-03-06_ISSUE_bug220_incremental_write_barrier_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug220_incremental_write_barrier_missing_is_allocated_check.md) | incremental_write_barrier 缺少 is_allocated 檢查與大物件處理 | Open | Unverified |
