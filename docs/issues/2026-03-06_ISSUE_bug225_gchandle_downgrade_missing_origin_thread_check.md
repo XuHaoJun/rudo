@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::downgrade 缺少執行緒親和性檢查 - 與 clone() 和 resolve() 不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
