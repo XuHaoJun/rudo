@@ -206,6 +206,15 @@ impl<T: Trace + 'static> GcHandle<T> {
                 "GcHandle::resolve: object is being dropped"
             );
             gc_box.inc_ref();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
+                    panic!("GcHandle::resolve: object slot was swept after inc_ref");
+                }
+            }
+
             Gc::from_raw(self.ptr.as_ptr() as *const u8)
         }
     }
@@ -262,6 +271,15 @@ impl<T: Trace + 'static> GcHandle<T> {
                 return None;
             }
             gc_box.inc_ref();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
+                    return None;
+                }
+            }
+
             Some(Gc::from_raw(self.ptr.as_ptr() as *const u8))
         }
     }
@@ -386,6 +404,14 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
                 // inc_ref for new handle while holding lock (prevents TOCTOU with unregister)
                 unsafe {
                     (*self.ptr.as_ptr()).inc_ref();
+
+                    if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                        let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
+                            panic!("GcHandle::clone: object slot was swept after inc_ref");
+                        }
+                    }
                 }
                 drop(roots);
                 (new_id, Arc::downgrade(&tcb))

@@ -1576,6 +1576,14 @@ impl<T: Trace + 'static> Gc<T> {
                 "Gc::cross_thread_handle: cannot create handle for dead, dropping, or under construction Gc"
             );
             (*ptr.as_ptr()).inc_ref();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    GcBox::dec_ref(ptr.as_ptr());
+                    panic!("Gc::cross_thread_handle: object slot was swept after inc_ref");
+                }
+            }
         }
 
         roots.strong.insert(handle_id, ptr.cast::<GcBox<()>>());
@@ -1679,6 +1687,14 @@ impl<T: Trace> Clone for Gc<T> {
                 "Gc::clone: cannot clone a dead, dropping, or under construction Gc"
             );
             (*gc_box_ptr).inc_ref();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    GcBox::dec_ref(gc_box_ptr);
+                    panic!("Gc::clone: object slot was swept after inc_ref");
+                }
+            }
         }
 
         Self {

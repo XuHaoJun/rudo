@@ -255,6 +255,14 @@ pub fn clone_orphan_root_with_inc_ref(
     orphan.insert((thread_id, new_id), ptr.as_ptr() as usize);
     unsafe {
         (*ptr.as_ptr()).inc_ref();
+
+        if let Some(idx) = ptr_to_object_index(ptr.as_ptr() as *const u8) {
+            let header = ptr_to_page_header(ptr.as_ptr() as *const u8);
+            if !(*header.as_ptr()).is_allocated(idx) {
+                crate::ptr::GcBox::dec_ref(ptr.as_ptr());
+                panic!("clone_orphan_root_with_inc_ref: object slot was swept after inc_ref");
+            }
+        }
     }
     drop(orphan);
     (new_id, true)
