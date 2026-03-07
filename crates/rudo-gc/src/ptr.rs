@@ -449,6 +449,17 @@ impl<T: Trace> GcBox<T> {
                     ptr: AtomicNullable::null(),
                 };
             }
+
+            let self_ptr = NonNull::from(self).as_ptr() as *const u8;
+            if let Some(idx) = crate::heap::ptr_to_object_index(self_ptr) {
+                let header = crate::heap::ptr_to_page_header(self_ptr);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return GcBoxWeakRef {
+                        ptr: AtomicNullable::null(),
+                    };
+                }
+            }
+
             (*NonNull::from(self).as_ptr()).inc_weak();
         }
         GcBoxWeakRef::new(NonNull::from(self))
