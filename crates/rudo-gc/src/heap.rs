@@ -2756,6 +2756,11 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     (h, index)
                 };
 
+            // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug212).
+            if !(*header.as_ptr()).is_allocated(index) {
+                return;
+            }
+
             (*header.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(header);
         }
@@ -2882,6 +2887,11 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 }
                 (header, index)
             };
+
+            // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug211).
+            if !(*h.as_ptr()).is_allocated(index) {
+                return;
+            }
 
             (*h.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(h);
