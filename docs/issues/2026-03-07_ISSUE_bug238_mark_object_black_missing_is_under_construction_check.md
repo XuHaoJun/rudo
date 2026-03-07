@@ -40,7 +40,7 @@
 ### 受影響的 call sites：
 - `cell.rs` line 201 (`GcCell::borrow_mut`)
 - `cell.rs` line 1285 (`GcThreadSafeRefMut::drop`)
-- `sync.rs` line 393 (`GcRwLockWriteGuard::drop`)
+- `sync.rs` line 393 (`GcRwLockReadGuard::drop`) - 注意：原 issue 錯誤標記為 GcRwLockWriteGuard
 - `sync.rs` line 446 (`GcRwLockWriteGuard::drop`)
 - `sync.rs` line 701 (`GcMutexGuard::drop`)
 
