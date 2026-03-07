@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::resolve/try_resolve/clone 缺少 inc_ref 後的 is_allocated 檢查導致 TOCTOU
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
