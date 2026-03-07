@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::downgrade inc_weak 後缺少 is_allocated 檢查導致 TOCTOU
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
