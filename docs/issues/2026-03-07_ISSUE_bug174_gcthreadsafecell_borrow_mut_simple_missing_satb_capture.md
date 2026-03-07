@@ -1,8 +1,8 @@
 # Issue: bug174
 
-**Status**: Open
+**Status**: Verified
 
-**Tags**: Unverified
+**Tags**: Verified
 
 ## Threat Model
 
@@ -87,3 +87,12 @@ The lack of type enforcement means a user can mistakenly use `borrow_mut_simple(
 
 ### Geohot
 This is a subtle bug that would be hard to debug - it only manifests during incremental marking with specific mutation patterns. The lack of compile-time enforcement makes it a footgun.
+
+---
+
+## Verification (2026-03-07)
+
+Verified by code inspection:
+- `borrow_mut()` (cell.rs:1041-1087) captures old values for SATB when `incremental_active` is true (lines 1052-1078)
+- `borrow_mut_simple()` (cell.rs:1103-1112) does NOT capture old values - it only triggers `trigger_write_barrier_with_incremental()` but skips the SATB capture logic
+- The bug is confirmed: when incremental marking is active and user uses `borrow_mut_simple()` with types containing GC pointers, old pointer values are not recorded in SATB buffer, leading to potential premature collection of objects reachable only from those pointers
