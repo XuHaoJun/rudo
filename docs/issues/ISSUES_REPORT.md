@@ -5,11 +5,11 @@
 ### By Status
 - **Fixed**: 183
 - **Invalid**: 14
-- **Open**: 15
+- **Open**: 16
 - **Verified**: 5
 
 ### By Tags
-- **Verified**: 181
+- **Verified**: 182
 - **Not Verified**: 11
 - **Not Reproduced**: 10
 
@@ -234,3 +234,4 @@
 | [2026-03-06_ISSUE_bug219_gc_weak_cross_thread_handle_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug219_gc_weak_cross_thread_handle_inc_weak_missing_is_allocated_check.md) | GcWeakCrossThreadHandle inc_weak 缺少 is_allocated 檢查 | Open | Unverified |
 | [2026-03-06_ISSUE_bug220_incremental_write_barrier_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug220_incremental_write_barrier_missing_is_allocated_check.md) | incremental_write_barrier 缺少 is_allocated 檢查與大物件處理 | Open | Unverified |
 | [2026-03-06_ISSUE_bug221_gcthreadsafecell_incremental_write_barrier_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug221_gcthreadsafecell_incremental_write_barrier_missing_is_allocated_check.md) | GcThreadSafeCell::incremental_write_barrier 缺少 is_allocated 檢查與大物件處理 | Open | Unverified |
+| [2026-03-07_ISSUE_bug238_mark_object_black_missing_is_under_construction_check.md](./2026-03-07_ISSUE_bug238_mark_object_black_missing_is_under_construction_check.md) | mark_object_black 和 mark_new_object_black 缺少 is_under_construction 檢查 | Open | Verified |
