@@ -506,6 +506,17 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
     pub(crate) fn upgrade(&self) -> Option<Gc<T>> {
         let ptr = self.ptr.load(Ordering::Acquire).as_option()?;
 
+        // Validate pointer before dereferencing (same checks as clone())
+        let ptr_addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
+            return None;
+        }
+
+        if !is_gc_box_pointer_valid(ptr_addr) {
+            return None;
+        }
+
         unsafe {
             let gc_box = &*ptr.as_ptr();
 
@@ -533,6 +544,14 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                     crate::ptr::GcBox::dec_ref(ptr.as_ptr());
                     return None;
                 }
+                // Check is_allocated after successful upgrade to prevent slot reuse issues
+                if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                    let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        GcBox::dec_ref(ptr.as_ptr());
+                        return None;
+                    }
+                }
                 return Some(Gc {
                     ptr: AtomicNullable::new(ptr),
                     _marker: PhantomData,
@@ -549,6 +568,14 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
                 GcBox::dec_ref(ptr.as_ptr());
                 return None;
+            }
+            // Check is_allocated after successful upgrade to prevent slot reuse issues
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    GcBox::dec_ref(ptr.as_ptr());
+                    return None;
+                }
             }
             Some(Gc {
                 ptr: AtomicNullable::new(ptr),
