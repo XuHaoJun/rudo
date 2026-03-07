@@ -326,6 +326,19 @@ impl<T: Trace + 'static> GcHandle<T> {
                     "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle"
                 );
                 gc_box.inc_weak();
+
+                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
+                {
+                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        gc_box.dec_weak();
+                        return WeakCrossThreadHandle {
+                            weak: GcBoxWeakRef::new(NonNull::dangling()),
+                            origin_tcb: Weak::clone(&self.origin_tcb),
+                            origin_thread: self.origin_thread,
+                        };
+                    }
+                }
             }
             drop(roots);
         } else {
@@ -342,6 +355,19 @@ impl<T: Trace + 'static> GcHandle<T> {
                     "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle (orphan)"
                 );
                 gc_box.inc_weak();
+
+                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
+                {
+                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        gc_box.dec_weak();
+                        return WeakCrossThreadHandle {
+                            weak: GcBoxWeakRef::new(NonNull::dangling()),
+                            origin_tcb: Weak::clone(&self.origin_tcb),
+                            origin_thread: self.origin_thread,
+                        };
+                    }
+                }
             }
             drop(orphan);
         }
