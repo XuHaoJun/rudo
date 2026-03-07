@@ -187,7 +187,10 @@ impl<T: ?Sized> GcRwLock<T> {
     /// assert_eq!(guard.value, 10);
     /// ```
     #[inline]
-    pub fn read(&self) -> GcRwLockReadGuard<'_, T> {
+    pub fn read(&self) -> GcRwLockReadGuard<'_, T>
+    where
+        T: GcCapture,
+    {
         let guard = self.inner.read();
         GcRwLockReadGuard {
             guard,
@@ -215,7 +218,10 @@ impl<T: ?Sized> GcRwLock<T> {
     /// }
     /// ```
     #[inline]
-    pub fn try_read(&self) -> Option<GcRwLockReadGuard<'_, T>> {
+    pub fn try_read(&self) -> Option<GcRwLockReadGuard<'_, T>>
+    where
+        T: GcCapture,
+    {
         self.inner.try_read().map(|guard| GcRwLockReadGuard {
             guard,
             _marker: PhantomData,
@@ -330,7 +336,7 @@ impl<T: ?Sized> GcRwLock<T> {
 
 impl<T> std::fmt::Debug for GcRwLock<T>
 where
-    T: std::fmt::Debug + ?Sized,
+    T: std::fmt::Debug + GcCapture + ?Sized,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(&*self.read(), f)
@@ -348,7 +354,7 @@ where
 
 impl<T> Clone for GcRwLock<T>
 where
-    T: Clone + Sized,
+    T: Clone + GcCapture + Sized,
 {
     fn clone(&self) -> Self {
         Self::new(self.read().clone())
@@ -358,15 +364,18 @@ where
 /// Read guard for [`GcRwLock`].
 ///
 /// Holds a read lock on the `GcRwLock` and provides access to the inner data.
-/// The lock is released when the guard is dropped.
+/// The lock is released when the guard is dropped. Barriers are triggered on drop
+/// (when incremental marking is active) to capture GC pointer changes.
+///
+/// Requires `T: GcCapture`; use [`impl_gc_capture`](crate::impl_gc_capture) for types without GC pointers.
 ///
 /// Access via [`Deref`] yields `&T`.
-pub struct GcRwLockReadGuard<'a, T: ?Sized> {
+pub struct GcRwLockReadGuard<'a, T: GcCapture + ?Sized> {
     guard: parking_lot::RwLockReadGuard<'a, T>,
     _marker: PhantomData<&'a T>,
 }
 
-impl<T: ?Sized> Deref for GcRwLockReadGuard<'_, T> {
+impl<T: GcCapture + ?Sized> Deref for GcRwLockReadGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -374,10 +383,15 @@ impl<T: ?Sized> Deref for GcRwLockReadGuard<'_, T> {
     }
 }
 
-impl<T: ?Sized> Drop for GcRwLockReadGuard<'_, T> {
+impl<T: GcCapture + ?Sized> Drop for GcRwLockReadGuard<'_, T> {
     fn drop(&mut self) {
-        // Guard is dropped automatically when it goes out of scope
-        // The parking_lot guard will release the read lock
+        let mut ptrs = Vec::with_capacity(32);
+        self.guard.capture_gc_ptrs_into(&mut ptrs);
+
+        for gc_ptr in ptrs {
+            let _ =
+                unsafe { crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8) };
+        }
     }
 }
 
