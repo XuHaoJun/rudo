@@ -1,6 +1,6 @@
 # [Bug]: Gc::downgrade inc_weak 後缺少 is_allocated 檢查導致 TOCTOU
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ---
@@ -130,3 +130,30 @@ This could lead to weak count management errors. While it won't directly cause U
 
 ### Geohot
 An attacker could try to construct a scenario by precisely controlling GC timing, triggering lazy sweep between inc_weak and return, causing incorrect weak count calculation.
+
+---
+
+## ✅ Fix Record
+
+**Date:** 2026-03-07
+**Fixed by:** opencode
+
+### Fix Applied
+
+Modified `crates/rudo-gc/src/ptr.rs` in `Gc::downgrade()` (line ~1462):
+- Added `is_allocated` check after `inc_weak()` to prevent TOCTOU with lazy sweep slot reuse
+- If slot was swept during downgrade, rollback the inc_weak and panic
+
+### Code Changes
+
+```rust
+(*gc_box_ptr).inc_weak();
+
+if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+    let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+    if !(*header.as_ptr()).is_allocated(idx) {
+        (*gc_box_ptr).dec_weak();
+        panic!("Gc::downgrade: slot was swept during downgrade");
+    }
+}
+```

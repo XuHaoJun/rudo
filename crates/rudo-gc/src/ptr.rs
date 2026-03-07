@@ -1460,6 +1460,14 @@ impl<T: Trace> Gc<T> {
                 "Gc::downgrade: cannot downgrade a dead, dropping, or under construction Gc"
             );
             (*gc_box_ptr).inc_weak();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    (*gc_box_ptr).dec_weak();
+                    panic!("Gc::downgrade: slot was swept during downgrade");
+                }
+            }
         }
         Weak {
             ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(gc_box_ptr) }),
