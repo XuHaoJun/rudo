@@ -2973,6 +2973,11 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     (h, index)
                 };
 
+            // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug200).
+            if !(*header.as_ptr()).is_allocated(index) {
+                return;
+            }
+
             (*header.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(header);
 
