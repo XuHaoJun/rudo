@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::try_upgrade 缺少 is_allocated 檢查導致潛在 Slot Reuse UAF
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
