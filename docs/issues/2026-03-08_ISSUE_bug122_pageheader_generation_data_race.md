@@ -1,7 +1,7 @@
 # [Bug]: PageHeader.generation data race between GC and mutator
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
