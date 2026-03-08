@@ -1,7 +1,7 @@
 # [Bug]: GcRwLockWriteGuard/GcMutexGuard Drop 缺少 Generational Barrier 檢查
 
-**Status:** Invalid
-**Tags:** Not Verified
+**Status:** Open
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -161,3 +161,35 @@ Generational GC 的核心原則是 OLD→YOUNG 引用必須被追蹤，無論是
 ## Resolution Note (2026-02-26)
 
 **Classification: Invalid** — The fix is already implemented. Both `GcRwLockWriteGuard::drop()` and `GcMutexGuard::drop()` in `sync.rs` (lines 408–411 and 650–653) already check `is_generational_barrier_active() || is_incremental_marking_active()` before capturing and marking GC pointers. The behavior matches `trigger_write_barrier()`. No code changes required.
+
+---
+
+## Reopening Note (2026-03-09)
+
+**REOPENED - Bug is still present!**
+
+The resolution above was INCORRECT. Upon re-examination:
+
+**Root Cause - Wrong function called:**
+
+1. `GcRwLockReadGuard::drop` (sync.rs:386-396) - Calls `mark_object_black` only
+2. `GcRwLockWriteGuard::drop` (sync.rs:436-449) - Calls `mark_object_black` only
+3. `GcMutexGuard::drop` (sync.rs:691-704) - Calls `mark_object_black` only
+
+All three Drop implementations:
+- Capture GC pointers via `capture_gc_ptrs_into` ✓
+- Call `mark_object_black` which handles **incremental marking** (SATB) only
+- Do NOT call `unified_write_barrier` which handles **generational barrier** (remembered set)
+
+Compare to acquisition (e.g., `GcRwLock::write()` at line 256-270):
+- Calls `record_satb_old_values_with_state` for SATB ✓
+- Calls `trigger_write_barrier_with_state(generational_active, incremental_active)` 
+- Which calls `unified_write_barrier` for generational barrier ✓
+
+The Drop implementations are calling the WRONG function:
+- `mark_object_black` = incremental marking only (SATB)
+- `unified_write_barrier` = generational barrier (remembered set for OLD→YOUNG)
+
+Even if incremental marking is disabled but generational GC is enabled, the Drop should still record pointers in the remembered set via `unified_write_barrier`!
+
+**The bug109 (GcThreadSafeRefMut) was also marked "Fixed" but the same bug is still present in cell.rs:1276-1288.**
