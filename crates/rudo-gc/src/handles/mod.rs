@@ -357,6 +357,13 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("Handle::to_gc: object is being dropped by another thread");
             }
+            if gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+                || gc_box.is_under_construction()
+            {
+                GcBox::dec_ref(gc_box_ptr.cast_mut());
+                panic!("Handle::to_gc: object became dead/dropping after ref increment");
+            }
             Gc::from_raw(gc_box_ptr as *const u8)
         }
     }
