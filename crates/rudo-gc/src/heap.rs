@@ -2216,6 +2216,7 @@ impl LocalHeap {
 
         // Clear DEAD_FLAG, GEN_OLD_FLAG, and UNDER_CONSTRUCTION_FLAG so reused slot is not
         // incorrectly marked. (UNDER_CONSTRUCTION_FLAG can be set by Gc::new_cyclic_weak.)
+        // Also clear dirty bit to prevent minor GC from scanning new objects as dirty (bug122).
         // SAFETY: obj_ptr points to a valid GcBox slot (was in free list).
         #[allow(clippy::cast_ptr_alignment)]
         unsafe {
@@ -2223,6 +2224,7 @@ impl LocalHeap {
             (*gc_box_ptr).clear_dead();
             (*gc_box_ptr).clear_gen_old();
             (*gc_box_ptr).clear_under_construction();
+            (*header).clear_dirty(idx as usize);
         }
 
         // Clear ALL_DEAD flag since we're allocating a new live object
