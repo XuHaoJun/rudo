@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::as_weak 缺少 is_allocated 檢查導致 TOCTOU
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -146,3 +146,18 @@ lazy sweep 的非確定性使得在 `inc_weak()` 後檢查 slot 是否仍然 all
 
 **Geohot (Exploit 觀點):**
 如果攻擊者能夠控制 lazy sweep 的時機，可能利用此 TOCTOU 漏洞造成 memory corruption 或資訊洩露。
+
+---
+
+## ✅ 驗證記錄 (Verification Record)
+
+**驗證日期:** 2026-03-08
+**驗證人員:** opencode
+
+### 驗證結果
+
+確認 bug 存在於 `crates/rudo-gc/src/ptr.rs:1511-1533`:
+
+1. `GcBoxWeakRef::as_weak()` 在調用 `inc_weak()` 後沒有檢查 `is_allocated()`
+2. 對比 `Gc::downgrade()` (ptr.rs:1475-1481) 有正確的 `is_allocated` 檢查
+3. 此不一致導致 TOCTOU race：lazy sweep 回收 slot 後，weak count 可能錯誤地增加在新物件上
