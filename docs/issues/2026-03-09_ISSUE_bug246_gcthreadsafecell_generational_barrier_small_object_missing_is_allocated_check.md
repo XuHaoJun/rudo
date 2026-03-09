@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::generational_write_barrier 小型物件路徑缺少 is_allocated 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -94,3 +94,31 @@ if index < (*header.as_ptr()).obj_count as usize {
 
 **Geohot (Exploit 觀點):**
 攻擊者可以嘗試控制 slot 重用的時序，來操縱 dirty_pages 的內容。
+
+---
+
+## 修復狀態
+
+- [x] 已修復
+- [ ] 未修復
+
+## 修復內容
+
+在 `crates/rudo-gc/src/cell.rs` 的 `GcThreadSafeCell::generational_write_barrier` 函數中，在小物件路徑添加 `is_allocated` 檢查：
+
+```rust
+// 修復前 (lines 1223-1226):
+if index < (*header.as_ptr()).obj_count as usize {
+    (*header.as_ptr()).set_dirty(index);
+    heap.add_to_dirty_pages(header);
+}
+
+// 修復後:
+if index < (*header.as_ptr()).obj_count as usize {
+    if !(*header.as_ptr()).is_allocated(index) {
+        return;
+    }
+    (*header.as_ptr()).set_dirty(index);
+    heap.add_to_dirty_pages(header);
+}
+```

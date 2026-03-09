@@ -1221,6 +1221,9 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                             let index = offset / block_size;
 
                             if index < (*header.as_ptr()).obj_count as usize {
+                                if !(*header.as_ptr()).is_allocated(index) {
+                                    return;
+                                }
                                 (*header.as_ptr()).set_dirty(index);
                                 heap.add_to_dirty_pages(header);
                             }
