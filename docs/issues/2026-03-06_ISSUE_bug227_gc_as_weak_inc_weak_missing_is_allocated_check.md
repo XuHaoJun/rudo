@@ -1,7 +1,7 @@
 # [Bug]: Gc::as_weak inc_weak missing is_allocated check
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
