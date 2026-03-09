@@ -193,3 +193,17 @@ The Drop implementations are calling the WRONG function:
 Even if incremental marking is disabled but generational GC is enabled, the Drop should still record pointers in the remembered set via `unified_write_barrier`!
 
 **The bug109 (GcThreadSafeRefMut) was also marked "Fixed" but the same bug is still present in cell.rs:1276-1288.**
+
+---
+
+## Additional Verification (2026-03-09)
+
+**Confirmed bug still present in current code:**
+
+- `GcRwLockWriteGuard::drop()` (sync.rs:436-448) - Only calls `mark_object_black`, missing `unified_write_barrier`
+- `GcMutexGuard::drop()` (sync.rs:691-704) - Same issue
+
+Verified by code inspection:
+- Drop only captures GC pointers and calls `mark_object_black` (for incremental/SATB)
+- Does NOT call `unified_write_barrier` which handles generational barrier
+- When generational GC enabled but incremental marking disabled → OLD→YOUNG refs not recorded
