@@ -385,13 +385,8 @@ impl<T: GcCapture + ?Sized> Deref for GcRwLockReadGuard<'_, T> {
 
 impl<T: GcCapture + ?Sized> Drop for GcRwLockReadGuard<'_, T> {
     fn drop(&mut self) {
-        let mut ptrs = Vec::with_capacity(32);
-        self.guard.capture_gc_ptrs_into(&mut ptrs);
-
-        for gc_ptr in ptrs {
-            let _ =
-                unsafe { crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8) };
-        }
+        // Read guard doesn't modify data - no barrier needed.
+        // SATB barrier is for recording old values before they're overwritten.
     }
 }
 
