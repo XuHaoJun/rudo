@@ -1,7 +1,7 @@
 # [Bug]: GcRwLock/GcMutex  barrier state 在 lock 獲取之前捕獲，與 GcThreadSafeCell 不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ---
 
