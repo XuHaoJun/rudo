@@ -2093,7 +2093,10 @@ impl<T: Trace> Weak<T> {
         };
         let ptr_addr = ptr.as_ptr() as usize;
         let alignment = std::mem::align_of::<GcBox<T>>();
-        if ptr_addr % alignment != 0 {
+        if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
+            return 0;
+        }
+        if !is_gc_box_pointer_valid(ptr_addr) {
             return 0;
         }
 
@@ -2121,7 +2124,10 @@ impl<T: Trace> Weak<T> {
         };
         let ptr_addr = ptr.as_ptr() as usize;
         let alignment = std::mem::align_of::<GcBox<T>>();
-        if ptr_addr % alignment != 0 {
+        if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
+            return 0;
+        }
+        if !is_gc_box_pointer_valid(ptr_addr) {
             return 0;
         }
 
