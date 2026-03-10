@@ -705,6 +705,11 @@ impl PerThreadMarkQueue {
                                     (*header).clear_mark_atomic(i);
                                     break;
                                 }
+                                // Second check to fix TOCTOU: slot can be swept between first check and push
+                                if !(*header).is_allocated(i) {
+                                    (*header).clear_mark_atomic(i);
+                                    break;
+                                }
                                 marked += 1;
                                 self.push(gc_box_ptr.as_ptr());
                                 break;
