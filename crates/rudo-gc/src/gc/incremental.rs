@@ -817,6 +817,11 @@ unsafe fn scan_page_for_marked_refs(
                             (*header).clear_mark_atomic(i);
                             break;
                         }
+                        // Second check to fix TOCTOU: slot can be swept between first check and push_work (bug258)
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
                         refs_found += 1;
                         #[allow(clippy::cast_ptr_alignment)]
                         #[allow(clippy::unnecessary_cast)]
@@ -934,6 +939,11 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
             // But we still need to re-check is_allocated after successful mark
             if (*header).set_mark(i) {
                 // Re-check is_allocated to fix TOCTOU with lazy sweep
+                if !(*header).is_allocated(i) {
+                    (*header).clear_mark_atomic(i);
+                    continue;
+                }
+                // Second check to fix TOCTOU: slot can be swept between first check and push_work (bug258)
                 if !(*header).is_allocated(i) {
                     (*header).clear_mark_atomic(i);
                     continue;
