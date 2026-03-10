@@ -238,3 +238,4 @@
 | [2026-03-08_ISSUE_bug242_gcboxweakref_try_upgrade_missing_is_allocated_check.md](./2026-03-08_ISSUE_bug242_gcboxweakref_try_upgrade_missing_is_allocated_check.md) | GcBoxWeakRef::try_upgrade 缺少 is_allocated 檢查導致潛在 Slot Reuse UAF | Open | Not Verified |
 | [2026-03-08_ISSUE_bug122_pageheader_generation_data_race.md](./2026-03-08_ISSUE_bug122_pageheader_generation_data_race.md) | PageHeader.generation 數據競爭 - GC 執行緒寫入與 Mutator 執行緒讀取缺乏同步 | Verified | Verified |
 | [2026-03-10_ISSUE_bug256_alloc_young_allocated_early_increment.md](./2026-03-10_ISSUE_bug256_alloc_young_allocated_early_increment.md) | LocalHeap::alloc() 過早增加 young_allocated 導致記憶體計數不準確 | Open | Verified |
+| [2026-03-11_ISSUE_bug265_weak_drop_toctou_check_dec_weak.md](./2026-03-11_ISSUE_bug265_weak_drop_toctou_check_dec_weak.md) | Weak::drop 與 WeakCrossThreadHandle::drop 存在 TOCTOU Race - 檢查與 dec_weak 之間的狀態變化 | Open | Unverified |
