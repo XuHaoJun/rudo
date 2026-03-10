@@ -2324,7 +2324,25 @@ fn sweep_phase2_reclaim(
 fn promote_all_pages(heap: &LocalHeap) {
     for page_ptr in heap.all_pages() {
         unsafe {
-            (*page_ptr.as_ptr()).generation = 1;
+            let header = page_ptr.as_ptr();
+            (*header).generation = 1;
+
+            let block_size = (*header).block_size as usize;
+            let header_size = crate::heap::PageHeader::header_size(block_size);
+            let page_addr = header as usize;
+
+            for word_idx in 0..crate::heap::BITMAP_SIZE {
+                let bits = (*header).allocated_bitmap[word_idx].load(Ordering::Acquire);
+                let mut b = bits;
+                while b != 0 {
+                    let bit_idx = b.trailing_zeros() as usize;
+                    let obj_idx = word_idx * 64 + bit_idx;
+                    let gc_box_addr = (page_addr + header_size + obj_idx * block_size)
+                        as *const crate::ptr::GcBox<()>;
+                    (*gc_box_addr).set_gen_old();
+                    b &= b - 1;
+                }
+            }
         }
     }
 }
