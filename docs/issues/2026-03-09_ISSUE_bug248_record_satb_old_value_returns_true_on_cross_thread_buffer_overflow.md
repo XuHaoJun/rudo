@@ -143,3 +143,16 @@ pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) -> bool {
 
 **Geohot (Exploit 觀點):**
 在極端並發情況下，攻擊者可能通過使跨執行緒 SATB 緩衝區溢出來觸發此 bug，導致 GC 行為異常。
+
+---
+
+## ✅ 驗證記錄 (Verification Record)
+
+### 2026-03-10 再次驗證
+- **驗證結果**: Bug 仍然存在於目前程式碼中
+- **程式碼位置**: `crates/rudo-gc/src/heap.rs:1936-1938`
+- **確認事項**:
+  - `push_cross_thread_satb` 可在緩衝區滿時請求 fallback (line 1965-1968)
+  - `record_satb_old_value` 在跨執行緒路徑中仍無條件返回 `true` (line 1938)
+  - 未檢查 `fallback_requested()` 狀態
+- **影響**: 此 bug 尚未修復
