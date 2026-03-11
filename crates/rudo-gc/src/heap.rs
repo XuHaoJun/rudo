@@ -1965,6 +1965,7 @@ impl LocalHeap {
         if buffer.len() >= MAX_CROSS_THREAD_SATB_SIZE {
             crate::gc::incremental::IncrementalMarkState::global()
                 .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
+            return;
         }
         buffer.push(gc_ptr.as_ptr() as usize);
     }
