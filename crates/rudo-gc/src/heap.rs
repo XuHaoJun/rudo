@@ -3367,14 +3367,28 @@ pub unsafe fn mark_page_dirty_for_ptr(ptr: *const u8) {
         if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
             if ptr_addr >= head_addr + h_size && ptr_addr < head_addr + h_size + size {
                 let header = unsafe { NonNull::new_unchecked(head_addr as *mut PageHeader) };
-                unsafe { heap.add_to_dirty_pages(header) };
+                // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug215).
+                unsafe {
+                    if (*header.as_ptr()).is_allocated(0) {
+                        heap.add_to_dirty_pages(header);
+                    }
+                }
             }
             return;
         }
 
         if heap.small_pages.contains(&page_addr) {
             let header = unsafe { ptr_to_page_header(ptr) };
-            unsafe { heap.add_to_dirty_pages(header) };
+            // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug215).
+            unsafe {
+                if let Some(idx) = ptr_to_object_index(ptr) {
+                    if (*header.as_ptr()).is_allocated(idx) {
+                        heap.add_to_dirty_pages(header);
+                    }
+                } else {
+                    heap.add_to_dirty_pages(header);
+                }
+            }
             return;
         }
 
@@ -3387,7 +3401,12 @@ pub unsafe fn mark_page_dirty_for_ptr(ptr: *const u8) {
         {
             if ptr_addr >= head_addr + h_size && ptr_addr < head_addr + h_size + size {
                 let header = unsafe { NonNull::new_unchecked(head_addr as *mut PageHeader) };
-                unsafe { heap.add_to_dirty_pages(header) };
+                // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug215).
+                unsafe {
+                    if (*header.as_ptr()).is_allocated(0) {
+                        heap.add_to_dirty_pages(header);
+                    }
+                }
             }
         }
     });

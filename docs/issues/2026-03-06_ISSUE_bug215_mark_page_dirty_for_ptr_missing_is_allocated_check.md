@@ -1,7 +1,7 @@
 # [Bug]: mark_page_dirty_for_ptr 缺少 is_allocated 檢查 - 與 bug200/213 不同的code path
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
