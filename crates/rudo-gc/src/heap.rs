@@ -3045,6 +3045,11 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                 return;
             }
 
+            // Skip if slot was swept; avoids corrupting remembered set with reused slot (bug220).
+            if !(*header.as_ptr()).is_allocated(index) {
+                return;
+            }
+
             heap.record_in_remembered_buffer(header);
         }
     });
