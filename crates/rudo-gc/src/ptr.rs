@@ -559,7 +559,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                     let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        GcBox::dec_ref(ptr.as_ptr());
+                        // Don't call dec_ref - slot may be reused (bug133)
                         return None;
                     }
                 }
@@ -584,7 +584,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    GcBox::dec_ref(ptr.as_ptr());
+                    // Don't call dec_ref - slot may be reused (bug133)
                     return None;
                 }
             }
@@ -641,7 +641,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    (*ptr.as_ptr()).dec_weak();
+                    // Don't call dec_weak - slot may be reused (bug133)
                     return Self {
                         ptr: AtomicNullable::null(),
                     };
@@ -724,7 +724,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                     let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        GcBox::dec_ref(ptr.as_ptr());
+                        // Don't call dec_ref - slot may be reused (bug133)
                         return None;
                     }
                 }
@@ -750,7 +750,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    GcBox::dec_ref(ptr.as_ptr());
+                    // Don't call dec_ref - slot may be reused (bug133)
                     return None;
                 }
             }
@@ -1339,7 +1339,7 @@ impl<T: Trace> Gc<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    GcBox::dec_ref(gc_box_ptr);
+                    // Don't call dec_ref - slot may be reused (bug133)
                     return None;
                 }
             }
@@ -1499,10 +1499,11 @@ impl<T: Trace> Gc<T> {
 
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
-                if !(*header.as_ptr()).is_allocated(idx) {
-                    (*gc_box_ptr).dec_weak();
-                    panic!("Gc::downgrade: slot was swept during downgrade");
-                }
+                // Don't call dec_weak when slot swept - it may be reused (bug133)
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::downgrade: slot was swept during downgrade"
+                );
             }
         }
         Weak {
@@ -1555,7 +1556,7 @@ impl<T: Trace> Gc<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    (*ptr.as_ptr()).dec_weak();
+                    // Don't call dec_weak - slot may be reused (bug133)
                     return GcBoxWeakRef {
                         ptr: AtomicNullable::null(),
                     };
@@ -1614,10 +1615,11 @@ impl<T: Trace + 'static> Gc<T> {
 
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
-                if !(*header.as_ptr()).is_allocated(idx) {
-                    GcBox::dec_ref(ptr.as_ptr());
-                    panic!("Gc::cross_thread_handle: object slot was swept after inc_ref");
-                }
+                // Don't call dec_ref when slot swept - it may be reused (bug133)
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::cross_thread_handle: object slot was swept after inc_ref"
+                );
             }
         }
 
@@ -1725,10 +1727,11 @@ impl<T: Trace> Clone for Gc<T> {
 
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
-                if !(*header.as_ptr()).is_allocated(idx) {
-                    GcBox::dec_ref(gc_box_ptr);
-                    panic!("Gc::clone: object slot was swept after inc_ref");
-                }
+                // Don't call dec_ref when slot swept - it may be reused (bug133)
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::clone: object slot was swept after inc_ref"
+                );
             }
         }
 
@@ -1958,7 +1961,7 @@ impl<T: Trace> Weak<T> {
                     if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                         let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                         if !(*header.as_ptr()).is_allocated(idx) {
-                            GcBox::dec_ref(ptr.as_ptr());
+                            // Don't call dec_ref - slot may be reused (bug133)
                             return None;
                         }
                     }
@@ -2051,7 +2054,7 @@ impl<T: Trace> Weak<T> {
                     if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                         let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                         if !(*header.as_ptr()).is_allocated(idx) {
-                            GcBox::dec_ref(ptr.as_ptr());
+                            // Don't call dec_ref - slot may be reused (bug133)
                             return None;
                         }
                     }
@@ -2258,7 +2261,7 @@ impl<T: Trace> Clone for Weak<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    (*ptr.as_ptr()).dec_weak();
+                    // Don't call dec_weak - slot may be reused (bug133)
                     return Self {
                         ptr: AtomicNullable::null(),
                     };

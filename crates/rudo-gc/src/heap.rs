@@ -264,10 +264,11 @@ pub fn clone_orphan_root_with_inc_ref(
 
         if let Some(idx) = ptr_to_object_index(ptr.as_ptr() as *const u8) {
             let header = ptr_to_page_header(ptr.as_ptr() as *const u8);
-            if !(*header.as_ptr()).is_allocated(idx) {
-                crate::ptr::GcBox::dec_ref(ptr.as_ptr());
-                panic!("clone_orphan_root_with_inc_ref: object slot was swept after inc_ref");
-            }
+            // Don't call dec_ref when slot swept - it may be reused (bug133)
+            assert!(
+                (*header.as_ptr()).is_allocated(idx),
+                "clone_orphan_root_with_inc_ref: object slot was swept after inc_ref"
+            );
         }
     }
     drop(orphan);
@@ -1966,13 +1967,19 @@ impl LocalHeap {
 
     /// Push a GC pointer to the cross-thread SATB buffer.
     /// Used when recording SATB old values from threads without a GC heap.
-    /// When buffer is full, records to overflow buffer instead of dropping (bug122).
+    /// When main buffer is full, records to overflow buffer instead of dropping (bug122).
+    /// When overflow is also full, skips push to prevent unbounded growth (bug270).
     pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) {
         let mut buffer = CROSS_THREAD_SATB_BUFFER.lock();
         if buffer.len() >= MAX_CROSS_THREAD_SATB_SIZE {
-            CROSS_THREAD_SATB_OVERFLOW_BUFFER
-                .lock()
-                .push(gc_ptr.as_ptr() as usize);
+            let mut overflow = CROSS_THREAD_SATB_OVERFLOW_BUFFER.lock();
+            if overflow.len() >= MAX_CROSS_THREAD_SATB_SIZE {
+                crate::gc::incremental::IncrementalMarkState::global()
+                    .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
+                return;
+            }
+            overflow.push(gc_ptr.as_ptr() as usize);
+            drop(overflow);
             crate::gc::incremental::IncrementalMarkState::global()
                 .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
             return;
@@ -3147,9 +3154,7 @@ pub fn sweep_orphan_pages() {
             (*header).is_allocated(0) && (*header).is_marked(0)
         } else {
             let obj_count = (*header).obj_count as usize;
-            (0..obj_count).any(|i| {
-                (*header).is_allocated(i) && (*header).is_marked(i)
-            })
+            (0..obj_count).any(|i| (*header).is_allocated(i) && (*header).is_marked(i))
         };
 
         let has_weak_refs = if is_large {

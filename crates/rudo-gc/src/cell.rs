@@ -1080,6 +1080,24 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 
         self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
 
+        // Immediate mark of GC pointers (bug192: match GcCell::borrow_mut behavior).
+        // Marking only on Drop creates a race window where another thread's GC can miss
+        // these pointers. Mark immediately when handing out the guard.
+        let barrier_active = generational_active || incremental_active;
+        if barrier_active {
+            unsafe {
+                let guard_ref = &*guard;
+                let mut new_gc_ptrs = Vec::with_capacity(32);
+                guard_ref.capture_gc_ptrs_into(&mut new_gc_ptrs);
+                if !new_gc_ptrs.is_empty() {
+                    for gc_ptr in new_gc_ptrs {
+                        let _ =
+                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
+                    }
+                }
+            }
+        }
+
         GcThreadSafeRefMut {
             inner: guard,
             _marker: std::marker::PhantomData,
@@ -1243,6 +1261,13 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 
         unsafe {
             crate::heap::with_heap(|heap| {
+                // Validate heap bounds before dereferencing (bug191).
+                // Dereferencing ptr_to_page_header(ptr) without this check is UB for
+                // arbitrary addresses outside the GC heap.
+                if !heap.is_in_range(addr) {
+                    return false;
+                }
+
                 let page_addr = addr & crate::heap::page_mask();
 
                 if heap.large_object_map.contains_key(&page_addr) {

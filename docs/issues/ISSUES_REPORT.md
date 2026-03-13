@@ -3,17 +3,16 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 210
-- **Open**: 78
+- **Fixed**: 218
+- **Open**: 71
 - **Invalid**: 13
 - **Unknown**: 3
 - **Verified**: 14
 
 ### By Tags
-- **Verified**: 249
-- **Not Verified**: 19
+- **Verified**: 252
+- **Not Verified**: 18
 - **Not Reproduced**: 10
-- **Defense-in-depth, Soundness**: 1
 - **Fixed**: 1
 - **Unknown**: 2
 - **Unverified**: 35
@@ -161,6 +160,7 @@
 | [2026-03-12_ISSUE_bug122_cross_thread_satb_buffer_overflow_dropped_pointer.md](./2026-03-12_ISSUE_bug122_cross_thread_satb_buffer_overflow_dropped_pointer.md) | Cross-Thread SATB Buffer Overflow 丟失指標導致潛在 Premature Collection | Fixed | Verified |
 | [2026-03-12_ISSUE_bug122_gcbox_as_weak_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug122_gcbox_as_weak_missing_is_allocated_check.md) | GcBox::as_weak() 缺少 is_allocated 檢查導致 slot sweep 後潜在 UAF | Fixed | Verified |
 | [2026-03-12_ISSUE_bug122_weak_upgrade_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug122_weak_upgrade_missing_is_allocated_check.md) | Weak::upgrade 缺少 is_allocated 檢查 - 與 GcBoxWeakRef::upgrade 行為不一致 | Fixed | Verified |
+| [2026-03-13_ISSUE_bug122_gcrwlock_guard_drop_missing_generational_mark.md](./2026-03-13_ISSUE_bug122_gcrwlock_guard_drop_missing_generational_mark.md) | GcRwLock Guard Drop 缺少generational barrier的mark_object_black調用 | Fixed | Verified |
 | [2026-03-13_ISSUE_bug122_gcthreadsafecell_borrow_mut_missing_mark_object_black.md](./2026-03-13_ISSUE_bug122_gcthreadsafecell_borrow_mut_missing_mark_object_black.md) | GcThreadSafeCell::borrow_mut() 缺少標記新 GC 指針為黑色的程式碼 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md) | Incremental Marking `mark_root_for_snapshot` 缺少 is_allocated 檢查 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md) | WeakCrossThreadHandle Clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Fixed | Verified |
@@ -174,11 +174,11 @@
 | [2026-03-01_ISSUE_bug129_gchandle_is_valid_missing_gcbox_state_check.md](./2026-03-01_ISSUE_bug129_gchandle_is_valid_missing_gcbox_state_check.md) | GcHandle::is_valid() 未檢查 GcBox 存活狀態 - 導致 False Positive | Invalid | Not Reproduced |
 | [2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md](./2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md) | WeakCrossThreadHandle::drop 缺少有效性檢查可能導致 UAF | Fixed | Verified |
 | [2026-02-26_ISSUE_bug131_gcboxweaktoref_try_upgrade_toctou_dropping_state.md](./2026-02-26_ISSUE_bug131_gcboxweaktoref_try_upgrade_toctou_dropping_state.md) | GcBoxWeakRef::try_upgrade TOCTOU - caller's dropping_state check 與 try_inc_ref_from_zero 之間的 Race | Fixed | Verified |
-| [2026-03-13_ISSUE_bug131_handle_get_missing_validity_check.md](./2026-03-13_ISSUE_bug131_handle_get_missing_validity_check.md) | Handle::get / AsyncHandle::get 缺少 is_gc_box_pointer_valid 檢查 | Open | Defense-in-depth, Soundness |
+| [2026-03-13_ISSUE_bug131_handle_get_missing_validity_check.md](./2026-03-13_ISSUE_bug131_handle_get_missing_validity_check.md) | Handle::get / AsyncHandle::get 缺少 is_gc_box_pointer_valid 檢查 | Fixed | Verified |
 | [2026-02-27_ISSUE_bug132_handle_to_gc_missing_safety_checks.md](./2026-02-27_ISSUE_bug132_handle_to_gc_missing_safety_checks.md) | Handle::to_gc 缺少安全檢查可能導致 UAF | Fixed | Verified |
 | [2026-02-28_ISSUE_bug132_gccell_borrow_mut_missing_generational_barrier.md](./2026-02-28_ISSUE_bug132_gccell_borrow_mut_missing_generational_barrier.md) | GcCell::borrow_mut 缺少 Generational Barrier 檢查，與 GcRwLockWriteGuard 行為不一致 | Fixed | Verified |
 | [2026-02-27_ISSUE_bug133_unified_write_barrier_gen_old_flag_toctou.md](./2026-02-27_ISSUE_bug133_unified_write_barrier_gen_old_flag_toctou.md) | unified_write_barrier 缺少 has_gen_old_flag 快取導致 TOCTOU | Fixed | Verified |
-| [2026-03-12_ISSUE_bug133_dec_ref_sweep_race.md](./2026-03-12_ISSUE_bug133_dec_ref_sweep_race.md) | GcBox::dec_ref called on potentially swept slot causing memory corruption | Open | Not Verified |
+| [2026-03-12_ISSUE_bug133_dec_ref_sweep_race.md](./2026-03-12_ISSUE_bug133_dec_ref_sweep_race.md) | GcBox::dec_ref called on potentially swept slot causing memory corruption | Fixed | Verified |
 | [2026-02-27_ISSUE_bug134_incremental_enabled_relaxed_ordering.md](./2026-02-27_ISSUE_bug134_incremental_enabled_relaxed_ordering.md) | IncrementalMarkState::enabled 使用 Relaxed ordering 導致 write_barrier_needed 可能返回過時值 | Fixed | Verified |
 | [2026-02-27_ISSUE_bug135_lazy_sweep_gen_old_flag_not_cleared.md](./2026-02-27_ISSUE_bug135_lazy_sweep_gen_old_flag_not_cleared.md) | Lazy Sweep 回收 Slots 時未清除 GEN_OLD_FLAG，導致 slot 重用後 barrier 行為錯誤 | Fixed | Verified |
 | [2026-02-27_ISSUE_bug136_mark_object_missing_is_allocated_check.md](./2026-02-27_ISSUE_bug136_mark_object_missing_is_allocated_check.md) | mark_object 缺少 is_allocated 檢查 - 處理 cross-thread SATB 時可能 UAF | Fixed | Verified |
@@ -240,11 +240,11 @@
 | [2026-03-03_ISSUE_bug189_weak_crossthread_is_valid_missing_origin_check.md](./2026-03-03_ISSUE_bug189_weak_crossthread_is_valid_missing_origin_check.md) | WeakCrossThreadHandle::is_valid() Missing Origin Thread Check - Inconsistent with resolve() | Fixed | Verified |
 | [2026-03-03_ISSUE_bug190_incremental_markstate_doc_code_inconsistent.md](./2026-03-03_ISSUE_bug190_incremental_markstate_doc_code_inconsistent.md) | IncrementalMarkState Documentation Inconsistent - Comment Says impl Removed But Code Has It | Fixed | Verified |
 | [2026-03-05_ISSUE_bug190_large_object_path_missing_magic_check.md](./2026-03-05_ISSUE_bug190_large_object_path_missing_magic_check.md) | gc_cell_validate_and_barrier 與 unified_write_barrier 大型物件路徑缺少 MAGIC 驗證 | Verified | Verified |
-| [2026-03-04_ISSUE_bug191_is_gc_heap_pointer_ub.md](./2026-03-04_ISSUE_bug191_is_gc_heap_pointer_ub.md) | is_gc_heap_pointer has UB due to dereferencing potentially invalid pointer without validation | Open | Verified |
-| [2026-03-04_ISSUE_bug192_gcthreadsafecell_borrow_mut_missing_immediate_mark.md](./2026-03-04_ISSUE_bug192_gcthreadsafecell_borrow_mut_missing_immediate_mark.md) | GcThreadSafeCell::borrow_mut 缺少即時標記 - 與 GcCell 行為不一致 | Open | Verified |
+| [2026-03-04_ISSUE_bug191_is_gc_heap_pointer_ub.md](./2026-03-04_ISSUE_bug191_is_gc_heap_pointer_ub.md) | is_gc_heap_pointer has UB due to dereferencing potentially invalid pointer without validation | Fixed | Verified |
+| [2026-03-04_ISSUE_bug192_gcthreadsafecell_borrow_mut_missing_immediate_mark.md](./2026-03-04_ISSUE_bug192_gcthreadsafecell_borrow_mut_missing_immediate_mark.md) | GcThreadSafeCell::borrow_mut 缺少即時標記 - 與 GcCell 行為不一致 | Fixed | Verified |
 | [2026-03-04_ISSUE_bug193_gchandle_resolve_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug193_gchandle_resolve_missing_is_allocated_check.md) | GcHandle::resolve 缺少 is_allocated 檢查 - 可能訪問錯誤物件 | Verified | Verified |
-| [2026-03-04_ISSUE_bug194_async_gchandle_downcast_ref_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug194_async_gchandle_downcast_ref_missing_is_allocated_check.md) | AsyncGcHandle::downcast_ref 缺少 is_allocated 檢查導致 UAF | Open | Verified |
-| [2026-03-04_ISSUE_bug195_handle_get_to_gc_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug195_handle_get_to_gc_missing_is_allocated_check.md) | Handle::get / Handle::to_gc 缺少 is_allocated 檢查導致 UAF | Open | Verified |
+| [2026-03-04_ISSUE_bug194_async_gchandle_downcast_ref_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug194_async_gchandle_downcast_ref_missing_is_allocated_check.md) | AsyncGcHandle::downcast_ref 缺少 is_allocated 檢查導致 UAF | Fixed | Verified |
+| [2026-03-04_ISSUE_bug195_handle_get_to_gc_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug195_handle_get_to_gc_missing_is_allocated_check.md) | Handle::get / Handle::to_gc 缺少 is_allocated 檢查導致 UAF | Fixed | Verified |
 | [2026-03-04_ISSUE_bug196_async_handle_get_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug196_async_handle_get_missing_is_allocated_check.md) | AsyncHandle::get / to_gc 缺少 is_allocated 檢查導致 UAF | Open | Verified |
 | [2026-03-04_ISSUE_bug197_gc_core_methods_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug197_gc_core_methods_missing_is_allocated_check.md) | Gc 核心方法缺少 is_allocated 檢查導致潛在 UAF | Open | Unverified |
 | [2026-03-04_ISSUE_bug198_gcrwlock_gcmutex_write_missing_immediate_mark.md](./2026-03-04_ISSUE_bug198_gcrwlock_gcmutex_write_missing_immediate_mark.md) | GcRwLock::write / GcMutex::lock 缺少即時標記 - 與 GcCell 行為不一致 | Open | Verified |
@@ -322,7 +322,7 @@
 | [2026-03-11_ISSUE_bug267_gcrootguard_duplicate_registration.md](./2026-03-11_ISSUE_bug267_gcrootguard_duplicate_registration.md) | <no title> | Unknown | Unknown |
 | [2026-03-11_ISSUE_bug268_push_cross_thread_satb_drops_old_value_on_overflow.md](./2026-03-11_ISSUE_bug268_push_cross_thread_satb_drops_old_value_on_overflow.md) | push_cross_thread_satb 緩衝區溢位時丟棄舊值導致潛在 Use-After-Free | Open | Verified |
 | [2026-03-11_ISSUE_bug269_request_gc_handshake_active_count_toctou.md](./2026-03-11_ISSUE_bug269_request_gc_handshake_active_count_toctou.md) | request_gc_handshake active_count load 有 TOCTOU race condition | Open | Unverified |
-| [2026-03-11_ISSUE_bug270_push_cross_thread_satb_unbounded_growth.md](./2026-03-11_ISSUE_bug270_push_cross_thread_satb_unbounded_growth.md) | push_cross_thread_satb 緩衝區溢位時仍然 push 導致無上限 growth | Open | Verified |
+| [2026-03-11_ISSUE_bug270_push_cross_thread_satb_unbounded_growth.md](./2026-03-11_ISSUE_bug270_push_cross_thread_satb_unbounded_growth.md) | push_cross_thread_satb 緩衝區溢位時仍然 push 導致無上限 growth | Fixed | Verified |
 | [2026-03-11_ISSUE_bug271_ephemeron_key_always_returns_none.md](./2026-03-11_ISSUE_bug271_ephemeron_key_always_returns_none.md) | Ephemeron::key() Always Returns None - Missing Key Accessor Implementation | Open | Unverified |
 | [2026-03-11_ISSUE_bug272_mark_new_object_black_missing_post_mark_is_allocated_check.md](./2026-03-11_ISSUE_bug272_mark_new_object_black_missing_post_mark_is_allocated_check.md) | mark_new_object_black 缺少 set_mark 後的 is_allocated 檢查 - 與 mark_object_black 行為不一致 | Open | Unverified |
 | [2026-03-12_ISSUE_bug273_record_satb_old_value_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug273_record_satb_old_value_missing_is_allocated_check.md) | record_satb_old_value 記錄已釋放物件 - 缺少 is_allocated 檢查 | Open | Unverified |

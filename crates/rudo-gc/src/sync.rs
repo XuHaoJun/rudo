@@ -713,7 +713,7 @@ impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
 
-        if incremental_active {
+        if incremental_active || generational_active {
             // Always mark when we have ptrs to eliminate TOCTOU: barrier state may change between
             // any check and mark. mark_object_black is idempotent and safe when barrier is inactive;
             // it also handles swept slots via is_allocated check and post-CAS validation.

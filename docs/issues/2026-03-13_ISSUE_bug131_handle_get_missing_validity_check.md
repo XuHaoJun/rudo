@@ -1,7 +1,7 @@
 # [Bug]: Handle::get / AsyncHandle::get 缺少 is_gc_box_pointer_valid 檢查
 
-**Status:** Open
-**Tags:** Defense-in-depth, Soundness
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -135,3 +135,9 @@ pub fn get(&self) -> &T {
 此問題與 bug130（WeakCrossThreadHandle::drop 缺少有效性檢查）類似，但影響的是不同的 code path：
 - bug130: 發生在 WeakCrossThreadHandle::drop 過程中
 - 本 bug: 發生在 Handle::get / AsyncHandle::get 過程中
+
+---
+
+## Resolution (2026-03-13)
+
+Added `is_gc_box_pointer_valid` check to `Handle::get()`, `Handle::to_gc()`, `AsyncHandle::get()`, and `AsyncHandle::to_gc()` before dereferencing the GcBox pointer. This defense-in-depth measure prevents UAF when the slot has been swept and reused. Matches the pattern used in `Weak` reference implementations. All handle-related tests pass.

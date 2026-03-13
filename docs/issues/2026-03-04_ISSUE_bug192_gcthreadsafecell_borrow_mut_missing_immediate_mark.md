@@ -1,6 +1,6 @@
 # [Bug]: GcThreadSafeCell::borrow_mut 缺少即時標記 - 與 GcCell 行為不一致
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -171,3 +171,9 @@ if barrier_active {
    - 這與 `GcCell::borrow_mut()` 的行為不一致
 
 **結論:** Bug 確認存在，需要修復以確保 `GcThreadSafeCell::borrow_mut()` 與 `GcCell::borrow_mut()` 行為一致。
+
+---
+
+## Resolution (2026-03-13)
+
+Fixed in `cell.rs:1080-1098`: added immediate marking of GC pointers when handing out `GcThreadSafeRefMut`, matching `GcCell::borrow_mut()` behavior. When `barrier_active` (generational or incremental), we now capture and `mark_object_black` all GC pointers before returning the guard. This closes the race window between borrow creation and guard drop. Verified by `gc_thread_safe_cell` tests.

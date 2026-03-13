@@ -1,6 +1,6 @@
 # [Bug]: push_cross_thread_satb 緩衝區溢位時仍然 push 導致無上限 growth
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -136,3 +136,9 @@ pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) {
   - **但沒有 return**，所以 line 1969 永遠會執行
   - 這與 bug20 的 fix 說明不符
 - **影響**: 緩衝區無上限生長，導致記憶體耗盡
+
+---
+
+## Resolution Note
+
+**Fix applied (2026-03):** The code had evolved since bug20: when main buffer is full, entries were pushed to `CROSS_THREAD_SATB_OVERFLOW_BUFFER` (added for bug122 race window). The overflow buffer had no cap, causing unbounded growth. Fix: cap overflow at `MAX_CROSS_THREAD_SATB_SIZE`; when both main and overflow are full, request fallback and return without pushing. Prevents OOM while preserving SATB values during the race when overflow has space.

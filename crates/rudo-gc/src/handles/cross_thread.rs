@@ -209,10 +209,11 @@ impl<T: Trace + 'static> GcHandle<T> {
 
             if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                if !(*header.as_ptr()).is_allocated(idx) {
-                    crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
-                    panic!("GcHandle::resolve: object slot was swept after inc_ref");
-                }
+                // Don't call dec_ref when slot swept - it may be reused (bug133)
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "GcHandle::resolve: object slot was swept after inc_ref"
+                );
             }
 
             Gc::from_raw(self.ptr.as_ptr() as *const u8)
@@ -275,7 +276,7 @@ impl<T: Trace + 'static> GcHandle<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
+                    // Don't call dec_ref - slot may be reused (bug133)
                     return None;
                 }
             }
@@ -331,7 +332,7 @@ impl<T: Trace + 'static> GcHandle<T> {
                 {
                     let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        gc_box.dec_weak();
+                        // Don't call dec_weak - slot may be reused (bug133)
                         return WeakCrossThreadHandle {
                             weak: GcBoxWeakRef::new(NonNull::dangling()),
                             origin_tcb: Weak::clone(&self.origin_tcb),
@@ -360,7 +361,7 @@ impl<T: Trace + 'static> GcHandle<T> {
                 {
                     let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        gc_box.dec_weak();
+                        // Don't call dec_weak - slot may be reused (bug133)
                         return WeakCrossThreadHandle {
                             weak: GcBoxWeakRef::new(NonNull::dangling()),
                             origin_tcb: Weak::clone(&self.origin_tcb),
@@ -433,10 +434,11 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
 
                     if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
                         let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                        if !(*header.as_ptr()).is_allocated(idx) {
-                            crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
-                            panic!("GcHandle::clone: object slot was swept after inc_ref");
-                        }
+                        // Don't call dec_ref when slot swept - it may be reused (bug133)
+                        assert!(
+                            (*header.as_ptr()).is_allocated(idx),
+                            "GcHandle::clone: object slot was swept after inc_ref"
+                        );
                     }
                 }
                 drop(roots);

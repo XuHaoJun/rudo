@@ -97,7 +97,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::heap::ThreadControlBlock;
-use crate::ptr::GcBox;
+use crate::ptr::{is_gc_box_pointer_valid, GcBox};
 use crate::trace::Trace;
 use crate::Gc;
 
@@ -593,6 +593,10 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             });
 
         unsafe {
+            let ptr_addr = gc_box_ptr as usize;
+            if !is_gc_box_pointer_valid(ptr_addr) {
+                panic!("AsyncHandle::get: invalid GcBox pointer");
+            }
             let gc_box = &*gc_box_ptr;
             assert!(
                 !gc_box.has_dead_flag()
@@ -709,6 +713,10 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             });
 
         unsafe {
+            let ptr_addr = gc_box_ptr as usize;
+            if !is_gc_box_pointer_valid(ptr_addr) {
+                panic!("AsyncHandle::to_gc: invalid GcBox pointer");
+            }
             let gc_box = &*gc_box_ptr;
             assert!(
                 !gc_box.has_dead_flag()
@@ -1303,6 +1311,18 @@ impl AsyncGcHandle {
             })?;
 
             unsafe {
+                // Validate pointer before dereferencing (avoids UAF if slot was swept and reused).
+                let ptr_addr = gc_box_ptr as usize;
+                if !is_gc_box_pointer_valid(ptr_addr) {
+                    return None;
+                }
+                if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                    let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        return None;
+                    }
+                }
+
                 let gc_box = &*gc_box_ptr;
                 if gc_box.is_under_construction()
                     || gc_box.has_dead_flag()

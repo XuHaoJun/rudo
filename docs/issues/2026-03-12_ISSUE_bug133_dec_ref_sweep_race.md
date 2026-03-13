@@ -1,7 +1,7 @@
 # [Bug]: GcBox::dec_ref called on potentially swept slot causing memory corruption
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -120,3 +120,9 @@ This is a clear memory safety violation. Calling dec_ref on a potentially reused
 
 **Geohot (Exploit 觀點):**
 An attacker could potentially trigger this race repeatedly to cause memory corruption and potentially achieve arbitrary code execution if they can control the timing and what gets allocated in the reused slot.
+
+---
+
+## Resolution (2026-03-13)
+
+Removed all `dec_ref` and `dec_weak` calls when `is_allocated` fails after `inc_ref`/`inc_weak`. When the slot has been swept, it may have been reused for a new object; calling `dec_ref`/`dec_weak` on that memory would corrupt the new object's ref/weak counts and potentially invoke the wrong `drop_fn`. The fix: panic or return without undoing the increment. Affected locations: `ptr.rs` (Weak::upgrade, Weak::try_upgrade, Weak::clone, Gc::try_deref, Gc::downgrade, Gc::as_weak, Gc::cross_thread_handle, Gc::clone, GcBoxWeakRef::upgrade, GcBoxWeakRef::try_upgrade, GcBoxWeakRef::clone), `heap.rs` (clone_orphan_root_with_inc_ref), `handles/cross_thread.rs` (GcHandle::resolve, try_resolve, clone, downgrade). All tests pass.

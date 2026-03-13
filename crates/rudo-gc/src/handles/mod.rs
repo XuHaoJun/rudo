@@ -78,7 +78,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 
 use crate::heap::ThreadControlBlock;
-use crate::ptr::GcBox;
+use crate::ptr::{is_gc_box_pointer_valid, GcBox};
 use crate::trace::Trace;
 use crate::Gc;
 
@@ -302,6 +302,17 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
         unsafe {
             let slot = &*self.slot;
             let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
+            let ptr_addr = gc_box_ptr as usize;
+            if !is_gc_box_pointer_valid(ptr_addr) {
+                panic!("Handle::get: invalid GcBox pointer");
+            }
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Handle::get: slot has been swept and reused"
+                );
+            }
             let gc_box = &*gc_box_ptr;
             assert!(
                 !gc_box.has_dead_flag()
@@ -347,6 +358,17 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
     pub fn to_gc(&self) -> Gc<T> {
         unsafe {
             let gc_box_ptr = (*self.slot).as_ptr() as *const GcBox<T>;
+            let ptr_addr = gc_box_ptr as usize;
+            if !is_gc_box_pointer_valid(ptr_addr) {
+                panic!("Handle::to_gc: invalid GcBox pointer");
+            }
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Handle::to_gc: slot has been swept and reused"
+                );
+            }
             let gc_box = &*gc_box_ptr;
             assert!(
                 !gc_box.has_dead_flag()
@@ -356,6 +378,13 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
             );
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("Handle::to_gc: object is being dropped by another thread");
+            }
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Handle::to_gc: object slot was swept after inc_ref"
+                );
             }
             if gc_box.has_dead_flag()
                 || gc_box.dropping_state() != 0

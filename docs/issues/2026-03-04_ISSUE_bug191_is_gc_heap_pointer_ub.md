@@ -1,6 +1,6 @@
 # [Bug]: is_gc_heap_pointer has UB due to dereferencing potentially invalid pointer without validation
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 
@@ -141,3 +141,11 @@ If this dead code is ever re-enabled without fixing, it could be exploited to re
 2. 函數在沒有驗證指標是否在 heap 範圍內的情況下直接解引用 `(*header.as_ptr()).magic`
 3. 對比 heap.rs 中的 `incremental_write_barrier` 函數（第 2971 行），該函數正確地先檢查 heap bounds
 4. 這個 UB bug 確實存在，如果這些 dead code 函數被重新啟用，會造成問題
+
+---
+
+## Resolution (2026-03-13)
+
+**Outcome:** Fixed.
+
+Added heap bounds validation before dereferencing in `is_gc_heap_pointer` (cell.rs). The function now calls `heap.is_in_range(addr)` before `ptr_to_page_header(ptr)` and the magic check, matching the pattern used in `unified_write_barrier` and `incremental_write_barrier` in heap.rs. This prevents UB when the function is called with arbitrary non-GC pointers.
