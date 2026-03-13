@@ -1707,8 +1707,10 @@ impl<T: Trace + 'static> Gc<T> {
     /// ```
     #[must_use]
     pub fn weak_cross_thread_handle(&self) -> crate::handles::WeakCrossThreadHandle<T> {
+        let ptr = self.as_non_null();
+
         unsafe {
-            let gc_box = &*self.as_non_null().as_ptr();
+            let gc_box = &*ptr.as_ptr();
             assert!(
                 !gc_box.has_dead_flag()
                     && gc_box.dropping_state() == 0
@@ -1716,9 +1718,18 @@ impl<T: Trace + 'static> Gc<T> {
                 "Gc::weak_cross_thread_handle: cannot create handle for dead, dropping, or under construction Gc"
             );
             gc_box.inc_weak();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                // Don't call dec_weak when slot swept - it may be reused (bug133)
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::weak_cross_thread_handle: object slot was swept after inc_weak"
+                );
+            }
         }
         crate::handles::WeakCrossThreadHandle {
-            weak: GcBoxWeakRef::new(self.as_non_null()),
+            weak: GcBoxWeakRef::new(ptr),
             origin_tcb: std::sync::Arc::downgrade(
                 &crate::heap::current_thread_control_block()
                     .expect("weak_cross_thread_handle called outside of GC context"),
