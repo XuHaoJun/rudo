@@ -1,7 +1,8 @@
 # [Bug]: Handle::to_gc and AsyncHandle::to_gc missing post-increment safety check (TOCTOU)
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
+**Fix Commit:** 1699d23
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
