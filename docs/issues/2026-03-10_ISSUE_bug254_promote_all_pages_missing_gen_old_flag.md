@@ -1,7 +1,7 @@
 # [Bug]: promote_all_pages 缺少 GEN_OLD_FLAG 設置導致與 promote_young_pages 行為不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
