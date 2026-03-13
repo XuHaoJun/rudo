@@ -1,7 +1,7 @@
 # [Bug]: try_inc_ref_from_zero 分离加载 ref_count 和 weak_count 导致 TOCTOU 竞争条件
 
 **Status:** Open
-**Tags:** Not Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -143,3 +143,18 @@ GC 的正確性依賴於準確的引用計數狀態。當 ref_count 和 weak_cou
 
 **Geohot (Exploit 攻擊觀點):**
 如果攻擊者能控制 ref_count 和 weak_count 的修改時序，他們可能利用這個 TOCTOU 窗口來： (1) 強制復活一個已經完全釋放的物件； (2) 阻止對有效物件的合法復活。結合其他漏洞，這可能導致更嚴重的記憶體破壞。
+
+---
+
+## 驗證記錄
+
+**驗證日期:** 2026-03-14
+**驗證人員:** opencode
+
+### 驗證結果
+
+確認 bug 存在於 `ptr.rs:248-249`:
+- Line 248: `let ref_count = self.ref_count.load(Ordering::Acquire);`
+- Line 249: `let weak_count_raw = self.weak_count.load(Ordering::Acquire);`
+
+這兩個獨立的 atomic load 創造了 TOCTOU 競爭條件，與 issue 描述的問題完全一致。
