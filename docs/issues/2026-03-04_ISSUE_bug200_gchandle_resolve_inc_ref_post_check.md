@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::resolve/try_resolve 缺少 inc_ref 後的 post-check 導致 TOCTOU UAF
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
