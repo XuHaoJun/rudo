@@ -1,7 +1,7 @@
 # [Bug]: GcBox::as_weak() 缺少 is_allocated 檢查導致 slot sweep 後潜在 UAF
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -157,6 +157,14 @@ pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
 
 **Geohot (Exploit 攻擊觀點):**
 如果函數被啟用，攻擊者可以構造 concurrent 場景在 inc_weak 和返回之間觸發 sweep，導致 use-after-free。
+
+---
+
+## Resolution (2026-03-13)
+
+**Outcome:** Fixed.
+
+Added `is_allocated` check after `inc_weak()` in `Gc::as_weak()` (ptr.rs), matching the pattern used in `Gc::downgrade()`. If the slot was swept during the operation, the function now calls `dec_weak()` and returns a null `GcBoxWeakRef` instead of a dangling reference.
 
 ---
 

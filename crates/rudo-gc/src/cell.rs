@@ -1278,14 +1278,25 @@ impl<T: GcCapture + ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
 
 impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
     fn drop(&mut self) {
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
+
         let mut ptrs = Vec::with_capacity(32);
         (*self.inner).capture_gc_ptrs_into(&mut ptrs);
 
-        // Always mark when we have ptrs to eliminate TOCTOU: barrier state may change between
-        // any check and mark. mark_object_black is idempotent and safe when barrier is inactive.
-        for gc_ptr in ptrs {
-            let _ =
-                unsafe { crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8) };
+        // Mark new GC pointers black when either barrier is active (bug122: match GcCell behavior).
+        // Generational barrier also requires marking new pointers for OLD->YOUNG reference tracking.
+        if incremental_active || generational_active {
+            for gc_ptr in &ptrs {
+                let _ = unsafe {
+                    crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
+                };
+            }
+        }
+
+        if generational_active {
+            let ptr = std::ptr::from_ref(&*self.inner).cast::<u8>();
+            crate::heap::unified_write_barrier(ptr, incremental_active);
         }
     }
 }

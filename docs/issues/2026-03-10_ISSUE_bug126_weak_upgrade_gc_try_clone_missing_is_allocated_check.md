@@ -1,7 +1,7 @@
 # [Bug]: Weak::upgrade and Gc::try_clone missing is_allocated check after ref increment
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -112,3 +112,10 @@ An attacker could exploit this to achieve arbitrary read/write by:
 1. Creating a GC object with controlled content
 2. Letting it be collected and slot reused
 3. Upgrading a stale weak reference to get a pointer to the new object
+
+---
+
+## Resolution (2026-03-13)
+
+- **Weak::upgrade**: Already had `is_allocated` check (fixed in bug122).
+- **Gc::try_clone**: Added `is_allocated` check after successful `try_inc_ref_if_nonzero()`, matching the pattern in `Gc::clone`. Returns `None` if the slot was swept and reused. All weak and try_clone tests pass.

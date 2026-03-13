@@ -561,6 +561,47 @@ fn test_gc_rwlock_write() {
 }
 
 #[test]
+fn test_gc_rwlock_write_guard_drop_triggers_generational_barrier() {
+    use rudo_gc::gc::incremental::{IncrementalConfig, IncrementalMarkState};
+
+    rudo_gc::test_util::reset();
+
+    // Enable generational barrier (via config) but keep incremental marking inactive (phase Idle).
+    IncrementalMarkState::global().set_config(IncrementalConfig {
+        enabled: true,
+        increment_size: 1024,
+        max_dirty_pages: 64,
+        remembered_buffer_len: 32,
+        slice_timeout_ms: 10,
+    });
+
+    #[derive(Trace, Default)]
+    struct Inner {
+        value: i32,
+    }
+    rudo_gc::impl_gc_capture!(Inner);
+
+    let lock: Gc<GcRwLock<Option<Gc<Inner>>>> = Gc::new(GcRwLock::new(None));
+
+    // Promote lock to old generation so that subsequent writes are OLD→YOUNG.
+    rudo_gc::collect_full();
+
+    // Store a young object via a write guard; drop should trigger generational barrier even
+    // when incremental marking is inactive.
+    let young = Gc::new(Inner { value: 42 });
+    {
+        let mut guard = lock.write();
+        *guard = Some(young);
+    }
+
+    // Run a minor/full collection; if generational barrier on drop failed, `young` could be
+    // incorrectly reclaimed and this assertion would fail.
+    rudo_gc::collect_full();
+
+    assert_eq!(lock.read().as_ref().unwrap().value, 42);
+}
+
+#[test]
 fn test_gc_rwlock_try_read() {
     rudo_gc::test_util::reset();
     let lock: Gc<GcRwLock<TestData>> = Gc::new(GcRwLock::new(TestData { value: 10 }));

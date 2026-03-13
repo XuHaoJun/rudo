@@ -1,7 +1,7 @@
 # [Bug]: sweep_orphan_pages 的 has_survivors 檢查缺少 is_allocated 驗證
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -111,6 +111,12 @@ let has_survivors = if is_large {
 攻擊者可能利用這個來：
 1. 防止 orphan pages 被正確回收（記憶體洩漏）
 2. 影響 GC 的記憶體回收效率
+
+---
+
+## Resolution (2026-03-13)
+
+Added `is_allocated` check to `has_survivors` in `sweep_orphan_pages()` for both large and small object paths, matching the pattern in `has_weak_refs` and similar fixes in bug78/bug123. Full test suite passes.
 
 ---
 

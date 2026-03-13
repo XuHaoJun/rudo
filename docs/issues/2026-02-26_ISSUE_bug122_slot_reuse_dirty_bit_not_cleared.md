@@ -1,7 +1,7 @@
 # [Bug]: Slot Reuse 不會清除 Dirty Bit，導致 Minor GC 掃描已釋放物件
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -122,3 +122,11 @@ unsafe {
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可以觸發此 bug 來影響 GC 行為，可能導致內存洩漏或其他問題。
+
+---
+
+## Resolution Note (2026-03-13)
+
+**Outcome:** Fixed and verified.
+
+The fix is already implemented in `heap.rs`. In `try_pop_from_page` (lines 2217–2227), when a slot is reused from the free list, the code now clears the dirty bit via `(*header).clear_dirty(idx as usize)` alongside `clear_dead`, `clear_gen_old`, and `clear_under_construction`. The comment explicitly references bug122. No further code changes required.

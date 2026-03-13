@@ -1,7 +1,7 @@
 # [Bug]: Weak<T>::drop 使用 Relaxed 載入指標導致潛在記憶體洩漏
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -84,3 +84,11 @@ let ptr = self.ptr.load(Ordering::Acquire);
 
 **Geohot (Exploit 觀點):**
 精確時序依賴，但理論上可利用。攻擊者若能控制執行緒時序，可能導致目標應用程式記憶體洩漏。
+
+---
+
+## Resolution Note (2026-03-13)
+
+**Outcome:** Fixed and verified.
+
+Changed `Weak<T>::drop` in `ptr.rs` line 2266 from `Ordering::Relaxed` to `Ordering::Acquire` when loading the pointer. This aligns with `Gc<T>::drop` and ensures proper memory ordering before checking flags (dead, dropping_state, under_construction) and calling `dec_weak`. Single-threaded tests pass; concurrent weak tests (`weak_concurrent`, `weak_memory_reclaim`, `weak_cross_thread_upgrade_race`) all pass.

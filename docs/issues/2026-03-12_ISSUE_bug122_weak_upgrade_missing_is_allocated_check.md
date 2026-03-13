@@ -1,7 +1,7 @@
 # [Bug]: Weak::upgrade 缺少 is_allocated 檢查 - 與 GcBoxWeakRef::upgrade 行為不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -152,5 +152,9 @@ return Some(Gc { ... });
 
 ## 修復狀態
 
-- [ ] 已修復
-- [x] 未修復
+- [x] 已修復
+- [ ] 未修復
+
+## Resolution (2026-03-13)
+
+Added `is_allocated` check to both `Weak::upgrade()` and `Weak::try_upgrade()` after successful CAS, matching the pattern in `GcBoxWeakRef::upgrade()`. This prevents returning a `Gc` when the slot has been reclaimed and reused by lazy sweep. All weak-related tests pass.

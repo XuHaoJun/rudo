@@ -32,6 +32,12 @@ const MAX_CROSS_THREAD_SATB_SIZE: usize = 1024 * 1024;
 static CROSS_THREAD_SATB_BUFFER: parking_lot::Mutex<Vec<usize>> =
     parking_lot::Mutex::new(Vec::new());
 
+/// Overflow buffer for cross-thread SATB when main buffer is full.
+/// Retains pointers until fallback completes, preventing premature collection
+/// during the race window between overflow and fallback (bug122).
+static CROSS_THREAD_SATB_OVERFLOW_BUFFER: parking_lot::Mutex<Vec<usize>> =
+    parking_lot::Mutex::new(Vec::new());
+
 // Thread-local storage for the current thread's stable ID.
 // Assigned once when the thread first accesses the heap.
 // IDs start at 1; 0 is reserved as a sentinel for "no associated thread"
@@ -1946,23 +1952,27 @@ impl LocalHeap {
         }
     }
 
-    /// Flush the cross-thread SATB buffer.
+    /// Flush the cross-thread SATB buffer (main + overflow).
     /// Called during GC to process cross-thread mutations.
     #[must_use]
     pub fn flush_cross_thread_satb_buffer() -> Vec<NonNull<GcBox<()>>> {
-        let addresses = std::mem::take(&mut *CROSS_THREAD_SATB_BUFFER.lock());
-        addresses
-            .into_iter()
+        let mut main = std::mem::take(&mut *CROSS_THREAD_SATB_BUFFER.lock());
+        let overflow = std::mem::take(&mut *CROSS_THREAD_SATB_OVERFLOW_BUFFER.lock());
+        main.extend(overflow);
+        main.into_iter()
             .filter_map(|addr| NonNull::new(addr as *mut GcBox<()>))
             .collect()
     }
 
     /// Push a GC pointer to the cross-thread SATB buffer.
     /// Used when recording SATB old values from threads without a GC heap.
-    /// Requests fallback when buffer exceeds capacity to prevent unbounded growth.
+    /// When buffer is full, records to overflow buffer instead of dropping (bug122).
     pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) {
         let mut buffer = CROSS_THREAD_SATB_BUFFER.lock();
         if buffer.len() >= MAX_CROSS_THREAD_SATB_SIZE {
+            CROSS_THREAD_SATB_OVERFLOW_BUFFER
+                .lock()
+                .push(gc_ptr.as_ptr() as usize);
             crate::gc::incremental::IncrementalMarkState::global()
                 .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
             return;
@@ -2712,7 +2722,7 @@ pub fn simple_write_barrier(ptr: *const u8) {
 
     let ptr_addr = ptr as usize;
     with_heap(|heap| {
-        if ptr_addr < heap.min_addr || ptr_addr > heap.max_addr {
+        if ptr_addr < heap.min_addr || ptr_addr >= heap.max_addr {
             return;
         }
 
@@ -2798,7 +2808,7 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
     let current = get_thread_id();
 
     with_heap(|heap| {
-        if ptr_addr < heap.min_addr || ptr_addr > heap.max_addr {
+        if ptr_addr < heap.min_addr || ptr_addr >= heap.max_addr {
             return;
         }
 
@@ -2929,7 +2939,7 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
 
     let ptr_addr = ptr as usize;
     with_heap(|heap| {
-        if ptr_addr < heap.min_addr || ptr_addr > heap.max_addr {
+        if ptr_addr < heap.min_addr || ptr_addr >= heap.max_addr {
             return;
         }
 
@@ -3014,7 +3024,7 @@ pub fn incremental_write_barrier(ptr: *const u8) {
 
     let ptr_addr = ptr as usize;
     with_heap(|heap| {
-        if ptr_addr < heap.min_addr || ptr_addr > heap.max_addr {
+        if ptr_addr < heap.min_addr || ptr_addr >= heap.max_addr {
             return;
         }
 
@@ -3134,10 +3144,12 @@ pub fn sweep_orphan_pages() {
         let is_large = (*header).is_large_object();
 
         let has_survivors = if is_large {
-            (*header).is_marked(0)
+            (*header).is_allocated(0) && (*header).is_marked(0)
         } else {
             let obj_count = (*header).obj_count as usize;
-            (0..obj_count).any(|i| (*header).is_marked(i))
+            (0..obj_count).any(|i| {
+                (*header).is_allocated(i) && (*header).is_marked(i)
+            })
         };
 
         let has_weak_refs = if is_large {

@@ -19,7 +19,17 @@ Template: [assets/ISSUE_TEMPLATE.md](assets/ISSUE_TEMPLATE.md)
 
 Run this step **before** making any changes.
 
-#### 0a — Select the issue to work on
+#### 0a — Regenerate ISSUES_REPORT.md (initial snapshot)
+
+```bash
+python3 .agents/skills/issue-resolve/scripts/generate_issues_report.py
+```
+
+This captures the **baseline state** before any edits.
+
+---
+
+#### 0b — Select the issue to work on
 
 If the user did **not** specify which issue to handle, automatically pick the **first** issue with `Status: Open` (lowest bug number):
 
@@ -33,15 +43,6 @@ grep -l 'Status.*Open' docs/issues/*.md \
 
 Then read that file: `docs/issues/YYYY-MM-DD_ISSUE_bugN_<short-desc>.md`.
 
-#### 0b — Regenerate ISSUES_REPORT.md (initial snapshot)
-
-```bash
-python3 .agents/skills/issue-resolve/scripts/generate_issues_report.py
-```
-
-This captures the **baseline state** before any edits.
-
----
 
 ### Step 1: Read the Issue
 

@@ -1334,6 +1334,15 @@ impl<T: Trace> Gc<T> {
                 GcBox::dec_ref(gc_box_ptr);
                 return None;
             }
+            // Check is_allocated after successful ref bump to prevent slot reuse issues
+            // (same pattern as Gc::clone).
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    GcBox::dec_ref(gc_box_ptr);
+                    return None;
+                }
+            }
         }
         Some(Self {
             ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(gc_box_ptr) }),
@@ -1542,6 +1551,16 @@ impl<T: Trace> Gc<T> {
                 };
             }
             (*ptr.as_ptr()).inc_weak();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    (*ptr.as_ptr()).dec_weak();
+                    return GcBoxWeakRef {
+                        ptr: AtomicNullable::null(),
+                    };
+                }
+            }
         }
         GcBoxWeakRef {
             ptr: AtomicNullable::new(ptr),
@@ -1935,6 +1954,14 @@ impl<T: Trace> Weak<T> {
                         GcBox::dec_ref(ptr.as_ptr());
                         return None;
                     }
+                    // Check is_allocated after successful upgrade to prevent slot reuse issues
+                    if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                        let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            GcBox::dec_ref(ptr.as_ptr());
+                            return None;
+                        }
+                    }
                     crate::gc::notify_created_gc();
                     return Some(Gc {
                         ptr: AtomicNullable::new(ptr),
@@ -2019,6 +2046,14 @@ impl<T: Trace> Weak<T> {
                         // dec_ref is the correct way to undo it.
                         GcBox::dec_ref(ptr.as_ptr());
                         return None;
+                    }
+                    // Check is_allocated after successful upgrade to prevent slot reuse issues
+                    if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                        let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            GcBox::dec_ref(ptr.as_ptr());
+                            return None;
+                        }
                     }
                     crate::gc::notify_created_gc();
                     return Some(Gc {
@@ -2263,7 +2298,7 @@ pub fn is_gc_box_pointer_valid(ptr_addr: usize) -> bool {
 
 impl<T: Trace> Drop for Weak<T> {
     fn drop(&mut self) {
-        let ptr = self.ptr.load(Ordering::Relaxed);
+        let ptr = self.ptr.load(Ordering::Acquire);
         let Some(ptr) = ptr.as_option() else {
             return;
         };

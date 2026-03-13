@@ -297,10 +297,9 @@ impl<T: ?Sized> GcRwLock<T> {
     where
         T: GcCapture,
     {
-        let incremental_active = is_incremental_marking_active();
-        let generational_active = is_generational_barrier_active();
-
         self.inner.try_write().map(|guard| {
+            let incremental_active = is_incremental_marking_active();
+            let generational_active = is_generational_barrier_active();
             record_satb_old_values_with_state(&*guard, incremental_active);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
             GcRwLockWriteGuard {
@@ -385,12 +384,23 @@ impl<T: GcCapture + ?Sized> Deref for GcRwLockReadGuard<'_, T> {
 
 impl<T: GcCapture + ?Sized> Drop for GcRwLockReadGuard<'_, T> {
     fn drop(&mut self) {
+        let incremental_active = is_incremental_marking_active();
+        let generational_active = is_generational_barrier_active();
+
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
 
-        for gc_ptr in ptrs {
-            let _ =
-                unsafe { crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8) };
+        if incremental_active {
+            for gc_ptr in &ptrs {
+                let _ = unsafe {
+                    crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
+                };
+            }
+        }
+
+        if generational_active {
+            let ptr = std::ptr::from_ref(&*self.guard).cast::<u8>();
+            crate::heap::unified_write_barrier(ptr, incremental_active);
         }
     }
 }
@@ -435,15 +445,26 @@ impl<T: GcCapture + ?Sized> DerefMut for GcRwLockWriteGuard<'_, T> {
 /// swept between check and mark. No explicit pre-check is needed here.
 impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
+        let incremental_active = is_incremental_marking_active();
+        let generational_active = is_generational_barrier_active();
+
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
 
-        // Always mark when we have ptrs to eliminate TOCTOU: barrier state may change between
-        // any check and mark. mark_object_black is idempotent and safe when barrier is inactive;
-        // it also handles swept slots via is_allocated check and post-CAS validation.
-        for gc_ptr in ptrs {
-            let _ =
-                unsafe { crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8) };
+        if incremental_active {
+            // Always mark when we have ptrs to eliminate TOCTOU: barrier state may change between
+            // any check and mark. mark_object_black is idempotent and safe when barrier is inactive;
+            // it also handles swept slots via is_allocated check and post-CAS validation.
+            for gc_ptr in &ptrs {
+                let _ = unsafe {
+                    crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
+                };
+            }
+        }
+
+        if generational_active {
+            let ptr = std::ptr::from_ref(&*self.guard).cast::<u8>();
+            crate::heap::unified_write_barrier(ptr, incremental_active);
         }
     }
 }
@@ -586,10 +607,9 @@ impl<T: ?Sized> GcMutex<T> {
     where
         T: GcCapture,
     {
-        let incremental_active = is_incremental_marking_active();
-        let generational_active = is_generational_barrier_active();
-
         self.inner.try_lock().map(|guard| {
+            let incremental_active = is_incremental_marking_active();
+            let generational_active = is_generational_barrier_active();
             record_satb_old_values_with_state(&*guard, incremental_active);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
             GcMutexGuard {
@@ -690,15 +710,26 @@ impl<T: GcCapture + ?Sized> DerefMut for GcMutexGuard<'_, T> {
 /// swept between check and mark. No explicit pre-check is needed here.
 impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
     fn drop(&mut self) {
+        let incremental_active = is_incremental_marking_active();
+        let generational_active = is_generational_barrier_active();
+
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
 
-        // Always mark when we have ptrs to eliminate TOCTOU: barrier state may change between
-        // any check and mark. mark_object_black is idempotent and safe when barrier is inactive;
-        // it also handles swept slots via is_allocated check and post-CAS validation.
-        for gc_ptr in ptrs {
-            let _ =
-                unsafe { crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8) };
+        if incremental_active {
+            // Always mark when we have ptrs to eliminate TOCTOU: barrier state may change between
+            // any check and mark. mark_object_black is idempotent and safe when barrier is inactive;
+            // it also handles swept slots via is_allocated check and post-CAS validation.
+            for gc_ptr in &ptrs {
+                let _ = unsafe {
+                    crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
+                };
+            }
+        }
+
+        if generational_active {
+            let ptr = std::ptr::from_ref(&*self.guard).cast::<u8>();
+            crate::heap::unified_write_barrier(ptr, incremental_active);
         }
     }
 }

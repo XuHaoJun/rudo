@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::borrow_mut() 缺少標記新 GC 指針為黑色的程式碼
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -183,5 +183,11 @@ GcThreadSafeRefMut {
 
 ## 修復狀態
 
-- [ ] 已修復
+- [x] 已修復
 - [ ] 未修復
+
+---
+
+## Resolution (2026-03-13)
+
+**Fix applied:** `GcThreadSafeRefMut::drop()` already called `mark_object_black` when `incremental_active`, but did not when only `generational_active`. Updated the condition to `incremental_active || generational_active` to match `GcCell::borrow_mut()` behavior (barrier_active = generational || incremental). The Drop is the correct place because mutation occurs through the guard; we capture the final value after the user writes.

@@ -1,7 +1,7 @@
 # [Bug]: GcRwLock::try_write / GcMutex::try_lock TOCTOU - barrier state cached before lock acquisition
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -129,3 +129,20 @@ self.inner.try_lock().map(|guard| {
 ## 相關 Bug
 - bug100: cell.rs GcCell::trigger_write_barrier TOCTOU (同一表達式中兩次調用)
 - bug101: sync.rs trigger_write_barrier TOCTOU (同一表達式中兩次調用)
+
+---
+
+## Resolution (2026-03-13)
+
+**Outcome:** Fixed and verified.
+
+### Code Changes
+
+- Updated `GcRwLock::try_write()` and `GcMutex::try_lock()` in `sync.rs` to move `is_incremental_marking_active()` and `is_generational_barrier_active()` calls **inside** the lock-acquisition closure, after the lock is acquired.
+- This eliminates the TOCTOU window: barrier state is now read at use-time rather than cached before `try_write()`/`try_lock()`.
+
+### Verification
+
+- Sync tests pass: `cargo test -p rudo-gc --test sync -- --test-threads=1`
+- Full test suite passes: `./test.sh`
+- Note: Race conditions are not reliably reproducible with single-threaded tests; the fix is correct by construction (check and use are now atomic with respect to lock acquisition).

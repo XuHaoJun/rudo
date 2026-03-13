@@ -90,6 +90,41 @@ fn test_borrow_mut_primitive_types() {
 }
 
 #[test]
+fn test_gc_thread_safe_ref_mut_drop_triggers_generational_barrier() {
+    use rudo_gc::gc::incremental::{IncrementalConfig, IncrementalMarkState};
+
+    #[derive(Trace, Default)]
+    struct Inner {
+        value: i32,
+    }
+    rudo_gc::impl_gc_capture!(Inner);
+
+    rudo_gc::test_util::reset();
+
+    IncrementalMarkState::global().set_config(IncrementalConfig {
+        enabled: true,
+        increment_size: 1024,
+        max_dirty_pages: 64,
+        remembered_buffer_len: 32,
+        slice_timeout_ms: 10,
+    });
+
+    let cell: Gc<GcThreadSafeCell<Option<Gc<Inner>>>> = Gc::new(GcThreadSafeCell::new(None));
+
+    rudo_gc::collect_full();
+
+    let young = Gc::new(Inner { value: 42 });
+    {
+        let mut guard = cell.borrow_mut();
+        *guard = Some(young);
+    }
+
+    rudo_gc::collect_full();
+
+    assert_eq!(cell.borrow().as_ref().unwrap().value, 42);
+}
+
+#[test]
 fn test_gc_correctness_with_drop_tracker() {
     #[derive(Clone)]
     struct DropTracker {

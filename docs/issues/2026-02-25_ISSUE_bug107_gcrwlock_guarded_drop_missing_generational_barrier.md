@@ -1,6 +1,6 @@
 # [Bug]: GcRwLockWriteGuard/GcMutexGuard Drop 缺少 Generational Barrier 檢查
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -207,3 +207,31 @@ Verified by code inspection:
 - Drop only captures GC pointers and calls `mark_object_black` (for incremental/SATB)
 - Does NOT call `unified_write_barrier` which handles generational barrier
 - When generational GC enabled but incremental marking disabled → OLD→YOUNG refs not recorded
+
+---
+
+## Resolution (2026-03-13)
+
+**Outcome:** Fixed and verified.
+
+### Code Changes
+
+- Updated `GcRwLockReadGuard::drop`, `GcRwLockWriteGuard::drop`, and `GcMutexGuard::drop` in `sync.rs` to:
+  - Cache `incremental_active = is_incremental_marking_active()` and `generational_active = is_generational_barrier_active()` at the start of `drop`.
+  - Continue calling `mark_object_black` for captured pointers only when `incremental_active` is true (SATB path).
+  - Call `unified_write_barrier(ptr, incremental_active)` when `generational_active` is true, using the raw pointer to the inner lock-protected value (`&*self.guard`) as the barrier address.
+
+This ensures that:
+- SATB marking remains correct and idempotent across barrier state transitions.
+- Generational write barriers are triggered on guard drop even when incremental marking is disabled but generational GC is active, so OLD→YOUNG references established while holding the guard are recorded in the remembered set.
+
+### Verification
+
+- Added `test_gc_rwlock_write_guard_drop_triggers_generational_barrier` in `crates/rudo-gc/tests/sync.rs`:
+  - Configures `IncrementalMarkState` with generational support enabled while leaving incremental marking idle.
+  - Promotes a `Gc<GcRwLock<Option<Gc<Inner>>>>` to the old generation.
+  - Stores a young `Gc<Inner>` into the lock via `write()` and guard drop.
+  - Runs a full/minor-eligible collection and asserts that the young object remains reachable via the lock (`assert_eq!(lock.read().as_ref().unwrap().value, 42)`).
+- Ran the targeted test binary:
+  - `cargo test -p rudo-gc --test sync test_gc_rwlock_write_guard_drop_triggers_generational_barrier -- --test-threads=1`
+  - Result: test passed.

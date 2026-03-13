@@ -1,7 +1,7 @@
 # [Bug]: Write Barrier 函數使用 `>` 進行 heap bounds 檢查，與 `is_in_range` 不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -106,3 +106,9 @@ if ptr_addr < heap.min_addr || ptr_addr >= heap.max_addr {
 
 **Geohot (Exploit 觀點):**
 實際利用此 bug 的機會極低，因為需要精確控制記憶體配置位址。但理論上，如果攻擊者能控制配置位址，可能利用此不一致性繞過某些檢查。
+
+---
+
+## Resolution (2026-03-13)
+
+**Fixed.** Changed `ptr_addr > heap.max_addr` to `ptr_addr >= heap.max_addr` in all four write barrier functions (`simple_write_barrier`, `gc_cell_validate_and_barrier`, `unified_write_barrier`, `incremental_write_barrier`) in `heap.rs`. Bounds check now matches `is_in_range` semantics (exclusive upper bound). Full test suite passes.

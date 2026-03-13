@@ -1,7 +1,7 @@
 # [Bug]: Cross-Thread SATB Buffer Overflow 丟失指標導致潛在 Premature Collection
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -152,5 +152,11 @@ bug20 修復了 unbounded growth，但修復時未考慮 fallback 完成前的 r
 
 **Geohot (Exploit 攻擊觀點):**
 此 race condition 可被利用：攻擊者可通過觸發大量跨執行緒 mutation 填充 buffer，製造 race window，然後嘗試存取可能被過早回收的物件，實現記憶體佈局控制或資訊洩漏。
+
+---
+
+## Resolution (2026-03-13)
+
+**Fix applied:** Added `CROSS_THREAD_SATB_OVERFLOW_BUFFER` in `heap.rs`. When the main cross-thread SATB buffer is full, pointers are now pushed to the overflow buffer instead of being dropped. `flush_cross_thread_satb_buffer()` drains both main and overflow buffers during `execute_final_mark`, ensuring all recorded pointers are marked before sweep. Mirrors the per-thread `satb_overflow_buffer` pattern.
 
 ---
