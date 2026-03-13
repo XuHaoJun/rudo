@@ -1,7 +1,7 @@
 # [Bug]: GcRwLockReadGuard::drop 缺少 SATB Barrier 捕獲
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Fixed
 
 ---
 
