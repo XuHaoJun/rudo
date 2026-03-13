@@ -20,6 +20,11 @@ use std::sync::{Mutex, OnceLock};
 /// access from any tokio thread.
 ///
 /// The singleton is initialized on first access via [`GcRootSet::global()`].
+///
+/// # Lock Ordering (bug203)
+/// The internal `roots` mutex is exempt from the GC `LockOrder` validation system.
+/// `GcRootSet` is used by tokio tasks for root registration and is independent of
+/// the core GC lock hierarchy (`LocalHeap`, `GlobalMarkState`, `GcRequest`).
 #[derive(Debug)]
 pub struct GcRootSet {
     roots: Mutex<Vec<usize>>,

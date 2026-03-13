@@ -1,7 +1,7 @@
 # [Bug]: Weak::raw_addr() 與 Weak::ptr_eq() 缺少 is_gc_box_pointer_valid 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -119,3 +119,11 @@ Lazy sweep 會導致 slot 被回收並可能重新分配。當指標驗證跳過
 
 **Geohot (Exploit 觀點):**
 攻擊者可能利用錯誤的 raw_addr 或 ptr_eq 結果來推斷記憶體佈局或進行計數攻擊。若新物件包含敏感資料，Weak 持有者可能透過 raw_addr 讀取新物件的位址。
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Fixed.
+
+Added `is_gc_box_pointer_valid()` checks to both `Weak::raw_addr()` and `Weak::ptr_eq()` in `ptr.rs`, consistent with `Weak::strong_count()`, `Weak::weak_count()`, and `Weak::clone()`. When the slot has been swept (or pointer is invalid), `raw_addr()` now returns 0 and `ptr_eq()` returns false.

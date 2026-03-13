@@ -1,6 +1,6 @@
 # [Bug]: GcRwLock::write / GcMutex::lock 缺少即時標記 - 與 GcCell 行為不一致
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -174,3 +174,9 @@ if barrier_active {
 **結論:** Bug 確認存在，需要修復以確保 `GcRwLock::write()`/`GcMutex::lock()` 與 `GcCell::borrow_mut()` 行為一致。
 
 **注意:** 此 bug 與 bug192 (GcThreadSafeCell::borrow_mut 缺少即時標記) 為相同模式，但發生在不同的組件。
+
+---
+
+## Resolution (2026-03-14)
+
+**Fixed.** Added `mark_gc_ptrs_immediate()` helper and invoked it in `GcRwLock::write()`, `GcRwLock::try_write()`, `GcMutex::lock()`, and `GcMutex::try_lock()` immediately after `trigger_write_barrier_with_state()`, before returning the guard. This aligns behavior with `GcCell::borrow_mut()` so new GC pointers are marked on acquisition rather than deferred to guard drop. All sync tests pass.

@@ -52,6 +52,27 @@ use crate::Trace;
 
 mod private {}
 
+/// Marks GC pointers in the value as black when barrier is active.
+/// Ensures consistency with `GcCell::borrow_mut()` — new pointers are marked
+/// immediately on acquisition, not deferred to guard drop. (bug198)
+#[inline]
+fn mark_gc_ptrs_immediate<T: GcCapture + ?Sized>(value: &T, barrier_active: bool) {
+    if !barrier_active {
+        return;
+    }
+    unsafe {
+        let mut gc_ptrs = Vec::with_capacity(32);
+        value.capture_gc_ptrs_into(&mut gc_ptrs);
+        if !gc_ptrs.is_empty() {
+            crate::heap::with_heap(|_heap| {
+                for gc_ptr in gc_ptrs {
+                    let _ = crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
+                }
+            });
+        }
+    }
+}
+
 /// Records old GC pointer values to SATB buffer with pre-cached barrier state.
 /// This avoids TOCTOU by using the cached state instead of re-checking.
 #[inline]
@@ -263,6 +284,8 @@ impl<T: ?Sized> GcRwLock<T> {
         let guard = self.inner.write();
         record_satb_old_values_with_state(&*guard, incremental_active);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
+        let barrier_active = generational_active || incremental_active;
+        mark_gc_ptrs_immediate(&*guard, barrier_active);
         GcRwLockWriteGuard {
             guard,
             _marker: PhantomData,
@@ -302,6 +325,8 @@ impl<T: ?Sized> GcRwLock<T> {
             let generational_active = is_generational_barrier_active();
             record_satb_old_values_with_state(&*guard, incremental_active);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
+            let barrier_active = generational_active || incremental_active;
+            mark_gc_ptrs_immediate(&*guard, barrier_active);
             GcRwLockWriteGuard {
                 guard,
                 _marker: PhantomData,
@@ -572,6 +597,8 @@ impl<T: ?Sized> GcMutex<T> {
         let guard = self.inner.lock();
         record_satb_old_values_with_state(&*guard, incremental_active);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
+        let barrier_active = generational_active || incremental_active;
+        mark_gc_ptrs_immediate(&*guard, barrier_active);
         GcMutexGuard {
             guard,
             _marker: PhantomData,
@@ -609,6 +636,8 @@ impl<T: ?Sized> GcMutex<T> {
             let generational_active = is_generational_barrier_active();
             record_satb_old_values_with_state(&*guard, incremental_active);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
+            let barrier_active = generational_active || incremental_active;
+            mark_gc_ptrs_immediate(&*guard, barrier_active);
             GcMutexGuard {
                 guard,
                 _marker: PhantomData,

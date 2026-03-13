@@ -1,6 +1,6 @@
 # [Bug]: Write Barrier 缺少 is_allocated 檢查 - 可能標記錯誤的物件槽位
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

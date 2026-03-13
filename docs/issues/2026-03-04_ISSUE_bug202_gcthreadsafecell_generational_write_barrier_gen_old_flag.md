@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::generational_write_barrier 遺漏 gen_old_flag 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -111,3 +111,9 @@ if (*header.as_ptr()).generation == 0 && !has_gen_old {
 這不是安全漏洞，只是效能問題。但在以下情境可能有影響：
 - 若有人嘗試啟用此函數做效能優化，會得到相反的結果
 - 過多的 barrier 觸發會增加 dirty pages，影響 GC pause time
+
+---
+
+## Resolution (2026-03-14)
+
+Fixed: Added `has_gen_old_flag` check to both large-object and small-object paths in `GcThreadSafeCell::generational_write_barrier` (cell.rs). The barrier now skips when `generation == 0 && !has_gen_old`, matching `unified_write_barrier` behavior. Verified with `test_generational_barrier_gen_old_flag` and `incremental_generational` tests.

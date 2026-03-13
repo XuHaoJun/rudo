@@ -597,6 +597,13 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             if !is_gc_box_pointer_valid(ptr_addr) {
                 panic!("AsyncHandle::get: invalid GcBox pointer");
             }
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "AsyncHandle::get: slot has been swept and reused"
+                );
+            }
             let gc_box = &*gc_box_ptr;
             assert!(
                 !gc_box.has_dead_flag()
@@ -649,6 +656,17 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             !gc_box_ptr.is_null(),
             "AsyncHandle::get_unchecked: slot is null"
         );
+        let ptr_addr = gc_box_ptr as usize;
+        if !is_gc_box_pointer_valid(ptr_addr) {
+            panic!("AsyncHandle::get_unchecked: invalid GcBox pointer");
+        }
+        if let Some(idx) = unsafe { crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) } {
+            let header = unsafe { crate::heap::ptr_to_page_header(gc_box_ptr as *const u8) };
+            assert!(
+                unsafe { (*header.as_ptr()).is_allocated(idx) },
+                "AsyncHandle::get_unchecked: slot has been swept and reused"
+            );
+        }
         let gc_box = unsafe { &*gc_box_ptr };
         assert!(
             !gc_box.has_dead_flag()
@@ -717,6 +735,13 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             if !is_gc_box_pointer_valid(ptr_addr) {
                 panic!("AsyncHandle::to_gc: invalid GcBox pointer");
             }
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "AsyncHandle::to_gc: slot has been swept and reused"
+                );
+            }
             let gc_box = &*gc_box_ptr;
             assert!(
                 !gc_box.has_dead_flag()
@@ -726,6 +751,13 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             );
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("AsyncHandle::to_gc: object is being dropped by another thread");
+            }
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "AsyncHandle::to_gc: object slot was swept after inc_ref"
+                );
             }
             if gc_box.has_dead_flag()
                 || gc_box.dropping_state() != 0

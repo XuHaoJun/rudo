@@ -207,6 +207,13 @@ impl<T: Trace + 'static> GcHandle<T> {
             );
             gc_box.inc_ref();
 
+            // Post-increment safety check (TOCTOU: object may have been dropped between
+            // pre-check and inc_ref). Same pattern as Weak::upgrade.
+            if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                GcBox::dec_ref(self.ptr.as_ptr());
+                panic!("GcHandle::resolve: object was dropped after inc_ref (TOCTOU race)");
+            }
+
             if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
                 // Don't call dec_ref when slot swept - it may be reused (bug133)
@@ -272,6 +279,12 @@ impl<T: Trace + 'static> GcHandle<T> {
                 return None;
             }
             gc_box.inc_ref();
+
+            // Post-increment safety check (TOCTOU). Same pattern as Weak::try_upgrade.
+            if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                GcBox::dec_ref(self.ptr.as_ptr());
+                return None;
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);

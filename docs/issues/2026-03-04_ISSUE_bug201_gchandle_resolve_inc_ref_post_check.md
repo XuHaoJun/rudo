@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::resolve/try_resolve 缺少 inc_ref 後的 post-check 導致 TOCTOU UAF
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -209,7 +209,13 @@ unsafe {
 
 ---
 
+## Resolution
+
+**已修復** - 2026-03-14 (與 bug200 相同修復)
+
+Duplicate of bug200. 修復已應用於 `handles/cross_thread.rs` 的 `GcHandle::resolve()` 和 `try_resolve()`。
+
 ## 修復狀態
 
-- [ ] 已修復
-- [x] 未修復
+- [x] 已修復
+- [ ] 未修復

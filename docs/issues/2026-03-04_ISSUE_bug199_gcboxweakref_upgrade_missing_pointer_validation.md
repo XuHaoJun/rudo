@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::upgrade() 缺少指標驗證導致潜在 UB
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -131,3 +131,17 @@ pub(crate) fn upgrade(&self) -> Option<Gc<T>> {
 - 若攻擊者能控制 GC 時序，可利用此漏洞
 - 通過精確的記憶體噴射，可能讓升級讀取到錯誤物件的標頭
 - 進一步可繞過 `dropping_state` 檢查（因為讀取的是新物件的標頭）
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Already fixed.
+
+The fix was applied in a previous commit. The current `GcBoxWeakRef::upgrade()` implementation in `ptr.rs` (lines 517–595) correctly validates the pointer before dereferencing:
+
+- Alignment check: `ptr_addr % alignment != 0`
+- `MIN_VALID_HEAP_ADDRESS` check
+- `is_gc_box_pointer_valid(ptr_addr)` check
+
+These checks match the pattern used in `GcBoxWeakRef::clone()` and `GcBoxWeakRef::try_upgrade()`. Full test suite passes.

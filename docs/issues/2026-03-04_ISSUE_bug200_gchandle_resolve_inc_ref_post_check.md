@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::resolve/try_resolve 缺少 inc_ref 後的 post-check 導致 TOCTOU UAF
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -150,3 +150,14 @@ unsafe {
 - 攻擊者可以嘗試噴射 (spray) 物件來控制被釋放的記憶體內容
 - 如果能精確觸發 race condition，可以實現 arbitrary memory write
 - 由於時間窗口很小，實際利用需要極高精度，但理論上是可行的
+
+---
+
+## Resolution
+
+**已修復** - 2026-03-14
+
+在 `handles/cross_thread.rs` 的 `GcHandle::resolve()` 和 `GcHandle::try_resolve()` 中，於 `inc_ref()` 之後添加了 post-increment safety check，與 `Weak::upgrade` / `Weak::try_upgrade` 相同的 TOCTOU 防護模式：
+
+- `resolve()`: 若 `dropping_state != 0 || has_dead_flag`，則 `dec_ref` 撤銷 increment 並 panic
+- `try_resolve()`: 若檢查失敗，則 `dec_ref` 並返回 `None`

@@ -3,19 +3,19 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 218
-- **Open**: 71
-- **Invalid**: 13
+- **Fixed**: 228
+- **Open**: 60
+- **Invalid**: 14
 - **Unknown**: 3
 - **Verified**: 14
 
 ### By Tags
-- **Verified**: 252
-- **Not Verified**: 18
-- **Not Reproduced**: 10
+- **Verified**: 259
+- **Not Verified**: 17
+- **Not Reproduced**: 11
 - **Fixed**: 1
 - **Unknown**: 2
-- **Unverified**: 35
+- **Unverified**: 28
 - **Verified, Fixed**: 1
 
 ## All Issues
@@ -245,21 +245,21 @@
 | [2026-03-04_ISSUE_bug193_gchandle_resolve_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug193_gchandle_resolve_missing_is_allocated_check.md) | GcHandle::resolve 缺少 is_allocated 檢查 - 可能訪問錯誤物件 | Verified | Verified |
 | [2026-03-04_ISSUE_bug194_async_gchandle_downcast_ref_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug194_async_gchandle_downcast_ref_missing_is_allocated_check.md) | AsyncGcHandle::downcast_ref 缺少 is_allocated 檢查導致 UAF | Fixed | Verified |
 | [2026-03-04_ISSUE_bug195_handle_get_to_gc_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug195_handle_get_to_gc_missing_is_allocated_check.md) | Handle::get / Handle::to_gc 缺少 is_allocated 檢查導致 UAF | Fixed | Verified |
-| [2026-03-04_ISSUE_bug196_async_handle_get_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug196_async_handle_get_missing_is_allocated_check.md) | AsyncHandle::get / to_gc 缺少 is_allocated 檢查導致 UAF | Open | Verified |
-| [2026-03-04_ISSUE_bug197_gc_core_methods_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug197_gc_core_methods_missing_is_allocated_check.md) | Gc 核心方法缺少 is_allocated 檢查導致潛在 UAF | Open | Unverified |
-| [2026-03-04_ISSUE_bug198_gcrwlock_gcmutex_write_missing_immediate_mark.md](./2026-03-04_ISSUE_bug198_gcrwlock_gcmutex_write_missing_immediate_mark.md) | GcRwLock::write / GcMutex::lock 缺少即時標記 - 與 GcCell 行為不一致 | Open | Verified |
-| [2026-03-04_ISSUE_bug199_gcboxweakref_upgrade_missing_pointer_validation.md](./2026-03-04_ISSUE_bug199_gcboxweakref_upgrade_missing_pointer_validation.md) | GcBoxWeakRef::upgrade() 缺少指標驗證導致潜在 UB | Open | Not Verified |
-| [2026-03-04_ISSUE_bug200_gchandle_resolve_inc_ref_post_check.md](./2026-03-04_ISSUE_bug200_gchandle_resolve_inc_ref_post_check.md) | GcHandle::resolve/try_resolve 缺少 inc_ref 後的 post-check 導致 TOCTOU UAF | Open | Unverified |
-| [2026-03-04_ISSUE_bug200_write_barrier_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug200_write_barrier_missing_is_allocated_check.md) | Write Barrier 缺少 is_allocated 檢查 - 可能標記錯誤的物件槽位 | Open | Verified |
-| [2026-03-04_ISSUE_bug201_gchandle_resolve_inc_ref_post_check.md](./2026-03-04_ISSUE_bug201_gchandle_resolve_inc_ref_post_check.md) | GcHandle::resolve/try_resolve 缺少 inc_ref 後的 post-check 導致 TOCTOU UAF | Open | Unverified |
-| [2026-03-04_ISSUE_bug202_gcthreadsafecell_generational_write_barrier_gen_old_flag.md](./2026-03-04_ISSUE_bug202_gcthreadsafecell_generational_write_barrier_gen_old_flag.md) | GcThreadSafeCell::generational_write_barrier 遺漏 gen_old_flag 檢查 | Open | Unverified |
-| [2026-03-04_ISSUE_bug203_global_mutex_lock_ordering_missing.md](./2026-03-04_ISSUE_bug203_global_mutex_lock_ordering_missing.md) | Global Mutexes Missing Lock Ordering Validation - Potential Deadlocks | Open | Unverified |
+| [2026-03-04_ISSUE_bug196_async_handle_get_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug196_async_handle_get_missing_is_allocated_check.md) | AsyncHandle::get / to_gc 缺少 is_allocated 檢查導致 UAF | Fixed | Verified |
+| [2026-03-04_ISSUE_bug197_gc_core_methods_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug197_gc_core_methods_missing_is_allocated_check.md) | Gc 核心方法缺少 is_allocated 檢查導致潛在 UAF | Fixed | Verified |
+| [2026-03-04_ISSUE_bug198_gcrwlock_gcmutex_write_missing_immediate_mark.md](./2026-03-04_ISSUE_bug198_gcrwlock_gcmutex_write_missing_immediate_mark.md) | GcRwLock::write / GcMutex::lock 缺少即時標記 - 與 GcCell 行為不一致 | Fixed | Verified |
+| [2026-03-04_ISSUE_bug199_gcboxweakref_upgrade_missing_pointer_validation.md](./2026-03-04_ISSUE_bug199_gcboxweakref_upgrade_missing_pointer_validation.md) | GcBoxWeakRef::upgrade() 缺少指標驗證導致潜在 UB | Fixed | Verified |
+| [2026-03-04_ISSUE_bug200_gchandle_resolve_inc_ref_post_check.md](./2026-03-04_ISSUE_bug200_gchandle_resolve_inc_ref_post_check.md) | GcHandle::resolve/try_resolve 缺少 inc_ref 後的 post-check 導致 TOCTOU UAF | Fixed | Verified |
+| [2026-03-04_ISSUE_bug200_write_barrier_missing_is_allocated_check.md](./2026-03-04_ISSUE_bug200_write_barrier_missing_is_allocated_check.md) | Write Barrier 缺少 is_allocated 檢查 - 可能標記錯誤的物件槽位 | Fixed | Verified |
+| [2026-03-04_ISSUE_bug201_gchandle_resolve_inc_ref_post_check.md](./2026-03-04_ISSUE_bug201_gchandle_resolve_inc_ref_post_check.md) | GcHandle::resolve/try_resolve 缺少 inc_ref 後的 post-check 導致 TOCTOU UAF | Fixed | Verified |
+| [2026-03-04_ISSUE_bug202_gcthreadsafecell_generational_write_barrier_gen_old_flag.md](./2026-03-04_ISSUE_bug202_gcthreadsafecell_generational_write_barrier_gen_old_flag.md) | GcThreadSafeCell::generational_write_barrier 遺漏 gen_old_flag 檢查 | Fixed | Verified |
+| [2026-03-04_ISSUE_bug203_global_mutex_lock_ordering_missing.md](./2026-03-04_ISSUE_bug203_global_mutex_lock_ordering_missing.md) | Global Mutexes Missing Lock Ordering Validation - Potential Deadlocks | Fixed | Verified |
 | [2026-03-05_ISSUE_bug204_record_satb_old_value_invalid_ptr.md](./2026-03-05_ISSUE_bug204_record_satb_old_value_invalid_ptr.md) | record_satb_old_value 記錄已釋放物件 - 當 allocating_thread_id 為 0 時仍推送指標 | Verified | Verified |
 | [2026-03-05_ISSUE_bug205_find_gc_box_from_ptr_large_object_missing_magic_check.md](./2026-03-05_ISSUE_bug205_find_gc_box_from_ptr_large_object_missing_magic_check.md) | find_gc_box_from_ptr 大型物件路徑缺少 MAGIC 驗證 | Verified | Verified |
 | [2026-03-05_ISSUE_bug206_gchandle_resolve_inc_ref_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug206_gchandle_resolve_inc_ref_missing_is_allocated_check.md) | GcHandle::resolve/try_resolve/clone 缺少 inc_ref 後的 is_allocated 檢查導致 TOCTOU | Fixed | Verified |
 | [2026-03-05_ISSUE_bug207_gc_deref_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug207_gc_deref_missing_is_allocated_check.md) | Gc::deref 缺少 is_allocated 檢查導致 Slot Reuse 後存取錯誤物件 | Verified | Verified |
-| [2026-03-05_ISSUE_bug208_weak_strong_count_missing_is_gc_box_pointer_valid_check.md](./2026-03-05_ISSUE_bug208_weak_strong_count_missing_is_gc_box_pointer_valid_check.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 is_gc_box_pointer_valid 檢查 | Open | Unverified |
-| [2026-03-05_ISSUE_bug209_weak_raw_addr_ptr_eq_missing_is_gc_box_pointer_valid_check.md](./2026-03-05_ISSUE_bug209_weak_raw_addr_ptr_eq_missing_is_gc_box_pointer_valid_check.md) | Weak::raw_addr() 與 Weak::ptr_eq() 缺少 is_gc_box_pointer_valid 檢查 | Open | Unverified |
+| [2026-03-05_ISSUE_bug208_weak_strong_count_missing_is_gc_box_pointer_valid_check.md](./2026-03-05_ISSUE_bug208_weak_strong_count_missing_is_gc_box_pointer_valid_check.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 is_gc_box_pointer_valid 檢查 | Invalid | Not Reproduced |
+| [2026-03-05_ISSUE_bug209_weak_raw_addr_ptr_eq_missing_is_gc_box_pointer_valid_check.md](./2026-03-05_ISSUE_bug209_weak_raw_addr_ptr_eq_missing_is_gc_box_pointer_valid_check.md) | Weak::raw_addr() 與 Weak::ptr_eq() 缺少 is_gc_box_pointer_valid 檢查 | Fixed | Verified |
 | [2026-03-05_ISSUE_bug210_handle_to_gc_missing_post_check.md](./2026-03-05_ISSUE_bug210_handle_to_gc_missing_post_check.md) | Handle::to_gc and AsyncHandle::to_gc missing post-increment safety check (TOCTOU) | Fixed | Verified |
 | [2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md) | gc_cell_validate_and_barrier 缺少 is_allocated 檢查 - 與 bug200 不同 | Open | Verified |
 | [2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md) | simple_write_barrier 缺少 is_allocated 檢查 - 與 bug200/211 不同的 code path | Open | Unverified |

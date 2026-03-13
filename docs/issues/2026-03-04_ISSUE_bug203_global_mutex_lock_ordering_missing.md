@@ -1,7 +1,7 @@
 # [Bug]: Global Mutexes Missing Lock Ordering Validation - Potential Deadlocks
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -125,3 +125,14 @@ The lock ordering validation is only enabled in debug builds. In release builds,
 **Geohot (Exploit 觀點):**
 This isn't directly exploitable for memory corruption, but denial-of-service via deadlock is possible. An attacker who can trigger specific GC paths could potentially cause the system to hang by introducing the right lock acquisition order.
 
+## Resolution (2026-03-14)
+
+**Outcome:** Fixed via Option B (Document as exceptions).
+
+Documentation added at all affected sites:
+- `CROSS_THREAD_SATB_BUFFER` (heap.rs): Exempt doc explaining mutator vs collector contexts
+- `segment_manager()` (heap.rs): Exempt doc explaining runtime order GlobalMarkState → SegmentManager during marking; LockOrder::SegmentManager remains for docs but is not enforced
+- `GcRootSet` (tokio/root.rs): Exempt doc for tokio root tracking subsystem
+- `gc/sync.rs`: New "Exempt Global Mutexes (bug203)" section listing all three and rationale
+
+Integration (Option A) was not feasible for SEGMENT_MANAGER: `find_gc_box_from_orphan` calls `segment_manager()` during marking while holding `GlobalMarkState`. Enforcing acquire_lock would panic in debug. The documented exemptions satisfy the issue requirement that mutexes be "documented as allowed to be acquired in any order".

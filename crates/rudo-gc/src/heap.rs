@@ -29,6 +29,11 @@ const MAX_CROSS_THREAD_SATB_SIZE: usize = 1024 * 1024;
 /// Global SATB buffer for cross-thread mutations.
 /// When a mutation occurs on a different thread than the allocating thread,
 /// the SATB old value is recorded here instead of the thread-local buffer.
+///
+/// # Lock Ordering (bug203)
+/// This mutex is exempt from the `LockOrder` validation system. It is acquired
+/// from both mutator (write barrier) and collector (drain) contexts, which have
+/// different lock holdings. Documented as an exception to prevent latent deadlock.
 static CROSS_THREAD_SATB_BUFFER: parking_lot::Mutex<Vec<usize>> =
     parking_lot::Mutex::new(Vec::new());
 
@@ -1506,6 +1511,12 @@ pub struct GlobalSegmentManager {
 static SEGMENT_MANAGER: OnceLock<Mutex<GlobalSegmentManager>> = OnceLock::new();
 
 /// Access the global segment manager.
+///
+/// # Lock Ordering (bug203)
+/// This mutex is exempt from the `LockOrder` validation system. It is acquired
+/// from marking/tracing context (e.g. `find_gc_box_from_orphan`) which holds
+/// `GlobalMarkState`, i.e. runtime order is `GlobalMarkState` → `SegmentManager`.
+/// `LockOrder::SegmentManager` exists for documentation but is not enforced here.
 pub fn segment_manager() -> &'static Mutex<GlobalSegmentManager> {
     SEGMENT_MANAGER.get_or_init(|| Mutex::new(GlobalSegmentManager::new()))
 }

@@ -1218,30 +1218,45 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                             return;
                         }
                         let header = head_addr as *mut crate::heap::PageHeader;
-                        if (*header).magic == MAGIC_GC_PAGE && (*header).generation > 0 {
-                            // For large objects, always use index 0 (matches unified_write_barrier).
+                        if (*header).magic != MAGIC_GC_PAGE {
+                            return;
+                        }
+                        // GEN_OLD early-exit: skip if page young AND object has no gen_old_flag
+                        // (bug202, matches unified_write_barrier).
+                        let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                        let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                        if (*header).generation == 0 && !has_gen_old {
+                            return;
+                        }
+                        if (*header).is_allocated(0) {
                             (*header).set_dirty(0);
                             heap.add_to_dirty_pages(NonNull::new_unchecked(header));
                         }
                     }
                 } else {
                     let header = ptr_to_page_header(ptr);
-                    if (*header.as_ptr()).magic == MAGIC_GC_PAGE
-                        && (*header.as_ptr()).generation > 0
-                    {
-                        let block_size = (*header.as_ptr()).block_size as usize;
-                        let header_size = (*header.as_ptr()).header_size as usize;
-                        let header_page_addr = header.as_ptr() as usize;
-                        let ptr_addr = ptr as usize;
+                    if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    let block_size = (*header.as_ptr()).block_size as usize;
+                    let header_size = (*header.as_ptr()).header_size as usize;
+                    let header_page_addr = header.as_ptr() as usize;
+                    let ptr_addr = ptr as usize;
 
-                        if ptr_addr >= header_page_addr + header_size {
-                            let offset = ptr_addr - (header_page_addr + header_size);
-                            let index = offset / block_size;
+                    if ptr_addr >= header_page_addr + header_size {
+                        let offset = ptr_addr - (header_page_addr + header_size);
+                        let index = offset / block_size;
 
-                            if index < (*header.as_ptr()).obj_count as usize {
-                                if !(*header.as_ptr()).is_allocated(index) {
-                                    return;
-                                }
+                        if index < (*header.as_ptr()).obj_count as usize {
+                            // GEN_OLD early-exit: skip if page young AND object has no gen_old_flag
+                            // (bug202, matches unified_write_barrier).
+                            let gc_box_addr = (header_page_addr + header_size + index * block_size)
+                                as *const GcBox<()>;
+                            let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                            if (*header.as_ptr()).generation == 0 && !has_gen_old {
+                                return;
+                            }
+                            if (*header.as_ptr()).is_allocated(index) {
                                 (*header.as_ptr()).set_dirty(index);
                                 heap.add_to_dirty_pages(header);
                             }
