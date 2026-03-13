@@ -720,6 +720,14 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                     crate::ptr::GcBox::dec_ref(ptr.as_ptr());
                     return None;
                 }
+                // Check is_allocated after successful upgrade to prevent slot reuse issues
+                if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                    let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        GcBox::dec_ref(ptr.as_ptr());
+                        return None;
+                    }
+                }
                 crate::gc::notify_created_gc();
                 return Some(Gc {
                     ptr: AtomicNullable::new(ptr),
@@ -737,6 +745,14 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
                 GcBox::dec_ref(ptr.as_ptr());
                 return None;
+            }
+            // Check is_allocated after successful upgrade to prevent slot reuse issues
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    GcBox::dec_ref(ptr.as_ptr());
+                    return None;
+                }
             }
             crate::gc::notify_created_gc();
             Some(Gc {
