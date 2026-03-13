@@ -2726,6 +2726,10 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
                     let h_ptr = head_addr as *mut PageHeader;
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug286).
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     // Cache flag to avoid TOCTOU between check and barrier (bug149).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h_ptr).generation == 0 && !has_gen_old {
@@ -2751,6 +2755,10 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+                    // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug286).
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     // Cache flag to avoid TOCTOU between check and barrier (bug149).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h.as_ptr()).generation == 0 && !has_gen_old {
@@ -3038,16 +3046,15 @@ pub fn incremental_write_barrier(ptr: *const u8) {
             }
 
             // GEN_OLD early-exit: skip only if page young AND object has no gen_old_flag (bug71).
+            // Skip if slot was swept; avoids corrupting remembered set with reused slot (bug286).
+            if !(*header.as_ptr()).is_allocated(index) {
+                return;
+            }
             // Cache flag to avoid TOCTOU between check and barrier (bug133).
             let gc_box_addr =
                 (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
             let has_gen_old = (*gc_box_addr).has_gen_old_flag();
             if (*header.as_ptr()).generation == 0 && !has_gen_old {
-                return;
-            }
-
-            // Skip if slot was swept; avoids corrupting remembered set with reused slot (bug220).
-            if !(*header.as_ptr()).is_allocated(index) {
                 return;
             }
 

@@ -1,6 +1,6 @@
 # [Bug]: Multiple barrier functions read has_gen_old_flag before is_allocated check
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -165,3 +165,11 @@ If an attacker can control the timing of slot reuse, they might influence the ge
 - [x] Bug exists in current code at heap.rs:2729 (large object path - no is_allocated check at all)
 - [x] Bug exists in current code at heap.rs:2754 (small object path - same as bug282)
 - [x] Bug exists in current code at heap.rs:3043 (incremental_write_barrier - same as bug282)
+
+## 修復記錄
+
+- [x] Fixed large object path: Added is_allocated check before has_gen_old_flag (heap.rs:2727-2738)
+- [x] Fixed small object path: Moved is_allocated check before has_gen_old_flag (heap.rs:2758-2768)
+- [x] Fixed incremental_write_barrier: Moved is_allocated check before has_gen_old_flag (heap.rs:3043-3057)
+- [x] All tests pass
+- [x] Clippy passes
