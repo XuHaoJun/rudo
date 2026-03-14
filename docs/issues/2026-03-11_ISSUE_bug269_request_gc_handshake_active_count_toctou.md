@@ -1,7 +1,7 @@
 # [Bug]: request_gc_handshake active_count load 有 TOCTOU race condition
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -137,3 +137,17 @@ let active = {
 - 很難利用此 race condition
 - 需要精確時序控制
 - 實際安全影響極低
+
+---
+
+## Resolution (2026-03-15)
+
+**Classification: Invalid — misidentified root cause.**
+
+The claimed TOCTOU race is **impossible**. In `request_gc_handshake()` (heap.rs:768–785):
+
+1. `active_count.load()` (line 780) runs **while holding** the `registry` lock (acquired at 769).
+2. Thread B must acquire `thread_registry().lock()` to register and call `active_count.fetch_add(1)` (heap.rs:3310–3338).
+3. Thread B blocks until Thread A releases the lock at `drop(registry)` (line 781).
+
+Therefore Thread B cannot change `active_count` between the load and the drop. The load is correctly protected by the lock. No code change applied.

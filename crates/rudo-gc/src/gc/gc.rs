@@ -1096,6 +1096,8 @@ unsafe fn scan_dirty_page_minor(page_ptr: NonNull<PageHeader>, visitor: &mut GcV
 }
 
 /// Scan a single dirty page for minor GC (`trace_fn` path): trace refs and clear dirty state.
+/// Uses `mark_and_trace_incremental` (like `scan_dirty_page_minor`) to ensure `is_allocated`
+/// is checked before dereferencing, avoiding UAF when lazy sweep reclaims slots concurrently.
 #[inline]
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn scan_dirty_page_minor_trace(page_ptr: NonNull<PageHeader>, visitor: &mut GcVisitor) {
@@ -1104,7 +1106,7 @@ unsafe fn scan_dirty_page_minor_trace(page_ptr: NonNull<PageHeader>, visitor: &m
         let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
         #[allow(clippy::cast_ptr_alignment)]
         let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-        ((*gc_box_ptr).trace_fn)(obj_ptr, visitor);
+        mark_and_trace_incremental(std::ptr::NonNull::new_unchecked(gc_box_ptr), visitor);
     } else {
         let obj_count = (*header).obj_count as usize;
         for i in 0..obj_count {
@@ -1114,7 +1116,7 @@ unsafe fn scan_dirty_page_minor_trace(page_ptr: NonNull<PageHeader>, visitor: &m
                 let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                ((*gc_box_ptr).trace_fn)(obj_ptr, visitor);
+                mark_and_trace_incremental(std::ptr::NonNull::new_unchecked(gc_box_ptr), visitor);
             }
         }
     }

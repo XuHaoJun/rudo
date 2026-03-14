@@ -707,14 +707,13 @@ impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
                     return;
                 }
             }
-            let gc_box = &*ptr.as_ptr();
-            if gc_box.has_dead_flag()
-                || gc_box.dropping_state() != 0
-                || gc_box.is_under_construction()
-            {
-                return;
-            }
-            gc_box.dec_weak();
+            // Always decrement weak_count when dropping a WeakCrossThreadHandle. The
+            // is_allocated check above protects against slot reuse (bug133). We must NOT
+            // skip dec_weak when has_dead_flag/dropping_state/is_under_construction —
+            // that would prevent weak_count from reaching 0 and block reclamation.
+            // The TOCTOU race (bug265) between a pre-check and dec_weak is eliminated
+            // by always decrementing.
+            (*ptr.as_ptr()).dec_weak();
         }
     }
 }

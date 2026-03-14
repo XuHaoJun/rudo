@@ -1,7 +1,7 @@
 # [Bug]: get_allocating_thread_id 缺少 is_allocated check，讀取已釋放物件的 owner_thread
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -119,3 +119,11 @@ pub(crate) unsafe fn get_allocating_thread_id(gc_box_addr: usize) -> u64 {
 - 讀取已釋放記憶體 (dangling pointer) 可能導致資訊洩漏
 - 如果攻擊者能控制 heap layout，可能利用此漏洞進行 heap inspection
 - 時序依賴性使得穩定利用困難，但概念上可攻擊
+
+---
+
+## Resolution (2026-03-15)
+
+**Outcome:** Fixed.
+
+Added `is_allocated(idx)` check in `get_allocating_thread_id` (heap.rs). When the object slot has been swept, the function now returns 0 (sentinel for "no associated thread") instead of reading `owner_thread` from freed memory. This provides defense-in-depth even when `record_satb_old_value` has already checked `is_allocated` (bug273), closing the TOCTOU window between check and use.

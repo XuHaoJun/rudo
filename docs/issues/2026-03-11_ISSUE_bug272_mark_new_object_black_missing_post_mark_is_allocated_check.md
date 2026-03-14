@@ -1,6 +1,6 @@
 # [Bug]: mark_new_object_black 缺少 set_mark 後的 is_allocated 檢查 - 與 mark_object_black 行為不一致
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -156,5 +156,13 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
 
 ## 修復狀態
 
-- [ ] 已修復
-- [x] 未修復
+- [x] 已修復
+- [ ] 未修復
+
+---
+
+## Resolution (2026-03-15)
+
+**Outcome:** Fixed.
+
+Added post-mark `is_allocated` check in `mark_new_object_black` (gc/incremental.rs) to fix TOCTOU with lazy sweep. If the slot was swept between the initial check and `set_mark`, we now roll back via `clear_mark_atomic` and return false. Behavior now matches `mark_object_black`.

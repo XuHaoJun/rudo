@@ -1,7 +1,7 @@
 # [Bug]: gc_cell_validate_and_barrier 讀取 owner_thread 缺少 is_allocated 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -124,3 +124,9 @@ let owner = (*h).owner_thread;
 ### Geohot (Exploit/Edge Case Expert)
 
 時序依賴：需要 lazy sweep 和 write barrier 的交錯。攻擊者可能嘗試控制 slot 重用時序來影響執行緒安全驗證邏輯。
+
+---
+
+## Resolution (2026-03-15)
+
+**Fixed.** The large object path already had `is_allocated(0)` before `owner_thread` (bug247). The small object path read `owner_thread` before computing index and checking `is_allocated(index)`. Reordered the small object path: compute bounds and index first, add `is_allocated(index)` check, then read `owner_thread` and assert. All tests pass.

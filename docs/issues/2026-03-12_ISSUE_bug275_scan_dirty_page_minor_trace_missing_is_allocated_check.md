@@ -1,7 +1,7 @@
 # [Bug]: scan_dirty_page_minor_trace 缺少 is_allocated 檢查可能導致 UAF
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -159,3 +159,11 @@ This is a use-after-free vulnerability in unsafe code. The function doesn't chec
 ### Geohot (Exploit/Edge Case Expert)
 
 The attack requires precise timing: allocate object A → promote to old gen → trigger minor GC → sweep frees slot → reallocate object B in same slot → mutate to mark dirty → trigger minor GC again. If an attacker can control allocation timing, they could potentially cause the GC to trace arbitrary memory contents. The impact is limited by the need for concurrent allocation, but the bug is real.
+
+---
+
+## Resolution (2026-03-15)
+
+**Outcome:** Fixed.
+
+Refactored `scan_dirty_page_minor_trace` to use `mark_and_trace_incremental` (like `scan_dirty_page_minor`) instead of directly calling `trace_fn`. This ensures `is_allocated` is checked before dereferencing, avoiding UAF when lazy sweep reclaims slots concurrently with cross-thread SATB buffer processing. The fix mirrors the existing safe path in `scan_dirty_page_minor`.

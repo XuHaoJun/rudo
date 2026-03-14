@@ -785,6 +785,19 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
 unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalMarkState) {
     let ptr = gc_box.as_ptr() as *const u8;
     let header = crate::heap::ptr_to_page_header(ptr);
+
+    // Validate page magic and slot allocation before dereferencing. Avoids UAF when lazy
+    // sweep runs concurrently with incremental marking (bug274).
+    if (*header.as_ptr()).magic != crate::heap::MAGIC_GC_PAGE {
+        return;
+    }
+    let Some(idx) = crate::heap::ptr_to_object_index(ptr) else {
+        return;
+    };
+    if !(*header.as_ptr()).is_allocated(idx) {
+        return;
+    }
+
     let block_size = (*header.as_ptr()).block_size as usize;
     let header_size = crate::heap::PageHeader::header_size(block_size);
     let data_ptr = ptr.add(header_size);
@@ -1009,6 +1022,12 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
             }
             if !(*header.as_ptr()).is_marked(idx) {
                 (*header.as_ptr()).set_mark(idx);
+                // Re-check is_allocated to fix TOCTOU with lazy sweep (bug272).
+                // If slot was swept between initial check and set_mark, roll back.
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    (*header.as_ptr()).clear_mark_atomic(idx);
+                    return false;
+                }
                 return true;
             }
         }

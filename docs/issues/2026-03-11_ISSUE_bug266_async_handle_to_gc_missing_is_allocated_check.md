@@ -1,7 +1,7 @@
 # [Bug]: AsyncHandle::to_gc() Missing is_allocated Check After Reference Count Increment
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -129,3 +129,26 @@ Gc::from_raw(gc_box_ptr as *const u8)
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可以嘗試在 inc_ref 和檢查之間觸發 GC，導致 use-after-free。
+
+---
+
+## Resolution (2026-03-15)
+
+**Outcome:** Invalid — fix already present.
+
+The reported fix is already implemented in `handles/async.rs` (lines 754–760). After `try_inc_ref_if_nonzero()`, the code checks `is_allocated(idx)`:
+
+```rust
+if !gc_box.try_inc_ref_if_nonzero() {
+    panic!("AsyncHandle::to_gc: object is being dropped by another thread");
+}
+if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+    let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+    assert!(
+        (*header.as_ptr()).is_allocated(idx),
+        "AsyncHandle::to_gc: object slot was swept after inc_ref"
+    );
+}
+```
+
+This matches the pattern in `GcHandle::resolve()` (cross_thread.rs). No code change needed.

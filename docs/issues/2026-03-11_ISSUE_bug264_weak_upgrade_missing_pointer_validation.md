@@ -1,6 +1,6 @@
 # [Bug]: Weak::upgrade 缺少指標位址驗證導致潛在 UB，與 Weak::try_upgrade 行為不一致
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -148,3 +148,7 @@ pub fn upgrade(&self) -> Option<Gc<T>> {
 攻擊者可能透過控制 Weak 指標的內部狀態（如果有機會）來觸發此問題，導致解引用無效記憶體。雖然正常情況下難以利用，但作為 defense-in-depth 應該修復。
 
 ---
+
+## Resolution (2026-03-15)
+
+Fixed in `ptr.rs`: added alignment, `MIN_VALID_HEAP_ADDRESS`, and `is_gc_box_pointer_valid(addr)` checks to `Weak::upgrade()` before any pointer use, matching `try_upgrade()` semantics. All weak tests pass; full suite and Clippy clean.

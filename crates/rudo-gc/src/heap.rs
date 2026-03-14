@@ -90,10 +90,10 @@ pub(crate) unsafe fn get_allocating_thread_id(gc_box_addr: usize) -> u64 {
     let header = unsafe { ptr_to_page_header(gc_box_addr as *const u8) };
 
     if let Some(idx) = unsafe { ptr_to_object_index(gc_box_addr as *const u8) } {
-        debug_assert!(
-            unsafe { (*header.as_ptr()).is_allocated(idx) },
-            "Reading owner_thread from potentially free'd object at index {idx}"
-        );
+        // Release build: avoid reading owner_thread from swept objects (bug276).
+        if !unsafe { (*header.as_ptr()).is_allocated(idx) } {
+            return 0;
+        }
         debug_assert!(
             idx < usize::from(unsafe { (*header.as_ptr()).obj_count }),
             "Object index {idx} exceeds object count {}",
@@ -1948,8 +1948,20 @@ impl LocalHeap {
     /// Returns `true` if the value was stored successfully, `false` if the buffer
     /// overflowed and fallback was requested.
     pub fn record_satb_old_value(&mut self, gc_box: NonNull<GcBox<()>>) -> bool {
+        let gc_box_addr = gc_box.as_ptr() as usize;
+
+        // Skip if object was swept; don't record freed pointers (bug273).
+        if let Some(idx) = unsafe { ptr_to_object_index(gc_box_addr as *const u8) } {
+            let header = unsafe { ptr_to_page_header(gc_box_addr as *const u8) };
+            if !unsafe { (*header.as_ptr()).is_allocated(idx) } {
+                return true; // Object swept, don't record
+            }
+        } else {
+            return true; // Can't resolve to valid object, don't record
+        }
+
         let current_thread_id = get_thread_id();
-        let allocating_thread_id = unsafe { get_allocating_thread_id(gc_box.as_ptr() as usize) };
+        let allocating_thread_id = unsafe { get_allocating_thread_id(gc_box_addr) };
 
         if current_thread_id != allocating_thread_id && allocating_thread_id != 0 {
             return Self::push_cross_thread_satb(gc_box);
@@ -2892,6 +2904,25 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                     return;
                 }
 
+                let block_size = (*h).block_size as usize;
+                let header_size = (*h).header_size as usize;
+                let header_page_addr = h as usize;
+
+                if ptr_addr < header_page_addr + header_size {
+                    return;
+                }
+
+                let offset = ptr_addr - (header_page_addr + header_size);
+                let index = offset / block_size;
+                let obj_count = (*h).obj_count as usize;
+                if index >= obj_count {
+                    return;
+                }
+
+                // Skip if slot was swept; read owner_thread only after is_allocated (bug277).
+                if !(*h).is_allocated(index) {
+                    return;
+                }
                 let owner = (*h).owner_thread;
                 assert!(
                     owner == 0 || owner == current,
@@ -2911,25 +2942,6 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                      4. Use single-threaded Tokio runtime"
                 );
 
-                let block_size = (*h).block_size as usize;
-                let header_size = (*h).header_size as usize;
-                let header_page_addr = h as usize;
-
-                if ptr_addr < header_page_addr + header_size {
-                    return;
-                }
-
-                let offset = ptr_addr - (header_page_addr + header_size);
-                let index = offset / block_size;
-                let obj_count = (*h).obj_count as usize;
-                if index >= obj_count {
-                    return;
-                }
-
-                // Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247).
-                if !(*h).is_allocated(index) {
-                    return;
-                }
                 // GEN_OLD early-exit: skip only if page young AND object has no gen_old_flag (bug71).
                 // Cache flag to avoid TOCTOU between check and barrier (bug114).
                 let gc_box_addr =

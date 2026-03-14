@@ -1,7 +1,7 @@
 # [Bug]: Weak::drop 與 WeakCrossThreadHandle::drop 存在 TOCTOU Race - 檢查與 dec_weak 之間的狀態變化
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -144,3 +144,11 @@ pub fn dec_weak(&self) -> bool {
 - 讓 weak_count 在物件死亡後仍保持 > 0
 - 阻止物件被正確回收
 - 但實際利用難度很高，需要精確的時序控制
+
+---
+
+## Resolution (2026-03-15)
+
+**Fix applied:** Removed the early return on `has_dead_flag` / `dropping_state` / `is_under_construction` from both `Weak::drop` (ptr.rs) and `WeakCrossThreadHandle::drop` (cross_thread.rs).
+
+**Rationale:** The pre-check was incorrect. When dropping a Weak, we must always decrement `weak_count` (when the slot is still allocated). Skipping `dec_weak` when the object is dead/dropping would prevent `weak_count` from reaching 0 and block reclamation. The `is_allocated` check (bug231/bug232) remains and protects against slot reuse (bug133). Eliminating the pre-check removes the TOCTOU window entirely — we always decrement, so there is no stale check.

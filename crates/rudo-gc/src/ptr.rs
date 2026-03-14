@@ -2056,6 +2056,20 @@ impl<T: Trace> Weak<T> {
     pub fn upgrade(&self) -> Option<Gc<T>> {
         let ptr = self.ptr.load(Ordering::Acquire).as_option()?;
 
+        // Validate pointer before any use (alignment, minimum address, GC box validity).
+        // Must match try_upgrade() to ensure consistent safety guarantees.
+        let addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if addr % alignment != 0 {
+            return None;
+        }
+        if addr < MIN_VALID_HEAP_ADDRESS {
+            return None;
+        }
+        if !is_gc_box_pointer_valid(addr) {
+            return None;
+        }
+
         unsafe {
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
@@ -2324,6 +2338,14 @@ impl<T: Trace> Weak<T> {
         }
 
         unsafe {
+            // Check is_allocated before reading ref_count; slot may have been swept and reused
+            // (bug262).
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return 0;
+                }
+            }
             let gc_box = &*ptr.as_ptr();
             if gc_box.is_under_construction()
                 || gc_box.has_dead_flag()
@@ -2355,6 +2377,14 @@ impl<T: Trace> Weak<T> {
         }
 
         unsafe {
+            // Check is_allocated before reading weak_count; slot may have been swept and reused
+            // (bug262).
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return 0;
+                }
+            }
             let gc_box = &*ptr.as_ptr();
             if gc_box.is_under_construction()
                 || gc_box.has_dead_flag()
@@ -2521,14 +2551,11 @@ impl<T: Trace> Drop for Weak<T> {
                     return;
                 }
             }
-            let gc_box = &*ptr.as_ptr();
-            if gc_box.has_dead_flag()
-                || gc_box.dropping_state() != 0
-                || gc_box.is_under_construction()
-            {
-                return;
-            }
-
+            // Always decrement weak_count when dropping a Weak. The is_allocated check above
+            // protects against slot reuse (bug133). We must NOT skip dec_weak when
+            // has_dead_flag/dropping_state/is_under_construction — that would prevent
+            // weak_count from reaching 0 and block reclamation. The TOCTOU race (bug265)
+            // between a pre-check and dec_weak is eliminated by always decrementing.
             let weak_count_ptr = std::ptr::addr_of!((*ptr.as_ptr()).weak_count);
 
             let mut current = (*weak_count_ptr).load(Ordering::Relaxed);
@@ -2658,13 +2685,15 @@ impl<K: Trace + 'static, V: Trace + 'static> Ephemeron<K, V> {
         }
     }
 
-    /// Returns a reference to the key (if still alive).
+    /// Returns the key as a strong reference if it is still alive.
     ///
+    /// Returns `Some(Gc<K>)` if the key has not been collected.
     /// Returns `None` if the key has been collected.
-    pub const fn key(&self) -> Option<&Gc<K>> {
-        // This is tricky - Weak doesn't give us &Gc<K>, it gives us Option<Gc<K>>
-        // For now, we don't expose direct key access
-        None
+    ///
+    /// This upgrades the internal weak reference to a strong reference,
+    /// giving the caller ownership of a `Gc<K>` that keeps the key alive.
+    pub fn key(&self) -> Option<Gc<K>> {
+        self.key.upgrade()
     }
 
     /// Returns a reference to the value without checking if the key is alive.

@@ -3,20 +3,20 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 268
-- **Open**: 30
-- **Invalid**: 16
+- **Fixed**: 279
+- **Open**: 17
+- **Invalid**: 20
 - **Resolved**: 1
 - **Unknown**: 2
 - **Verified**: 15
 
 ### By Tags
-- **Verified**: 285
-- **Not Verified**: 13
+- **Verified**: 294
+- **Not Verified**: 17
 - **Not Reproduced**: 11
 - **Fixed**: 1
 - **Unknown**: 2
-- **Unverified**: 20
+- **Unverified**: 9
 
 ## All Issues
 
@@ -170,6 +170,7 @@
 | [2026-03-10_ISSUE_bug126_weak_upgrade_gc_try_clone_missing_is_allocated_check.md](./2026-03-10_ISSUE_bug126_weak_upgrade_gc_try_clone_missing_is_allocated_check.md) | Weak::upgrade and Gc::try_clone missing is_allocated check after ref increment | Fixed | Verified |
 | [2026-03-12_ISSUE_bug126_sweep_orphan_pages_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug126_sweep_orphan_pages_missing_is_allocated_check.md) | sweep_orphan_pages 的 has_survivors 檢查缺少 is_allocated 驗證 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug127_gchandle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug127_gchandle_clone_missing_thread_check.md) | GcHandle::clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Fixed | Verified |
+| [2026-03-15_ISSUE_bug127_gccell_borrow_mut_incorrect_mark_black.md](./2026-03-15_ISSUE_bug127_gccell_borrow_mut_incorrect_mark_black.md) | GcCell/GcThreadSafeCell borrow_mut 錯誤地在僅有 generational barrier 時標記新指標為黑色 | Open | Verified |
 | [2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md](./2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md) | GcHandle::is_valid() 未驗證 Root 存在性 - TOCTOU 導致 Resolve 可能失敗 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md) | GcVisitorConcurrent::route_reference 缺少 is_allocated 檢查導致錯誤標記 | Fixed | Verified |
 | [2026-03-01_ISSUE_bug129_gchandle_is_valid_missing_gcbox_state_check.md](./2026-03-01_ISSUE_bug129_gchandle_is_valid_missing_gcbox_state_check.md) | GcHandle::is_valid() 未檢查 GcBox 存活狀態 - 導致 False Positive | Invalid | Not Reproduced |
@@ -314,25 +315,25 @@
 | [2026-03-10_ISSUE_bug259_gcrwlock_barrier_state_capture_inconsistent.md](./2026-03-10_ISSUE_bug259_gcrwlock_barrier_state_capture_inconsistent.md) | GcRwLock/GcMutex  barrier state 在 lock 獲取之前捕獲，與 GcThreadSafeCell 不一致 | Verified | Verified |
 | [2026-03-10_ISSUE_bug260_marker_scan_page_toctou.md](./2026-03-10_ISSUE_bug260_marker_scan_page_toctou.md) | PerThreadMarkQueue::scan_page_before_push TOCTOU - is_allocated 檢查與 push 之间存在 race | Fixed | Verified |
 | [2026-03-10_ISSUE_bug261_gcrwlock_readguard_drop_unnecessary_barrier.md](./2026-03-10_ISSUE_bug261_gcrwlock_readguard_drop_unnecessary_barrier.md) | GcRwLockReadGuard::drop() 錯誤地觸發 Write Barrier - Read 操作不應需要 Barrier | Fixed | Verified |
-| [2026-03-10_ISSUE_bug261_weak_strong_count_missing_min_valid_heap_address.md](./2026-03-10_ISSUE_bug261_weak_strong_count_missing_min_valid_heap_address.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 MIN_VALID_HEAP_ADDRESS 檢查 | Open | Unverified |
-| [2026-03-11_ISSUE_bug262_weak_strong_count_missing_is_allocated_check.md](./2026-03-11_ISSUE_bug262_weak_strong_count_missing_is_allocated_check.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 is_allocated 檢查導致讀取錯誤計數 | Open | Unverified |
+| [2026-03-10_ISSUE_bug261_weak_strong_count_missing_min_valid_heap_address.md](./2026-03-10_ISSUE_bug261_weak_strong_count_missing_min_valid_heap_address.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 MIN_VALID_HEAP_ADDRESS 檢查 | Invalid | Not Verified |
+| [2026-03-11_ISSUE_bug262_weak_strong_count_missing_is_allocated_check.md](./2026-03-11_ISSUE_bug262_weak_strong_count_missing_is_allocated_check.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 is_allocated 檢查導致讀取錯誤計數 | Fixed | Verified |
 | [2026-03-11_ISSUE_bug263_gcbox_dec_ref_count_not_zero.md](./2026-03-11_ISSUE_bug263_gcbox_dec_ref_count_not_zero.md) | GcBox::dec_ref 返回 true 时 ref_count 未从 1 递减到 0 | Fixed | Verified |
-| [2026-03-11_ISSUE_bug264_weak_upgrade_missing_pointer_validation.md](./2026-03-11_ISSUE_bug264_weak_upgrade_missing_pointer_validation.md) | Weak::upgrade 缺少指標位址驗證導致潛在 UB，與 Weak::try_upgrade 行為不一致 | Open | Verified |
-| [2026-03-11_ISSUE_bug265_weak_drop_toctou_check_dec_weak.md](./2026-03-11_ISSUE_bug265_weak_drop_toctou_check_dec_weak.md) | Weak::drop 與 WeakCrossThreadHandle::drop 存在 TOCTOU Race - 檢查與 dec_weak 之間的狀態變化 | Open | Unverified |
-| [2026-03-11_ISSUE_bug266_async_handle_to_gc_missing_is_allocated_check.md](./2026-03-11_ISSUE_bug266_async_handle_to_gc_missing_is_allocated_check.md) | AsyncHandle::to_gc() Missing is_allocated Check After Reference Count Increment | Open | Unverified |
+| [2026-03-11_ISSUE_bug264_weak_upgrade_missing_pointer_validation.md](./2026-03-11_ISSUE_bug264_weak_upgrade_missing_pointer_validation.md) | Weak::upgrade 缺少指標位址驗證導致潛在 UB，與 Weak::try_upgrade 行為不一致 | Fixed | Verified |
+| [2026-03-11_ISSUE_bug265_weak_drop_toctou_check_dec_weak.md](./2026-03-11_ISSUE_bug265_weak_drop_toctou_check_dec_weak.md) | Weak::drop 與 WeakCrossThreadHandle::drop 存在 TOCTOU Race - 檢查與 dec_weak 之間的狀態變化 | Fixed | Verified |
+| [2026-03-11_ISSUE_bug266_async_handle_to_gc_missing_is_allocated_check.md](./2026-03-11_ISSUE_bug266_async_handle_to_gc_missing_is_allocated_check.md) | AsyncHandle::to_gc() Missing is_allocated Check After Reference Count Increment | Invalid | Not Verified |
 | [2026-03-11_ISSUE_bug267_gcrootguard_duplicate_registration.md](./2026-03-11_ISSUE_bug267_gcrootguard_duplicate_registration.md) | <no title> | Unknown | Unknown |
-| [2026-03-11_ISSUE_bug268_push_cross_thread_satb_drops_old_value_on_overflow.md](./2026-03-11_ISSUE_bug268_push_cross_thread_satb_drops_old_value_on_overflow.md) | push_cross_thread_satb 緩衝區溢位時丟棄舊值導致潛在 Use-After-Free | Open | Verified |
-| [2026-03-11_ISSUE_bug269_request_gc_handshake_active_count_toctou.md](./2026-03-11_ISSUE_bug269_request_gc_handshake_active_count_toctou.md) | request_gc_handshake active_count load 有 TOCTOU race condition | Open | Unverified |
+| [2026-03-11_ISSUE_bug268_push_cross_thread_satb_drops_old_value_on_overflow.md](./2026-03-11_ISSUE_bug268_push_cross_thread_satb_drops_old_value_on_overflow.md) | push_cross_thread_satb 緩衝區溢位時丟棄舊值導致潛在 Use-After-Free | Invalid | Not Verified |
+| [2026-03-11_ISSUE_bug269_request_gc_handshake_active_count_toctou.md](./2026-03-11_ISSUE_bug269_request_gc_handshake_active_count_toctou.md) | request_gc_handshake active_count load 有 TOCTOU race condition | Invalid | Not Verified |
 | [2026-03-11_ISSUE_bug270_push_cross_thread_satb_unbounded_growth.md](./2026-03-11_ISSUE_bug270_push_cross_thread_satb_unbounded_growth.md) | push_cross_thread_satb 緩衝區溢位時仍然 push 導致無上限 growth | Fixed | Verified |
-| [2026-03-11_ISSUE_bug271_ephemeron_key_always_returns_none.md](./2026-03-11_ISSUE_bug271_ephemeron_key_always_returns_none.md) | Ephemeron::key() Always Returns None - Missing Key Accessor Implementation | Open | Unverified |
-| [2026-03-11_ISSUE_bug272_mark_new_object_black_missing_post_mark_is_allocated_check.md](./2026-03-11_ISSUE_bug272_mark_new_object_black_missing_post_mark_is_allocated_check.md) | mark_new_object_black 缺少 set_mark 後的 is_allocated 檢查 - 與 mark_object_black 行為不一致 | Open | Verified |
-| [2026-03-12_ISSUE_bug273_record_satb_old_value_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug273_record_satb_old_value_missing_is_allocated_check.md) | record_satb_old_value 記錄已釋放物件 - 缺少 is_allocated 檢查 | Open | Unverified |
-| [2026-03-12_ISSUE_bug274_trace_and_mark_object_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug274_trace_and_mark_object_missing_is_allocated_check.md) | trace_and_mark_object 缺少 is_allocated 檢查可能導致 UAF | Open | Unverified |
-| [2026-03-12_ISSUE_bug275_scan_dirty_page_minor_trace_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug275_scan_dirty_page_minor_trace_missing_is_allocated_check.md) | scan_dirty_page_minor_trace 缺少 is_allocated 檢查可能導致 UAF | Open | Unverified |
-| [2026-03-12_ISSUE_bug276_get_allocating_thread_id_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug276_get_allocating_thread_id_missing_is_allocated_check.md) | get_allocating_thread_id 缺少 is_allocated check，讀取已釋放物件的 owner_thread | Open | Unverified |
-| [2026-03-12_ISSUE_bug277_gc_cell_validate_and_barrier_owner_thread_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug277_gc_cell_validate_and_barrier_owner_thread_missing_is_allocated_check.md) | gc_cell_validate_and_barrier 讀取 owner_thread 缺少 is_allocated 檢查 | Open | Unverified |
+| [2026-03-11_ISSUE_bug271_ephemeron_key_always_returns_none.md](./2026-03-11_ISSUE_bug271_ephemeron_key_always_returns_none.md) | Ephemeron::key() Always Returns None - Missing Key Accessor Implementation | Fixed | Verified |
+| [2026-03-11_ISSUE_bug272_mark_new_object_black_missing_post_mark_is_allocated_check.md](./2026-03-11_ISSUE_bug272_mark_new_object_black_missing_post_mark_is_allocated_check.md) | mark_new_object_black 缺少 set_mark 後的 is_allocated 檢查 - 與 mark_object_black 行為不一致 | Fixed | Verified |
+| [2026-03-12_ISSUE_bug273_record_satb_old_value_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug273_record_satb_old_value_missing_is_allocated_check.md) | record_satb_old_value 記錄已釋放物件 - 缺少 is_allocated 檢查 | Fixed | Verified |
+| [2026-03-12_ISSUE_bug274_trace_and_mark_object_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug274_trace_and_mark_object_missing_is_allocated_check.md) | trace_and_mark_object 缺少 is_allocated 檢查可能導致 UAF | Fixed | Verified |
+| [2026-03-12_ISSUE_bug275_scan_dirty_page_minor_trace_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug275_scan_dirty_page_minor_trace_missing_is_allocated_check.md) | scan_dirty_page_minor_trace 缺少 is_allocated 檢查可能導致 UAF | Fixed | Verified |
+| [2026-03-12_ISSUE_bug276_get_allocating_thread_id_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug276_get_allocating_thread_id_missing_is_allocated_check.md) | get_allocating_thread_id 缺少 is_allocated check，讀取已釋放物件的 owner_thread | Fixed | Verified |
+| [2026-03-12_ISSUE_bug277_gc_cell_validate_and_barrier_owner_thread_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug277_gc_cell_validate_and_barrier_owner_thread_missing_is_allocated_check.md) | gc_cell_validate_and_barrier 讀取 owner_thread 缺少 is_allocated 檢查 | Fixed | Verified |
 | [2026-03-12_ISSUE_bug278_dealloc_slot_reuse_dead_flag_not_cleared.md](./2026-03-12_ISSUE_bug278_dealloc_slot_reuse_dead_flag_not_cleared.md) | heap::dealloc 回收 slot 時未清除 DEAD_FLAG | Fixed | Verified |
-| [2026-03-12_ISSUE_bug278_gc_cell_validate_and_barrier_has_gen_old_flag_read_before_is_allocated_check.md](./2026-03-12_ISSUE_bug278_gc_cell_validate_and_barrier_has_gen_old_flag_read_before_is_allocated_check.md) | gc_cell_validate_and_barrier has_gen_old_flag 讀取在 is_allocated 檢查之前 - TOCTOU | Open | Unverified |
+| [2026-03-12_ISSUE_bug278_gc_cell_validate_and_barrier_has_gen_old_flag_read_before_is_allocated_check.md](./2026-03-12_ISSUE_bug278_gc_cell_validate_and_barrier_has_gen_old_flag_read_before_is_allocated_check.md) | gc_cell_validate_and_barrier has_gen_old_flag 讀取在 is_allocated 檢查之前 - TOCTOU | Fixed | Verified |
 | [2026-03-12_ISSUE_bug279_weak_upgrade_try_upgrade_verify.md](./2026-03-12_ISSUE_bug279_weak_upgrade_try_upgrade_verify.md) | Weak::upgrade and Weak::try_upgrade missing is_allocated check after CAS (DUPLICATE - verify status) | Open | Verified |
 | [2026-03-12_ISSUE_bug280_sweep_orphan_pages_has_weak_refs_large_object_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug280_sweep_orphan_pages_has_weak_refs_large_object_missing_is_allocated_check.md) | sweep_orphan_pages has_weak_refs large object path 缺少 is_allocated 檢查 | Open | Unverified |
 | [2026-03-12_ISSUE_bug281_validate_thread_affinity_owner_thread_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug281_validate_thread_affinity_owner_thread_missing_is_allocated_check.md) | validate_thread_affinity 讀取 owner_thread 缺少 is_allocated 檢查 | Open | Unverified |
@@ -354,3 +355,4 @@
 | [2026-03-14_ISSUE_bug297_mark_object_minor_toctou_is_allocated_set_mark.md](./2026-03-14_ISSUE_bug297_mark_object_minor_toctou_is_allocated_set_mark.md) | mark_object_minor TOCTOU between is_allocated and set_mark | Open | Unverified |
 | [2026-03-14_ISSUE_bug298_gc_cell_validate_and_barrier_large_object_has_gen_old_flag_toctou.md](./2026-03-14_ISSUE_bug298_gc_cell_validate_and_barrier_large_object_has_gen_old_flag_toctou.md) | gc_cell_validate_and_barrier 大型物件路徑 has_gen_old_flag 讀取在 is_allocated 檢查之前 - TOCTOU | Open | Unverified |
 | [2026-03-14_ISSUE_bug299_weak_may_be_valid_missing_origin_thread_check.md](./2026-03-14_ISSUE_bug299_weak_may_be_valid_missing_origin_thread_check.md) | WeakCrossThreadHandle::may_be_valid() Missing Origin Thread Check - Inconsistent with is_valid() | Fixed | Verified |
+| [2026-03-15_ISSUE_bug300_hashmap_trace_misleading_comment.md](./2026-03-15_ISSUE_bug300_hashmap_trace_misleading_comment.md) | HashMap Trace implementation has misleading comment | Open | Unverified |
