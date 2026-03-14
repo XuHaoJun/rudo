@@ -810,7 +810,15 @@ unsafe fn scan_page_for_marked_refs(
             // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep
             loop {
                 match (*header).try_mark(i) {
-                    Ok(false) => break, // Already marked
+                    Ok(false) => {
+                        // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
+                        // If slot was swept after initial check at line 808, skip it.
+                        if (*header).is_allocated(i) {
+                            break;
+                        }
+                        // Slot was swept, continue to next index
+                        break;
+                    }
                     Ok(true) => {
                         // Re-check is_allocated to fix TOCTOU
                         if !(*header).is_allocated(i) {
@@ -1021,7 +1029,15 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
 
     loop {
         match (*h).try_mark(idx) {
-            Ok(false) => return Some(idx), // Already marked by us or another thread
+            Ok(false) => {
+                // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
+                // If slot was swept after initial check but before we get here,
+                // return None to avoid using a reused slot.
+                if (*h).is_allocated(idx) {
+                    return Some(idx);
+                }
+                return None;
+            }
             Ok(true) => {
                 // We just marked. Re-check is_allocated to fix TOCTOU with lazy sweep.
                 if (*h).is_allocated(idx) {
