@@ -1,6 +1,6 @@
 # [Bug]: GcMutex::try_lock caches barrier states AFTER lock acquisition, inconsistent with lock()
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -127,3 +127,18 @@ where
 ## 🔗 相關 Issue
 
 - bug290: GcRwLock::try_write caches barrier states AFTER lock acquisition (same pattern)
+
+---
+
+## 修復狀態
+
+- [x] 已修復
+- [ ] 未修復
+
+## 修復內容
+
+在 `crates/rudo-gc/src/sync.rs` 的 `try_lock()` 函數中：
+- 將 barrier state 緩存移至 `.try_lock()` 調用之前
+- 現在與 `lock()` 行為一致
+
+修復位置：sync.rs lines 631-647

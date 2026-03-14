@@ -632,9 +632,10 @@ impl<T: ?Sized> GcMutex<T> {
     where
         T: GcCapture,
     {
+        let incremental_active = is_incremental_marking_active();
+        let generational_active = is_generational_barrier_active();
+
         self.inner.try_lock().map(|guard| {
-            let incremental_active = is_incremental_marking_active();
-            let generational_active = is_generational_barrier_active();
             record_satb_old_values_with_state(&*guard, incremental_active);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
             let barrier_active = generational_active || incremental_active;
