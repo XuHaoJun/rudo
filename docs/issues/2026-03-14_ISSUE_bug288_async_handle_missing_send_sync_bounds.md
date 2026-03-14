@@ -1,7 +1,7 @@
 # [Bug]: AsyncHandle/GcScope/AsyncGcHandle implement Send+Sync without requiring T: Send/Sync
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
