@@ -1000,6 +1000,13 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
             if !(*header.as_ptr()).is_allocated(idx) {
                 return false;
             }
+            // Skip if object is under construction (e.g. during Gc::new_cyclic_weak).
+            // Avoids incorrectly marking partially-initialized objects (bug238).
+            #[allow(clippy::cast_ptr_alignment)]
+            let gc_box = &*ptr.cast::<GcBox<()>>();
+            if gc_box.is_under_construction() {
+                return false;
+            }
             if !(*header.as_ptr()).is_marked(idx) {
                 (*header.as_ptr()).set_mark(idx);
                 return true;
@@ -1029,6 +1036,14 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
 
     // Skip if object was swept; avoids UAF when Drop runs during/concurrent with sweep.
     if !(*h).is_allocated(idx) {
+        return None;
+    }
+
+    // Skip if object is under construction (e.g. during Gc::new_cyclic_weak).
+    // Avoids incorrectly marking partially-initialized objects (bug238).
+    #[allow(clippy::cast_ptr_alignment)]
+    let gc_box = &*ptr.cast::<GcBox<()>>();
+    if gc_box.is_under_construction() {
         return None;
     }
 

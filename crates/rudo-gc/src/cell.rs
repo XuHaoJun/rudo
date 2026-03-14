@@ -1280,6 +1280,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                         if (*header).magic != MAGIC_GC_PAGE {
                             return;
                         }
+                        // Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247).
+                        if !(*header).is_allocated(0) {
+                            return;
+                        }
                         // GEN_OLD early-exit: skip if page young AND object has no gen_old_flag
                         // (bug202, matches unified_write_barrier).
                         let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
@@ -1287,10 +1291,8 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                         if (*header).generation == 0 && !has_gen_old {
                             return;
                         }
-                        if (*header).is_allocated(0) {
-                            (*header).set_dirty(0);
-                            heap.add_to_dirty_pages(NonNull::new_unchecked(header));
-                        }
+                        (*header).set_dirty(0);
+                        heap.add_to_dirty_pages(NonNull::new_unchecked(header));
                     }
                 } else {
                     let header = ptr_to_page_header(ptr);
@@ -1307,6 +1309,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                         let index = offset / block_size;
 
                         if index < (*header.as_ptr()).obj_count as usize {
+                            // Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247).
+                            if !(*header.as_ptr()).is_allocated(index) {
+                                return;
+                            }
                             // GEN_OLD early-exit: skip if page young AND object has no gen_old_flag
                             // (bug202, matches unified_write_barrier).
                             let gc_box_addr = (header_page_addr + header_size + index * block_size)
@@ -1315,10 +1321,8 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                             if (*header.as_ptr()).generation == 0 && !has_gen_old {
                                 return;
                             }
-                            if (*header.as_ptr()).is_allocated(index) {
-                                (*header.as_ptr()).set_dirty(index);
-                                heap.add_to_dirty_pages(header);
-                            }
+                            (*header.as_ptr()).set_dirty(index);
+                            heap.add_to_dirty_pages(header);
                         }
                     }
                 }

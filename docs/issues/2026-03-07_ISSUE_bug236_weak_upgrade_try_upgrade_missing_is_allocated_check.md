@@ -1,6 +1,6 @@
 # [Bug]: Weak::upgrade 和 Weak::try_upgrade 缺少升級後的 is_allocated 檢查
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ---
@@ -104,3 +104,16 @@ if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
 
 ### Geohot
 攻擊者控制 GC 時機可以觸發精確的插槽重用，使 upgrade() 返回指向錯誤物件的 Gc，從而可能進行進一步利用。
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Already fixed.
+
+The fix was applied in a prior commit. The current `Weak::upgrade()` and `Weak::try_upgrade()` implementations in `ptr.rs` (lines 2016–2092 and 2111–2197) correctly include `is_allocated` checks in both places:
+
+1. **Entry check** (before CAS loop): Lines 2019–2026 (upgrade), 2131–2138 (try_upgrade)
+2. **Post-CAS check** (after successful upgrade): Lines 2076–2083 (upgrade), 2181–2187 (try_upgrade)
+
+Behavior now matches `GcBoxWeakRef::upgrade()` as described in the issue. Verified via weak.rs and weak_memory_reclaim.rs tests.

@@ -1,6 +1,6 @@
 # [Bug]: record_satb_old_value 返回值不一致 - 跨執行緒緩衝區溢位時仍返回 true
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -156,3 +156,11 @@ pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) -> bool {
   - `record_satb_old_value` 在跨執行緒路徑中仍無條件返回 `true` (line 1938)
   - 未檢查 `fallback_requested()` 狀態
 - **影響**: 此 bug 尚未修復
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Fixed.
+
+`push_cross_thread_satb` now returns `bool` (`true` = stored successfully, `false` = fallback requested). `record_satb_old_value` uses this return value in the cross-thread path instead of unconditionally returning `true`. Behavior now matches the documented contract.

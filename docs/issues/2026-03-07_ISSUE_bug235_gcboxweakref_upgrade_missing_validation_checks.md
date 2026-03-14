@@ -1,6 +1,6 @@
 # [Bug]: GcBoxWeakRef::upgrade 缺少驗證檢查 - 與 clone 行為不一致
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ---
@@ -162,3 +162,18 @@ The missing validation could lead to dereferencing invalid memory. While the sub
 
 ### Geohot
 An attacker controlling GC timing could trigger precise slot reuse to cause the upgrade() to return a Gc to the wrong object, potentially enabling further exploitation.
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Already fixed.
+
+The fix was applied prior to this review. The current `GcBoxWeakRef::upgrade()` implementation in `ptr.rs` (lines 517–595) correctly performs all validation checks matching `GcBoxWeakRef::clone()`:
+
+- **Alignment + MIN_VALID_HEAP_ADDRESS** (lines 522–525)
+- **is_gc_box_pointer_valid** (lines 527–529)
+- **is_under_construction, has_dead_flag, dropping_state** (lines 534–546)
+- **is_allocated** after successful upgrade in both code paths (lines 567–574, 583–590)
+
+Behavior now matches the suggested fix.

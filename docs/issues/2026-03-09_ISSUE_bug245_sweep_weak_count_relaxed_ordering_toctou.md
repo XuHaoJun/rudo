@@ -1,7 +1,7 @@
 # [Bug]: Sweep 程式使用 Relaxed ordering 載入 weak_count，與 dec_weak 的 AcqRel 不一致導致 TOCTOU Race
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -154,4 +154,10 @@ let current = self.weak_count.load(Ordering::Acquire);
 2. 利用 UAF 進行記憶體佈局攻擊
 3. 結合其他 GC bug 擴大攻擊面
 4. 特別危險的是：攻擊者可能控制 Weak 指標的建立和 GC timing，實現可靠的 exploit
+
+---
+
+## Resolution (2026-03-14)
+
+**Fixed.** Added `weak_count_acquire()` in `ptr.rs` using `Ordering::Acquire` to synchronize with `dec_weak`'s `AcqRel` CAS. Replaced all sweep and orphan-page weak-check usages in `gc/gc.rs` and `heap.rs` with `weak_count_acquire()`. Full test suite and Clippy pass. Single-threaded tests cannot reproduce the race; fix follows atomic ordering best practice (Acquire load when result gates safety-critical reclaim decision).
 

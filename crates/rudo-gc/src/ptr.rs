@@ -213,6 +213,15 @@ impl<T: Trace + ?Sized> GcBox<T> {
         self.weak_count.load(Ordering::Relaxed)
     }
 
+    /// Get the weak reference count with Acquire ordering.
+    ///
+    /// Use this when the result gates safety-critical operations (e.g. sweep deciding
+    /// whether to reclaim a slot). Acquire synchronizes with `dec_weak`'s `AcqRel` CAS,
+    /// preventing TOCTOU races where sweep might miss a concurrent weak decrement.
+    pub(crate) fn weak_count_acquire(&self) -> usize {
+        self.weak_count.load(Ordering::Acquire) & !Self::FLAGS_MASK
+    }
+
     /// Increment the weak reference count.
     /// Uses Relaxed ordering since weak count is advisory only.
     /// Uses `fetch_update` to avoid lost updates under concurrent `inc_weak` calls.
@@ -450,19 +459,23 @@ impl<T: Trace> GcBox<T> {
                 };
             }
 
+            // inc_weak before is_allocated check to avoid TOCTOU with lazy sweep (bug240).
+            // If slot was swept between check and inc_weak, we'd increment the wrong object.
+            (*NonNull::from(self).as_ptr()).inc_weak();
+
             let self_ptr = NonNull::from(self).as_ptr() as *const u8;
             if let Some(idx) = crate::heap::ptr_to_object_index(self_ptr) {
                 let header = crate::heap::ptr_to_page_header(self_ptr);
                 if !(*header.as_ptr()).is_allocated(idx) {
+                    // Don't call dec_weak - slot may be reused (bug133)
                     return GcBoxWeakRef {
                         ptr: AtomicNullable::null(),
                     };
                 }
             }
 
-            (*NonNull::from(self).as_ptr()).inc_weak();
+            GcBoxWeakRef::new(NonNull::from(self))
         }
-        GcBoxWeakRef::new(NonNull::from(self))
     }
 }
 
@@ -506,6 +519,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
     pub(crate) fn new(ptr: NonNull<GcBox<T>>) -> Self {
         Self {
             ptr: AtomicNullable::new(ptr),
+        }
+    }
+
+    /// Create a null weak reference (no underlying object).
+    pub(crate) const fn null() -> Self {
+        Self {
+            ptr: AtomicNullable::null(),
         }
     }
 

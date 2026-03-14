@@ -1,6 +1,6 @@
 # [Bug]: GcBox::as_weak TOCTOU - is_allocated 檢查在 inc_weak 之前導致 Race
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -165,3 +165,11 @@ pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
 1. 控制 GC timing 來觸發 race condition
 2. 利用錯誤的 weak count 來繞過 weak reference 的安全檢查
 3. 實現任意記憶體讀寫（如果能控制新物件的佈局）
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Fixed.
+
+Reordered `GcBox::as_weak` in `ptr.rs` to call `inc_weak()` before the `is_allocated` check, matching the pattern used in `GcBoxWeakRef::clone()` and `Gc::downgrade()`. If `is_allocated` fails after `inc_weak`, return null without calling `dec_weak` (per bug133 — slot may be reused). All tests pass.

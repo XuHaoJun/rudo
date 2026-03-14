@@ -1,6 +1,6 @@
 # [Bug]: Gc::as_weak 和 Gc::weak_cross_thread_handle 缺少 is_allocated 檢查
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -134,3 +134,16 @@ pub fn weak_cross_thread_handle(&self) -> crate::handles::WeakCrossThreadHandle<
 如果攻擊者能控制時序，可能：
 1. 通過精確的 memory layout 控制，讓被錯誤增加 weak count 的對象成為關鍵結構
 2. 破壞 GC 的 weak reference 完整性假設
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Already fixed.
+
+Both `Gc::as_weak()` and `Gc::weak_cross_thread_handle()` already have the `is_allocated` check after `inc_weak()` in the current implementation (`ptr.rs`):
+
+- **as_weak()** (lines 1653–1660): After `inc_weak()`, checks `is_allocated`; if slot was swept, returns null `GcBoxWeakRef` without calling `dec_weak` (per bug133).
+- **weak_cross_thread_handle()** (lines 1766–1773): After `inc_weak()`, asserts `is_allocated` with message "object slot was swept after inc_weak".
+
+Behavior matches the suggested fix and is consistent with `Gc::downgrade()`. Duplicate of bug122 (Gc::weak_cross_thread_handle).

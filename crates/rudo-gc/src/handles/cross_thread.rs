@@ -332,29 +332,31 @@ impl<T: Trace + 'static> GcHandle<T> {
                 panic!("GcHandle::downgrade: handle has been unregistered");
             }
             unsafe {
-                // Check is_allocated BEFORE dereferencing - slot may have been swept and reused.
-                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
-                {
-                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                    if !(*header.as_ptr()).is_allocated(idx) {
-                        panic!("GcHandle::downgrade: slot has been deallocated and reused");
-                    }
-                }
-                let gc_box = &*self.ptr.as_ptr();
-                assert!(
-                    !gc_box.has_dead_flag()
-                        && gc_box.dropping_state() == 0
-                        && !gc_box.is_under_construction(),
-                    "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle"
-                );
-                gc_box.inc_weak();
+                // inc_weak before is_allocated check to avoid TOCTOU with lazy sweep (bug241).
+                // If slot was swept between check and inc_weak, we'd increment the wrong object.
+                (*self.ptr.as_ptr()).inc_weak();
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
                 {
                     let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                    assert!(
-                        (*header.as_ptr()).is_allocated(idx),
-                        "GcHandle::downgrade: object slot was swept during downgrade"
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        // Don't call dec_weak - slot may be reused (bug133)
+                        drop(roots);
+                        return WeakCrossThreadHandle {
+                            weak: GcBoxWeakRef::null(),
+                            origin_tcb: Weak::clone(&self.origin_tcb),
+                            origin_thread: self.origin_thread,
+                        };
+                    }
+                }
+                let gc_box = &*self.ptr.as_ptr();
+                if gc_box.has_dead_flag()
+                    || gc_box.dropping_state() != 0
+                    || gc_box.is_under_construction()
+                {
+                    (*self.ptr.as_ptr()).dec_weak();
+                    panic!(
+                        "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle"
                     );
                 }
             }
@@ -365,31 +367,30 @@ impl<T: Trace + 'static> GcHandle<T> {
                 panic!("GcHandle::downgrade: handle has been unregistered");
             }
             unsafe {
-                // Check is_allocated BEFORE dereferencing - slot may have been swept and reused.
-                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
-                {
-                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                    if !(*header.as_ptr()).is_allocated(idx) {
-                        panic!(
-                            "GcHandle::downgrade: slot has been deallocated and reused (orphan)"
-                        );
-                    }
-                }
-                let gc_box = &*self.ptr.as_ptr();
-                assert!(
-                    !gc_box.has_dead_flag()
-                        && gc_box.dropping_state() == 0
-                        && !gc_box.is_under_construction(),
-                    "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle (orphan)"
-                );
-                gc_box.inc_weak();
+                // inc_weak before is_allocated check to avoid TOCTOU with lazy sweep (bug241).
+                (*self.ptr.as_ptr()).inc_weak();
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
                 {
                     let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                    assert!(
-                        (*header.as_ptr()).is_allocated(idx),
-                        "GcHandle::downgrade: object slot was swept during downgrade (orphan)"
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        // Don't call dec_weak - slot may be reused (bug133)
+                        drop(orphan);
+                        return WeakCrossThreadHandle {
+                            weak: GcBoxWeakRef::null(),
+                            origin_tcb: Weak::clone(&self.origin_tcb),
+                            origin_thread: self.origin_thread,
+                        };
+                    }
+                }
+                let gc_box = &*self.ptr.as_ptr();
+                if gc_box.has_dead_flag()
+                    || gc_box.dropping_state() != 0
+                    || gc_box.is_under_construction()
+                {
+                    (*self.ptr.as_ptr()).dec_weak();
+                    panic!(
+                        "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle (orphan)"
                     );
                 }
             }

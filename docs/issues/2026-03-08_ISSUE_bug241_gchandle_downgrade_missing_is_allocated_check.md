@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::downgrade Missing is_allocated Check After inc_weak
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -108,3 +108,11 @@ if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const 
 **Geohot (Exploit 觀點):**
 - 需要精確的執行緒調度才能觸發
 - 實際利用難度較高，但理論上可能導致記憶體消耗異常
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Fixed.
+
+Reordered `GcHandle::downgrade` in `handles/cross_thread.rs` to call `inc_weak()` before the `is_allocated` check, matching the pattern used in `GcBox::as_weak` (bug240) and `Gc::downgrade`. When `is_allocated` fails after `inc_weak`, return a null `WeakCrossThreadHandle` without calling `dec_weak` (per bug133 — slot may be reused). Added `GcBoxWeakRef::null()` constructor. Both origin-alive and orphan paths updated. All tests pass.

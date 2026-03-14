@@ -1,6 +1,6 @@
 # [Bug]: GcBoxWeakRef::as_weak 缺少 is_allocated 檢查導致 TOCTOU
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -161,3 +161,25 @@ lazy sweep 的非確定性使得在 `inc_weak()` 後檢查 slot 是否仍然 all
 1. `GcBoxWeakRef::as_weak()` 在調用 `inc_weak()` 後沒有檢查 `is_allocated()`
 2. 對比 `Gc::downgrade()` (ptr.rs:1475-1481) 有正確的 `is_allocated` 檢查
 3. 此不一致導致 TOCTOU race：lazy sweep 回收 slot 後，weak count 可能錯誤地增加在新物件上
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Already fixed.
+
+The current `GcBoxWeakRef::as_weak()` implementation in `ptr.rs` (lines 1645–1677) already includes the `is_allocated` check after `inc_weak()`:
+
+```rust
+(*ptr.as_ptr()).inc_weak();
+
+if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+    let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+    if !(*header.as_ptr()).is_allocated(idx) {
+        // Don't call dec_weak - slot may be reused (bug133)
+        return GcBoxWeakRef { ptr: AtomicNullable::null() };
+    }
+}
+```
+
+Behavior matches the suggested fix and is consistent with `Gc::downgrade()`.

@@ -1,6 +1,6 @@
 # [Bug]: mark_object_black 和 mark_new_object_black 缺少 is_under_construction 檢查
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -115,3 +115,13 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
 若攻擊者能精確控制時序，在 `Gc::new_cyclic_weak` 期間觸發大量 write barrier，可能：
 1. 導致記憶體洩漏（錯誤標記的物件無法回收）
 2. 破壞 GC 的完整性假設
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Fixed.
+
+Added `is_under_construction` checks to both `mark_object_black` and `mark_new_object_black` in `crates/rudo-gc/src/gc/incremental.rs`. When an object is under construction (e.g. during `Gc::new_cyclic_weak`), both functions now skip marking and return `None` / `false` respectively. Behavior is now consistent with other GcBox operations (`try_deref`, `try_clone`, `Gc::as_ptr`).
+
+Verified: `./clippy.sh` and `./test.sh` pass. Cyclic weak tests (`cyclic_weak`, `weak_cycle`) pass.

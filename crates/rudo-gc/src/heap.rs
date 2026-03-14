@@ -1952,8 +1952,7 @@ impl LocalHeap {
         let allocating_thread_id = unsafe { get_allocating_thread_id(gc_box.as_ptr() as usize) };
 
         if current_thread_id != allocating_thread_id && allocating_thread_id != 0 {
-            Self::push_cross_thread_satb(gc_box);
-            return true;
+            return Self::push_cross_thread_satb(gc_box);
         }
 
         self.satb_old_values.push(gc_box);
@@ -1980,22 +1979,26 @@ impl LocalHeap {
     /// Used when recording SATB old values from threads without a GC heap.
     /// When main buffer is full, records to overflow buffer instead of dropping (bug122).
     /// When overflow is also full, skips push to prevent unbounded growth (bug270).
-    pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) {
+    ///
+    /// Returns `true` if the value was stored successfully, `false` if the buffer
+    /// overflowed and fallback was requested.
+    pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) -> bool {
         let mut buffer = CROSS_THREAD_SATB_BUFFER.lock();
         if buffer.len() >= MAX_CROSS_THREAD_SATB_SIZE {
             let mut overflow = CROSS_THREAD_SATB_OVERFLOW_BUFFER.lock();
             if overflow.len() >= MAX_CROSS_THREAD_SATB_SIZE {
                 crate::gc::incremental::IncrementalMarkState::global()
                     .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
-                return;
+                return false;
             }
             overflow.push(gc_ptr.as_ptr() as usize);
             drop(overflow);
             crate::gc::incremental::IncrementalMarkState::global()
                 .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
-            return;
+            return false;
         }
         buffer.push(gc_ptr.as_ptr() as usize);
+        true
     }
 
     fn satb_buffer_overflowed(&mut self) -> bool {
@@ -2815,7 +2818,7 @@ pub fn simple_write_barrier(ptr: *const u8) {
 /// * `ptr` - Raw pointer to the `GcCell` (field being mutated)
 /// * `context` - Context string for panic message (e.g., `"borrow_mut"`)
 /// * `incremental_active` - Whether incremental marking is active
-#[allow(dead_code)]
+#[allow(dead_code, clippy::too_many_lines)]
 #[inline]
 pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_active: bool) {
     if ptr.is_null() {
@@ -2848,6 +2851,10 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                     return;
                 }
 
+                // Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247).
+                if !(*h_ptr).is_allocated(0) {
+                    return;
+                }
                 let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                 // Skip barrier only if page is young AND object has no gen_old_flag (bug71).
                 // Cache flag to avoid TOCTOU between check and barrier (bug114).
@@ -2916,6 +2923,10 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                     return;
                 }
 
+                // Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247).
+                if !(*h).is_allocated(index) {
+                    return;
+                }
                 // GEN_OLD early-exit: skip only if page young AND object has no gen_old_flag (bug71).
                 // Cache flag to avoid TOCTOU between check and barrier (bug114).
                 let gc_box_addr =
@@ -2926,11 +2937,6 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 }
                 (header, index)
             };
-
-            // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug211).
-            if !(*h.as_ptr()).is_allocated(index) {
-                return;
-            }
 
             (*h.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(h);
@@ -2976,6 +2982,10 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                         return;
                     }
 
+                    // Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247).
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     // Cache flag to avoid TOCTOU between check and barrier (bug133).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
@@ -3000,6 +3010,10 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     if index >= obj_count {
                         return;
                     }
+                    // Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247).
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     // Cache flag to avoid TOCTOU between check and barrier (bug133).
@@ -3009,11 +3023,6 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     }
                     (h, index)
                 };
-
-            // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug200).
-            if !(*header.as_ptr()).is_allocated(index) {
-                return;
-            }
 
             (*header.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(header);
@@ -3198,7 +3207,7 @@ pub fn sweep_orphan_pages() {
             let obj_ptr = (orphan.addr as *mut u8).add(header_size);
             #[allow(clippy::cast_ptr_alignment)]
             let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-            (*gc_box_ptr).weak_count() > 0
+            (*gc_box_ptr).weak_count_acquire() > 0
         } else {
             let block_size = (*header).block_size as usize;
             let obj_count = (*header).obj_count as usize;
@@ -3209,7 +3218,7 @@ pub fn sweep_orphan_pages() {
                     let obj_ptr = (orphan.addr as *mut u8).add(header_size + i * block_size);
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-                    (*gc_box_ptr).weak_count() > 0
+                    (*gc_box_ptr).weak_count_acquire() > 0
                 } else {
                     false
                 }

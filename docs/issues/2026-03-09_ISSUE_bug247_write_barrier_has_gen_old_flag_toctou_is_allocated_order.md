@@ -1,7 +1,7 @@
 # [Bug]: Write barrier TOCTOU - has_gen_old_flag read BEFORE is_allocated check
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -106,3 +106,14 @@ if (*h.as_ptr()).generation == 0 && !has_gen_old {
 
 **Geohot (Exploit 觀點):**
 在極端情況下，攻擊者可能控制時序，使 barrier 記錄無效的 slot 到 dirty_pages 或 remembered_set，導致後續掃描發生異常。
+
+---
+
+## Resolution (2026-03-14)
+
+Fixed by moving `is_allocated` check before `has_gen_old_flag()` read in:
+- `cell.rs`: `generational_write_barrier` (large and small object paths)
+- `heap.rs`: `gc_cell_validate_and_barrier` (large and small object paths)
+- `heap.rs`: `unified_write_barrier` (large and small object paths)
+
+`simple_write_barrier` and `incremental_write_barrier` in heap.rs already had correct order (fixed in bug286). Full test suite passes.

@@ -2176,7 +2176,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                    let weak_count = (*gc_box_ptr).weak_count();
+                    let weak_count = (*gc_box_ptr).weak_count_acquire();
 
                     if weak_count > 0 {
                         // Has weak refs - drop value but keep allocation
@@ -2267,7 +2267,7 @@ fn sweep_phase2_reclaim(
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                    let weak_count = (*gc_box_ptr).weak_count();
+                    let weak_count = (*gc_box_ptr).weak_count_acquire();
 
                     if weak_count == 0 && (*gc_box_ptr).has_dead_flag() {
                         // No weak refs, already dropped and dead - reclaim
@@ -2435,7 +2435,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                let weak_count = (*gc_box_ptr).weak_count();
+                let weak_count = (*gc_box_ptr).weak_count_acquire();
 
                 if weak_count > 0 {
                     if !(*gc_box_ptr).has_dead_flag() {
@@ -2538,7 +2538,7 @@ unsafe fn lazy_sweep_page(
             #[allow(clippy::cast_ptr_alignment)]
             let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-            let weak_count = (*gc_box_ptr).weak_count();
+            let weak_count = (*gc_box_ptr).weak_count_acquire();
 
             if weak_count > 0 {
                 if !(*gc_box_ptr).has_dead_flag() {
@@ -2664,7 +2664,7 @@ unsafe fn lazy_sweep_page_all_dead(
             #[allow(clippy::cast_ptr_alignment)]
             let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-            let weak_count = (*gc_box_ptr).weak_count();
+            let weak_count = (*gc_box_ptr).weak_count_acquire();
 
             if weak_count > 0 {
                 if !(*gc_box_ptr).has_dead_flag() {
