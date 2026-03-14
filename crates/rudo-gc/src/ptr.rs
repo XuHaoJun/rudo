@@ -683,6 +683,35 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
         true
     }
 
+    /// Check if this weak reference points to a live object (lightweight check).
+    ///
+    /// Returns true if the object is likely alive (hasn't been collected).
+    /// Does not increment `ref_count`.
+    pub(crate) fn is_live(&self) -> bool {
+        let Some(ptr) = self.as_ptr() else {
+            return false;
+        };
+
+        let addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if addr < MIN_VALID_HEAP_ADDRESS || addr % alignment != 0 {
+            return false;
+        }
+
+        if !is_gc_box_pointer_valid(addr) {
+            return false;
+        }
+
+        unsafe {
+            let gc_box = &*ptr.as_ptr();
+            if gc_box.has_dead_flag() {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Attempt upgrade with additional safety checks.
     pub(crate) fn try_upgrade(&self) -> Option<Gc<T>> {
         let ptr = self.ptr.load(Ordering::Acquire);

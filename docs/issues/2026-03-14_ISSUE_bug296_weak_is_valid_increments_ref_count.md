@@ -1,6 +1,6 @@
 # [Bug]: WeakCrossThreadHandle::is_valid() 錯誤地遞增 ref_count，與 GcHandle::is_valid() 行為不一致
 
-**Status:** Open
+**Status:** Resolved
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

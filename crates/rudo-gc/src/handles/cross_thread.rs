@@ -563,7 +563,7 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
         if self.origin_tcb.upgrade().is_none() {
             return false;
         }
-        self.weak.upgrade().is_some()
+        self.weak.is_live()
     }
 
     /// Resolves to a `Gc<T>` if the object is still alive.
