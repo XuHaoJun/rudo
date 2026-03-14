@@ -1,6 +1,6 @@
 # [Bug]: Ephemeron Trace 實現使用 is_key_alive() 有 TOCTOU 漏洞，與 GcCapture 實現不一致
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -110,3 +110,9 @@ Ephemeron 的核心語義是「當 key 存活時，value 才應該可達」。TO
 
 - bug106: Ephemeron::upgrade() TOCTOU (已修復)
 - bug122: Ephemeron GcCapture TOCTOU (已修復)
+
+---
+
+## Resolution (2026-03-15)
+
+Fixed in `crates/rudo-gc/src/ptr.rs`. Replaced `is_key_alive()` with `try_upgrade()` in `Trace for Ephemeron` to atomically confirm key liveness and obtain a strong reference, matching the `GcCapture` implementation. Also added `key_gc.trace(visitor)` for consistency with GcCapture. All 24 ephemeron tests pass.

@@ -1,6 +1,6 @@
 # [Bug]: Handle::to_gc and AsyncHandle::to_gc missing is_allocated check after ref increment (TOCTOU)
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -122,3 +122,23 @@ If an attacker can control the timing of allocation after sweep, they could pote
 - bug195: Handle::get / Handle::to_gc missing is_allocated check (different - before dereferencing)
 - bug196: AsyncHandle::get / to_gc missing is_allocated check (different - before dereferencing)
 - bug210: Handle::to_gc missing post-increment safety check (different - about dead_flag/dropping_state)
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Already fixed.
+
+The fix was applied in a prior commit. The current implementations in `handles/mod.rs` (lines 382–388) and `handles/async.rs` (lines 755–761) both include the `is_allocated` check after `try_inc_ref_if_nonzero()`:
+
+```rust
+if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+    let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+    assert!(
+        (*header.as_ptr()).is_allocated(idx),
+        "Handle::to_gc: object slot was swept after inc_ref"
+    );
+}
+```
+
+Behavior now matches the pattern in `GcHandle::resolve()` as described in the issue.

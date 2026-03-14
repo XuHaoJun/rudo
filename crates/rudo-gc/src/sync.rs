@@ -410,24 +410,10 @@ impl<T: GcCapture + ?Sized> Deref for GcRwLockReadGuard<'_, T> {
 
 impl<T: GcCapture + ?Sized> Drop for GcRwLockReadGuard<'_, T> {
     fn drop(&mut self) {
-        let incremental_active = is_incremental_marking_active();
-        let generational_active = is_generational_barrier_active();
-
-        let mut ptrs = Vec::with_capacity(32);
-        self.guard.capture_gc_ptrs_into(&mut ptrs);
-
-        if incremental_active || generational_active {
-            for gc_ptr in &ptrs {
-                let _ = unsafe {
-                    crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
-                };
-            }
-        }
-
-        if generational_active {
-            let ptr = std::ptr::from_ref(&*self.guard).cast::<u8>();
-            crate::heap::unified_write_barrier(ptr, incremental_active);
-        }
+        // Read guard does not modify data — no barrier needed.
+        // SATB records old values before overwrite; read does not overwrite.
+        // Generational barrier records OLD→YOUNG writes; read does not write.
+        // The parking_lot guard releases the read lock automatically.
     }
 }
 

@@ -1,6 +1,6 @@
 # [Bug]: GcRwLockReadGuard/GcRwLockWriteGuard/GcMutexGuard Drop 僅調用 mark_object_black，缺少 unified_write_barrier 進行generational barrier
 
-Status:** Open**
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -189,3 +189,17 @@ Generational GC 的核心原則是 OLD→YOUNG 引用必須被追蹤，無論是
 對比 `GcRwLock::write()` (lines 256-270) 正確調用了 `trigger_write_barrier_with_state(generational_active, incremental_active)`。
 
 問題根因：Drop 實現調用了錯誤的 barrier 函數。
+
+---
+
+## Resolution (2026-03-15)
+
+**Outcome:** Already fixed.
+
+The fix was applied in a prior commit. The current implementation in `sync.rs` correctly calls `unified_write_barrier` when `generational_active` in all three Drop implementations:
+
+- `GcRwLockReadGuard::drop` (lines 426-430)
+- `GcRwLockWriteGuard::drop` (lines 487-491)
+- `GcMutexGuard::drop` (lines 758-762)
+
+Each Drop now invokes both `mark_object_black` (SATB) and `unified_write_barrier` (generational remembered set) when the respective barriers are active. Verified by `test_gc_rwlock_write_guard_drop_triggers_generational_barrier` in `tests/sync.rs`.

@@ -3,21 +3,20 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 258
-- **Open**: 40
-- **Invalid**: 15
+- **Fixed**: 268
+- **Open**: 30
+- **Invalid**: 16
 - **Resolved**: 1
-- **Unknown**: 3
+- **Unknown**: 2
 - **Verified**: 15
 
 ### By Tags
-- **Verified**: 280
-- **Not Verified**: 14
+- **Verified**: 285
+- **Not Verified**: 13
 - **Not Reproduced**: 11
 - **Fixed**: 1
 - **Unknown**: 2
-- **Unverified**: 23
-- **Verified, Regression**: 1
+- **Unverified**: 20
 
 ## All Issues
 
@@ -296,28 +295,28 @@
 | [2026-03-08_ISSUE_bug241_gchandle_downgrade_missing_is_allocated_check.md](./2026-03-08_ISSUE_bug241_gchandle_downgrade_missing_is_allocated_check.md) | GcHandle::downgrade Missing is_allocated Check After inc_weak | Fixed | Verified |
 | [2026-03-08_ISSUE_bug242_gcboxweakref_try_upgrade_missing_is_allocated_check.md](./2026-03-08_ISSUE_bug242_gcboxweakref_try_upgrade_missing_is_allocated_check.md) | GcBoxWeakRef::try_upgrade 缺少 is_allocated 檢查導致潛在 Slot Reuse UAF | Verified | Verified |
 | [2026-03-08_ISSUE_bug243_gcboxweakref_as_weak_missing_is_allocated_check.md](./2026-03-08_ISSUE_bug243_gcboxweakref_as_weak_missing_is_allocated_check.md) | GcBoxWeakRef::as_weak 缺少 is_allocated 檢查導致 TOCTOU | Fixed | Verified |
-| [2026-03-09_ISSUE_bug244_gcrwlock_guard_drop_missing_unified_write_barrier.md](./2026-03-09_ISSUE_bug244_gcrwlock_guard_drop_missing_unified_write_barrier.md) | GcRwLockReadGuard/GcRwLockWriteGuard/GcMutexGuard Drop 僅調用 mark_object_black，缺少 unified_write_barrier 進行generational barrier | Unknown | Verified |
+| [2026-03-09_ISSUE_bug244_gcrwlock_guard_drop_missing_unified_write_barrier.md](./2026-03-09_ISSUE_bug244_gcrwlock_guard_drop_missing_unified_write_barrier.md) | GcRwLockReadGuard/GcRwLockWriteGuard/GcMutexGuard Drop 僅調用 mark_object_black，缺少 unified_write_barrier 進行generational barrier | Fixed | Verified |
 | [2026-03-09_ISSUE_bug245_sweep_weak_count_relaxed_ordering_toctou.md](./2026-03-09_ISSUE_bug245_sweep_weak_count_relaxed_ordering_toctou.md) | Sweep 程式使用 Relaxed ordering 載入 weak_count，與 dec_weak 的 AcqRel 不一致導致 TOCTOU Race | Fixed | Verified |
 | [2026-03-09_ISSUE_bug246_gcthreadsafecell_generational_barrier_small_object_missing_is_allocated_check.md](./2026-03-09_ISSUE_bug246_gcthreadsafecell_generational_barrier_small_object_missing_is_allocated_check.md) | GcThreadSafeCell::generational_write_barrier 小型物件路徑缺少 is_allocated 檢查 | Fixed | Verified |
 | [2026-03-09_ISSUE_bug247_write_barrier_has_gen_old_flag_toctou_is_allocated_order.md](./2026-03-09_ISSUE_bug247_write_barrier_has_gen_old_flag_toctou_is_allocated_order.md) | Write barrier TOCTOU - has_gen_old_flag read BEFORE is_allocated check | Fixed | Verified |
-| [2026-03-09_ISSUE_bug248_gcscope_spawn_missing_liveness_check.md](./2026-03-09_ISSUE_bug248_gcscope_spawn_missing_liveness_check.md) | GcScope::spawn Missing Object Liveness Validation | Open | Unverified |
+| [2026-03-09_ISSUE_bug248_gcscope_spawn_missing_liveness_check.md](./2026-03-09_ISSUE_bug248_gcscope_spawn_missing_liveness_check.md) | GcScope::spawn Missing Object Liveness Validation | Fixed | Verified |
 | [2026-03-09_ISSUE_bug248_record_satb_old_value_returns_true_on_cross_thread_buffer_overflow.md](./2026-03-09_ISSUE_bug248_record_satb_old_value_returns_true_on_cross_thread_buffer_overflow.md) | record_satb_old_value 返回值不一致 - 跨執行緒緩衝區溢位時仍返回 true | Fixed | Verified |
-| [2026-03-09_ISSUE_bug249_handle_to_gc_missing_is_allocated_after_inc_ref.md](./2026-03-09_ISSUE_bug249_handle_to_gc_missing_is_allocated_after_inc_ref.md) | Handle::to_gc and AsyncHandle::to_gc missing is_allocated check after ref increment (TOCTOU) | Open | Verified |
-| [2026-03-09_ISSUE_bug250_gc_try_clone_missing_is_allocated_check.md](./2026-03-09_ISSUE_bug250_gc_try_clone_missing_is_allocated_check.md) | Gc::try_clone missing is_allocated check after ref increment (TOCTOU) | Open | Unverified |
-| [2026-03-10_ISSUE_bug251_gchandle_weakref_missing_send_sync_bounds.md](./2026-03-10_ISSUE_bug251_gchandle_weakref_missing_send_sync_bounds.md) | GcBoxWeakRef/GcHandle/WeakCrossThreadHandle implement Send+Sync without requiring T: Send | Open | Not Verified |
-| [2026-03-10_ISSUE_bug252_ephemeron_trace_is_key_alive_toctou.md](./2026-03-10_ISSUE_bug252_ephemeron_trace_is_key_alive_toctou.md) | Ephemeron Trace 實現使用 is_key_alive() 有 TOCTOU 漏洞，與 GcCapture 實現不一致 | Open | Verified |
+| [2026-03-09_ISSUE_bug249_handle_to_gc_missing_is_allocated_after_inc_ref.md](./2026-03-09_ISSUE_bug249_handle_to_gc_missing_is_allocated_after_inc_ref.md) | Handle::to_gc and AsyncHandle::to_gc missing is_allocated check after ref increment (TOCTOU) | Fixed | Verified |
+| [2026-03-09_ISSUE_bug250_gc_try_clone_missing_is_allocated_check.md](./2026-03-09_ISSUE_bug250_gc_try_clone_missing_is_allocated_check.md) | Gc::try_clone missing is_allocated check after ref increment (TOCTOU) | Fixed | Verified |
+| [2026-03-10_ISSUE_bug251_gchandle_weakref_missing_send_sync_bounds.md](./2026-03-10_ISSUE_bug251_gchandle_weakref_missing_send_sync_bounds.md) | GcBoxWeakRef/GcHandle/WeakCrossThreadHandle implement Send+Sync without requiring T: Send | Invalid | Not Verified |
+| [2026-03-10_ISSUE_bug252_ephemeron_trace_is_key_alive_toctou.md](./2026-03-10_ISSUE_bug252_ephemeron_trace_is_key_alive_toctou.md) | Ephemeron Trace 實現使用 is_key_alive() 有 TOCTOU 漏洞，與 GcCapture 實現不一致 | Fixed | Verified |
 | [2026-03-10_ISSUE_bug253_write_barrier_bounds_inconsistent.md](./2026-03-10_ISSUE_bug253_write_barrier_bounds_inconsistent.md) | Write Barrier 函數使用 `>` 進行 heap bounds 檢查，與 `is_in_range` 不一致 | Fixed | Verified |
 | [2026-03-10_ISSUE_bug254_promote_all_pages_missing_gen_old_flag.md](./2026-03-10_ISSUE_bug254_promote_all_pages_missing_gen_old_flag.md) | promote_all_pages 缺少 GEN_OLD_FLAG 設置導致與 promote_young_pages 行為不一致 | Fixed | Verified |
-| [2026-03-10_ISSUE_bug255_gc_try_deref_missing_is_allocated_check.md](./2026-03-10_ISSUE_bug255_gc_try_deref_missing_is_allocated_check.md) | Gc::try_deref 缺少 is_allocated 檢查可能導致類型混淆 | Open | Unverified |
-| [2026-03-10_ISSUE_bug256_alloc_young_allocated_early_increment.md](./2026-03-10_ISSUE_bug256_alloc_young_allocated_early_increment.md) | LocalHeap::alloc() 過早增加 young_allocated 導致記憶體計數不準確 | Open | Verified |
-| [2026-03-10_ISSUE_bug257_gc_more_methods_missing_is_allocated_check.md](./2026-03-10_ISSUE_bug257_gc_more_methods_missing_is_allocated_check.md) | Gc::try_clone/as_ptr/internal_ptr/as_weak 缺少 is_allocated 檢查 | Open | Verified |
+| [2026-03-10_ISSUE_bug255_gc_try_deref_missing_is_allocated_check.md](./2026-03-10_ISSUE_bug255_gc_try_deref_missing_is_allocated_check.md) | Gc::try_deref 缺少 is_allocated 檢查可能導致類型混淆 | Fixed | Verified |
+| [2026-03-10_ISSUE_bug256_alloc_young_allocated_early_increment.md](./2026-03-10_ISSUE_bug256_alloc_young_allocated_early_increment.md) | LocalHeap::alloc() 過早增加 young_allocated 導致記憶體計數不準確 | Fixed | Verified |
+| [2026-03-10_ISSUE_bug257_gc_more_methods_missing_is_allocated_check.md](./2026-03-10_ISSUE_bug257_gc_more_methods_missing_is_allocated_check.md) | Gc::try_clone/as_ptr/internal_ptr/as_weak 缺少 is_allocated 檢查 | Fixed | Verified |
 | [2026-03-10_ISSUE_bug258_scan_page_unmarked_refs_toctou_push_work.md](./2026-03-10_ISSUE_bug258_scan_page_unmarked_refs_toctou_push_work.md) | scan_page_for_unmarked_refs TOCTOU Race - is_allocated 檢查與 push_work 之间存在 race | Fixed | Verified |
 | [2026-03-10_ISSUE_bug259_gcrwlock_barrier_state_capture_inconsistent.md](./2026-03-10_ISSUE_bug259_gcrwlock_barrier_state_capture_inconsistent.md) | GcRwLock/GcMutex  barrier state 在 lock 獲取之前捕獲，與 GcThreadSafeCell 不一致 | Verified | Verified |
 | [2026-03-10_ISSUE_bug260_marker_scan_page_toctou.md](./2026-03-10_ISSUE_bug260_marker_scan_page_toctou.md) | PerThreadMarkQueue::scan_page_before_push TOCTOU - is_allocated 檢查與 push 之间存在 race | Fixed | Verified |
-| [2026-03-10_ISSUE_bug261_gcrwlock_readguard_drop_unnecessary_barrier.md](./2026-03-10_ISSUE_bug261_gcrwlock_readguard_drop_unnecessary_barrier.md) | GcRwLockReadGuard::drop() 錯誤地觸發 Write Barrier - Read 操作不應需要 Barrier | Open | Verified, Regression |
+| [2026-03-10_ISSUE_bug261_gcrwlock_readguard_drop_unnecessary_barrier.md](./2026-03-10_ISSUE_bug261_gcrwlock_readguard_drop_unnecessary_barrier.md) | GcRwLockReadGuard::drop() 錯誤地觸發 Write Barrier - Read 操作不應需要 Barrier | Fixed | Verified |
 | [2026-03-10_ISSUE_bug261_weak_strong_count_missing_min_valid_heap_address.md](./2026-03-10_ISSUE_bug261_weak_strong_count_missing_min_valid_heap_address.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 MIN_VALID_HEAP_ADDRESS 檢查 | Open | Unverified |
 | [2026-03-11_ISSUE_bug262_weak_strong_count_missing_is_allocated_check.md](./2026-03-11_ISSUE_bug262_weak_strong_count_missing_is_allocated_check.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 is_allocated 檢查導致讀取錯誤計數 | Open | Unverified |
-| [2026-03-11_ISSUE_bug263_gcbox_dec_ref_count_not_zero.md](./2026-03-11_ISSUE_bug263_gcbox_dec_ref_count_not_zero.md) | GcBox::dec_ref 返回 true 时 ref_count 未从 1 递减到 0 | Open | Not Verified |
+| [2026-03-11_ISSUE_bug263_gcbox_dec_ref_count_not_zero.md](./2026-03-11_ISSUE_bug263_gcbox_dec_ref_count_not_zero.md) | GcBox::dec_ref 返回 true 时 ref_count 未从 1 递减到 0 | Fixed | Verified |
 | [2026-03-11_ISSUE_bug264_weak_upgrade_missing_pointer_validation.md](./2026-03-11_ISSUE_bug264_weak_upgrade_missing_pointer_validation.md) | Weak::upgrade 缺少指標位址驗證導致潛在 UB，與 Weak::try_upgrade 行為不一致 | Open | Verified |
 | [2026-03-11_ISSUE_bug265_weak_drop_toctou_check_dec_weak.md](./2026-03-11_ISSUE_bug265_weak_drop_toctou_check_dec_weak.md) | Weak::drop 與 WeakCrossThreadHandle::drop 存在 TOCTOU Race - 檢查與 dec_weak 之間的狀態變化 | Open | Unverified |
 | [2026-03-11_ISSUE_bug266_async_handle_to_gc_missing_is_allocated_check.md](./2026-03-11_ISSUE_bug266_async_handle_to_gc_missing_is_allocated_check.md) | AsyncHandle::to_gc() Missing is_allocated Check After Reference Count Increment | Open | Unverified |

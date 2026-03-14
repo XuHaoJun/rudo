@@ -2039,11 +2039,11 @@ impl LocalHeap {
     pub fn alloc<T>(&mut self) -> NonNull<u8> {
         let size = std::mem::size_of::<T>();
         let align = std::mem::align_of::<T>();
-        // All new allocations start in young generation
-        self.young_allocated += size;
 
         if size > MAX_SMALL_OBJECT_SIZE {
-            return self.alloc_large(size, align);
+            let ptr = self.alloc_large(size, align);
+            self.young_allocated += size;
+            return ptr;
         }
 
         // Validate alignment - size class must satisfy alignment requirement
@@ -2068,23 +2068,26 @@ impl LocalHeap {
         };
 
         if let Some(ptr) = ptr_opt {
+            self.young_allocated += size;
             self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
             return ptr;
         }
 
         if let Some(ptr) = self.alloc_from_free_list(class_index) {
+            self.young_allocated += size;
             self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
             return ptr;
         }
 
         #[cfg(feature = "lazy-sweep")]
         if let Some(ptr) = self.alloc_from_pending_sweep(class_index) {
+            self.young_allocated += size;
             self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
             return ptr;
         }
 
         let ptr = self.alloc_slow(size, class_index);
-
+        self.young_allocated += size;
         self.update_range(ptr.as_ptr() as usize & page_mask(), page_size());
         ptr
     }

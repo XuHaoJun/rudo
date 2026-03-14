@@ -1,6 +1,6 @@
 # [Bug]: LocalHeap::alloc() 過早增加 young_allocated 導致記憶體計數不準確
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -122,3 +122,18 @@ pub fn alloc<T>(&mut self) -> NonNull<u8> {
 
 **Geohot (Exploit 觀點):**
 極難利用此漏洞。需要精確控制分配失敗的時機，且即使成功，也只能影響堆積統計數據，對攻擊無直接幫助。
+
+---
+
+## Resolution (2026-03-15)
+
+**Outcome:** Fixed.
+
+Moved `young_allocated += size` from the start of `alloc()` to after each successful allocation path:
+- `alloc_large()` return
+- TLAB allocation success
+- `alloc_from_free_list()` success
+- `alloc_from_pending_sweep()` success (lazy-sweep)
+- `alloc_slow()` return
+
+If any allocation path panics (e.g. alignment assert, OOM), the counter is no longer incremented.

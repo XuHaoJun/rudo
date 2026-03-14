@@ -1,7 +1,7 @@
 # [Bug]: GcScope::spawn Missing Object Liveness Validation
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -129,3 +129,13 @@ if header.has_dead_flag(tracked.index) {
 2. 觸發 GC 回收該物件
 3. 在同一個 slot 分配惡意資料
 4. 透過 spawn 建立的 handle 存取錯誤資料
+
+---
+
+## Resolution (2026-03-14)
+
+Fixed in `crates/rudo-gc/src/handles/async.rs`. Added liveness checks after `validate_gc_in_current_heap`:
+- `is_allocated(idx)` via `ptr_to_object_index` to detect swept slots
+- `has_dead_flag`, `dropping_state`, `is_under_construction` on the GcBox
+
+Regression test: `tests/bug248_gcscope_spawn_liveness_check.rs`

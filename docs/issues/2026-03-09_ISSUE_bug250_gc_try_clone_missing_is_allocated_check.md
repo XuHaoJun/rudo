@@ -1,7 +1,7 @@
 # [Bug]: Gc::try_clone missing is_allocated check after ref increment (TOCTOU)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -131,3 +131,9 @@ If an attacker can control the timing of allocation after sweep, they could pote
 
 - bug140: Gc::try_clone TOCTOU panic (different - about panic vs return None)
 - bug249: Handle::to_gc and AsyncHandle::to_gc missing is_allocated check (similar pattern but different functions)
+
+---
+
+## Resolution (2026-03-14)
+
+**Verified fixed.** `ptr.rs` lines 1408–1416 now include the `is_allocated` check after successful `try_inc_ref_if_nonzero()`, matching the pattern in `Gc::clone()`. When the slot was swept, the code returns `None` without calling `dec_ref` (per bug133 — slot may be reused). `test_try_clone` passes.

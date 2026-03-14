@@ -1,6 +1,6 @@
 # [Bug]: GcBoxWeakRef/GcHandle/WeakCrossThreadHandle implement Send+Sync without requiring T: Send
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -113,3 +113,18 @@ This is a soundness issue. The unsafe impl of Send/Sync without proper bounds vi
 
 **Geohot (Exploit 觀點):**
 An attacker who finds a way to bypass the runtime thread check could potentially cause data races. The current implementation relies on "defense in depth" but the first line of defense (the type system) is bypassed.
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Invalid — deliberate design choice, not a bug.
+
+The `Send + Sync` implementations without `T: Send`/`T: Sync` bounds are **intentional** and documented in `crates/rudo-gc/src/handles/cross_thread.rs`:
+
+- Module docs (lines 8–9): "Cross-thread handles are `Send + Sync` even when `T` is not, enabling frameworks to schedule UI updates from async threads without requiring signal types to implement thread-safe traits."
+- Safety argument (lines 14–29): (1) No direct access to `T` from non-origin threads; (2) `resolve()` enforces origin-thread affinity at runtime (panic if wrong thread); (3) Root registration keeps the object alive.
+
+The handle is an opaque token — it stores `NonNull<GcBox<T>>`, `Weak<ThreadControlBlock>`, `ThreadId`, and `HandleId`. The only way to obtain `Gc<T>` (and thus access `T`) is via `resolve()`, which asserts `std::thread::current().id() == self.origin_thread` before any access. Non-origin threads cannot access `T`; they can only hold the handle.
+
+Adding `T: Send`/`T: Sync` bounds would be a **breaking API change** that would remove the documented use case (e.g. `GcHandle<NonSendType>` for UI scheduling). No source code changes applied per Invalid-issue policy.

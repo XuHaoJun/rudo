@@ -1182,6 +1182,24 @@ impl GcScope {
 
                 validate_gc_in_current_heap(tracked.ptr as *const u8);
 
+                // Liveness checks: ensure tracked object was not swept or reclaimed (bug248).
+                unsafe {
+                    if let Some(idx) = crate::heap::ptr_to_object_index(tracked.ptr as *const u8) {
+                        let header = crate::heap::ptr_to_page_header(tracked.ptr as *const u8);
+                        assert!(
+                            (*header.as_ptr()).is_allocated(idx),
+                            "GcScope::spawn: tracked object was deallocated"
+                        );
+                    }
+                }
+                let gc_box = unsafe { &*tracked.ptr };
+                assert!(
+                    !gc_box.has_dead_flag()
+                        && gc_box.dropping_state() == 0
+                        && !gc_box.is_under_construction(),
+                    "GcScope::spawn: tracked object is dead, dropping, or under construction"
+                );
+
                 let slot_ptr = unsafe {
                     let slots_ptr = scope.data.block.slots.get() as *mut HandleSlot;
                     slots_ptr.add(idx)

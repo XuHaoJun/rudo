@@ -179,6 +179,9 @@ impl<T: Trace + ?Sized> GcBox<T> {
                     unsafe {
                         (this.drop_fn)(self_ptr.cast::<u8>());
                     }
+                    // Ensure ref_count reflects "count reached zero" semantics (bug263).
+                    // Release ordering: drop_fn happens-before other threads observe ref_count==0.
+                    this.ref_count.store(0, Ordering::Release);
                     return true;
                 }
                 // CAS failed - another thread beat us to marking
@@ -1659,6 +1662,15 @@ impl<T: Trace> Gc<T> {
             };
         };
         unsafe {
+            // Check is_allocated before inc_weak to avoid operating on swept-and-reused slot (bug257).
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return GcBoxWeakRef {
+                        ptr: AtomicNullable::null(),
+                    };
+                }
+            }
             let gc_box = &*ptr.as_ptr();
             if gc_box.is_under_construction()
                 || gc_box.has_dead_flag()
@@ -1774,6 +1786,14 @@ impl<T: Trace + 'static> Gc<T> {
         let ptr = self.as_non_null();
 
         unsafe {
+            // Check is_allocated before inc_weak to avoid operating on swept-and-reused slot (bug257).
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::weak_cross_thread_handle: slot has been swept and reused"
+                );
+            }
             let gc_box = &*ptr.as_ptr();
             assert!(
                 !gc_box.has_dead_flag()
@@ -2731,11 +2751,14 @@ impl<K: Trace + 'static, V: Trace + 'static> std::fmt::Debug for Ephemeron<K, V>
 unsafe impl<K: Trace + 'static, V: Trace + 'static> Trace for Ephemeron<K, V> {
     fn trace(&self, visitor: &mut impl Visitor) {
         // Ephemeron semantics: value is only reachable if key is reachable.
-        // - The key is stored as a Weak, so it's not traced (correct)
-        // - Only trace value when key is alive; when key dies, value can be collected
-        if self.is_key_alive() {
+        // - The key is stored as a Weak, so it's not traced directly (correct)
+        // - Use try_upgrade() to atomically confirm key liveness and obtain a strong ref,
+        //   avoiding TOCTOU with is_key_alive() (matches GcCapture implementation).
+        if let Some(key_gc) = self.key.try_upgrade() {
+            key_gc.trace(visitor);
             visitor.visit(&self.value);
         }
+        // If key is dead, value can be collected — trace nothing (ephemeron semantics).
     }
 }
 

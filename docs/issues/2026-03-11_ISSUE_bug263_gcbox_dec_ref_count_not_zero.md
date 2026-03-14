@@ -1,7 +1,7 @@
 # [Bug]: GcBox::dec_ref 返回 true 时 ref_count 未从 1 递减到 0
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威胁模型评估 (Threat Model Assessment)
 
@@ -139,3 +139,9 @@ if this.try_mark_dropping() {
 - 需要能够读取已释放对象的 ref_count
 - dead_flag 提供了额外保护层
 - 潜在的边缘情况：如果某个代码路径在 drop 后检查 ref_count 是否为 0，可能会错误地认为对象还活着
+
+---
+
+## Resolution (2026-03-15)
+
+**Fixed.** Added `this.ref_count.store(0, Ordering::Release)` before `return true` in `GcBox::dec_ref` (ptr.rs). Ensures ref_count reflects "count reached zero" semantics per API contract. Release ordering guarantees drop_fn happens-before other threads observe ref_count==0.
