@@ -1,6 +1,6 @@
 # [Bug]: Gc::as_weak inc_weak missing is_allocated check
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -149,3 +149,11 @@ An attacker who can control the timing of lazy sweep slot reuse could corrupt we
 
 - bug224: GcBox::as_weak inc_weak missing is_allocated check - Same issue but for GcBox::as_weak()
 - bug226: Gc::try_deref missing is_allocated check - Similar pattern for try_deref
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Already fixed.
+
+The fix is present in `ptr.rs` (lines 1617–1626). `Gc::as_weak` now checks `is_allocated(idx)` via `ptr_to_object_index` and `ptr_to_page_header` after calling `inc_weak()`. If the slot is not allocated, it returns `GcBoxWeakRef { ptr: AtomicNullable::null() }` without returning the weak ref. Per bug133, `dec_weak` is not called when the slot may be reused (to avoid operating on freed memory). No code changes required.

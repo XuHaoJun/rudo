@@ -1,7 +1,7 @@
 # [Bug]: Gc::weak_cross_thread_handle inc_weak 後缺少 is_allocated 檢查導致 TOCTOU
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -123,5 +123,27 @@ if let Some(idx) = crate::heap::ptr_to_object_index(self.as_non_null().as_ptr() 
 
 ## 修復狀態
 
-- [ ] 已修復
-- [x] 未修復
+- [x] 已修復
+- [ ] 未修復
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Already fixed.
+
+The fix was applied in the current codebase. `Gc::weak_cross_thread_handle()` in `ptr.rs` (lines 1721–1728) correctly performs an `is_allocated(idx)` check after `inc_weak()`:
+
+```rust
+gc_box.inc_weak();
+
+if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+    let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+    assert!(
+        (*header.as_ptr()).is_allocated(idx),
+        "Gc::weak_cross_thread_handle: object slot was swept after inc_weak"
+    );
+}
+```
+
+Behavior matches the pattern used in bug 218 (GcHandle::downgrade). The implementation uses `assert!` (panic) rather than rollback via `dec_weak` when the slot is swept, per bug133 guidance (dec_weak on a reused slot would target the wrong object).

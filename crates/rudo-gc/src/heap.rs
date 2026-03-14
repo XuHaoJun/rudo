@@ -3051,40 +3051,65 @@ pub fn incremental_write_barrier(ptr: *const u8) {
         // Required for SATB correctness in incremental GC.
         std::sync::atomic::fence(Ordering::AcqRel);
 
+        let page_addr = ptr_addr & page_mask();
+
         unsafe {
-            let header = ptr_to_page_header(ptr);
+            // Tail pages of multi-page large objects have no PageHeader; ptr_to_page_header
+            // would yield garbage. Check large_object_map first (see find_gc_box_from_ptr).
+            let (header, _index) =
+                if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
+                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + h_size + size {
+                        return;
+                    }
+                    let h_ptr = head_addr as *mut PageHeader;
+                    // Validate MAGIC to ensure the large_object_map entry is valid (bug190).
+                    if (*h_ptr).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    // Skip if slot was swept; avoids corrupting remembered set with reused slot (bug286).
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
+                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                    if (*h_ptr).generation == 0 && !has_gen_old {
+                        return;
+                    }
+                    (NonNull::new_unchecked(h_ptr), 0_usize)
+                } else {
+                    let h = ptr_to_page_header(ptr);
+                    if (*h.as_ptr()).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    let block_size = (*h.as_ptr()).block_size as usize;
+                    let header_size = (*h.as_ptr()).header_size as usize;
+                    let header_page_addr = h.as_ptr() as usize;
 
-            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
-                return;
-            }
+                    if ptr_addr < header_page_addr + header_size {
+                        return;
+                    }
 
-            let block_size = (*header.as_ptr()).block_size as usize;
-            let header_size = (*header.as_ptr()).header_size as usize;
-            let header_page_addr = header.as_ptr() as usize;
+                    let offset = ptr_addr - (header_page_addr + header_size);
+                    let index = offset / block_size;
+                    let obj_count = (*h.as_ptr()).obj_count as usize;
+                    if index >= obj_count {
+                        return;
+                    }
 
-            if ptr_addr < header_page_addr + header_size {
-                return;
-            }
-
-            let offset = ptr_addr - (header_page_addr + header_size);
-            let index = offset / block_size;
-            let obj_count = (*header.as_ptr()).obj_count as usize;
-            if index >= obj_count {
-                return;
-            }
-
-            // GEN_OLD early-exit: skip only if page young AND object has no gen_old_flag (bug71).
-            // Skip if slot was swept; avoids corrupting remembered set with reused slot (bug286).
-            if !(*header.as_ptr()).is_allocated(index) {
-                return;
-            }
-            // Cache flag to avoid TOCTOU between check and barrier (bug133).
-            let gc_box_addr =
-                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-            let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-            if (*header.as_ptr()).generation == 0 && !has_gen_old {
-                return;
-            }
+                    // GEN_OLD early-exit: skip only if page young AND object has no gen_old_flag (bug71).
+                    // Skip if slot was swept; avoids corrupting remembered set with reused slot (bug286).
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
+                    // Cache flag to avoid TOCTOU between check and barrier (bug133).
+                    let gc_box_addr =
+                        (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
+                        return;
+                    }
+                    (h, index)
+                };
 
             heap.record_in_remembered_buffer(header);
         }

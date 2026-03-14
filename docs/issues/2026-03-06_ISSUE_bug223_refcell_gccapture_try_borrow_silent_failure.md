@@ -1,6 +1,6 @@
 # [Bug]: RefCell GcCapture 使用 try_borrow() 導致靜默失敗 - GC 指標可能遺漏
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -171,3 +171,12 @@ fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
 - 稍後訪問時發生 UAF
 
 在 async 上下文或啟用並發 GC 功能時，這一點特別令人擔憂。
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Fixed.
+
+The fix was applied: `RefCell<T>`'s `GcCapture::capture_gc_ptrs_into` now uses blocking `borrow()` instead of `try_borrow()` (cell.rs:665-672). When the RefCell is mutably borrowed, `borrow()` panics — explicit failure is preferable to silent UAF. Regression tests in `tests/bug223_refcell_gccapture_silent_failure.rs` verify correct capture when not borrowed and panic when mutably borrowed.
+

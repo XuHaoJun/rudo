@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::incremental_write_barrier 缺少 is_allocated 檢查與大物件處理
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -130,3 +130,13 @@ let (header, index) = if let Some(&(head_addr, size, h_size)) = heap.large_objec
 
 **Geohot (Exploit 觀點):**
 雖然函數目前標記為 dead code，但若未來啟用，可能成為攻擊向量。攻擊者可能透過觸發 slot 回收並重用來觸發不一致的 barrier 狀態。
+
+---
+
+## Resolution (2026-03-14)
+
+Fixed in `crates/rudo-gc/src/cell.rs`. Rewrote `GcThreadSafeCell::incremental_write_barrier` to:
+1. Use `with_heap` for heap access and bounds check via `heap_start()`/`heap_end()`
+2. Check `large_object_map` first for large objects (tail pages have no PageHeader)
+3. Add `is_allocated` check for both large (index 0) and small object paths before recording
+4. Mirror the structure of `heap::incremental_write_barrier` (bug220 fix)

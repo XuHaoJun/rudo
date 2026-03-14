@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::downgrade inc_weak 後缺少 is_allocated 檢查導致 TOCTOU
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -123,5 +123,11 @@ if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const 
 
 ## 修復狀態
 
-- [ ] 已修復
-- [x] 未修復
+- [x] 已修復
+- [ ] 未修復
+
+---
+
+## Resolution Note (2026-03-14)
+
+The `is_allocated` post-check after `inc_weak()` was already present (likely added in bug133 fix). The failure path previously returned a dangling `WeakCrossThreadHandle` instead of panicking. Updated to `assert!` and panic on failure, matching `Gc::downgrade()` behavior. Per bug133, we do not call `dec_weak` on failure (slot may be reused).

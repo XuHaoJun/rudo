@@ -1,7 +1,7 @@
 # [Bug]: GcBox::as_weak inc_weak missing is_allocated check
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -88,3 +88,9 @@ Incrementing weak reference count on a deallocated/reallocated slot leads to ref
 
 **Geohot (Exploit 觀點):**
 If an attacker can control the timing of slot reuse, they could corrupt weak reference counts leading to use-after-free scenarios.
+
+---
+
+## Resolution (2026-03-14)
+
+**Verified:** The fix is already present in `ptr.rs` (lines 453-461). `GcBox::as_weak` now checks `is_allocated(idx)` via `ptr_to_object_index` and `ptr_to_page_header` before calling `inc_weak()`. If the slot is not allocated, it returns `GcBoxWeakRef { ptr: AtomicNullable::null() }` without incrementing. No code changes required.

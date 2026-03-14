@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::downgrade Missing is_allocated Check
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -124,3 +124,9 @@ unsafe {
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可能透過控制 GC timing 來觸發這個問題，進一步利用記憶體佈局進行攻擊。
+
+---
+
+## Resolution (2026-03-14)
+
+Fixed in `crates/rudo-gc/src/handles/cross_thread.rs`. Added `is_allocated` check **before** dereferencing `self.ptr.as_ptr()` in both the origin-thread and orphan paths of `GcHandle::downgrade`. This matches the pattern used in `Gc::downgrade` (ptr.rs) and prevents UAF when the slot has been swept and reused. All cross_thread_handle and cross_thread_weak_clone tests pass.

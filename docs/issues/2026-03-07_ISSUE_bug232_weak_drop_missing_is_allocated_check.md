@@ -1,7 +1,7 @@
 # [Bug]: Weak::drop Missing is_allocated Check After is_gc_box_pointer_valid
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ---
 
@@ -158,3 +158,11 @@ impl<T: Trace> Drop for Weak<T> {
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可能透過控制 GC timing 來觸發這個問題，進一步利用記憶體佈局進行攻擊。特別是在 is_gc_box_pointer_valid 檢查通過後、weak count 執行前的時間窗口。
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Fixed.
+
+Added `is_allocated` check in `Weak<T>::drop` (ptr.rs), matching the pattern from bug231 (`WeakCrossThreadHandle::drop`). The check runs after `is_gc_box_pointer_valid` and before dereferencing the GcBox, returning early if the slot has been swept and reused. All Weak-related tests pass.

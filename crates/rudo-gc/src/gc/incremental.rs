@@ -411,10 +411,15 @@ impl IncrementalMarkState {
 
     #[inline]
     fn update_max_worklist_size(&self, size: usize) {
-        let current_max = self.max_worklist_size.load(Ordering::SeqCst);
-        if size > current_max {
-            self.max_worklist_size.store(size, Ordering::SeqCst);
-        }
+        self.max_worklist_size
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current_max| {
+                if size > current_max {
+                    Some(size)
+                } else {
+                    None
+                }
+            })
+            .ok();
     }
 
     fn max_worklist_size(&self) -> usize {

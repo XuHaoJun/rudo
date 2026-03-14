@@ -714,7 +714,10 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             // Try atomic transition from 0 to 1 (same as regular upgrade)
             if gc_box.try_inc_ref_from_zero() {
                 // Second check: verify object wasn't dropped between check and CAS
-                if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                if gc_box.dropping_state() != 0
+                    || gc_box.has_dead_flag()
+                    || gc_box.is_under_construction()
+                {
                     // Undo the increment and return None
                     let _ = gc_box;
                     crate::ptr::GcBox::dec_ref(ptr.as_ptr());
@@ -742,7 +745,10 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             }
             // Post-CAS safety check: verify object wasn't dropped between check and CAS
             // (same pattern as Weak::try_upgrade)
-            if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+            if gc_box.dropping_state() != 0
+                || gc_box.has_dead_flag()
+                || gc_box.is_under_construction()
+            {
                 GcBox::dec_ref(ptr.as_ptr());
                 return None;
             }
@@ -1095,7 +1101,7 @@ impl<T: Trace> Gc<T> {
 
     #[deprecated(
         since = "0.0.1",
-        note = "Self-referential cycles are not supported. Use `new_cyclic_weak` instead."
+        note = "This function is non-functional: the closure receives a null Gc. Use `new_cyclic_weak` instead."
     )]
     #[allow(unused)]
     #[must_use]
@@ -1295,6 +1301,15 @@ impl<T: Trace> Gc<T> {
             return None;
         }
         let gc_box_ptr = ptr.as_ptr();
+        // Check slot is still allocated before dereferencing (avoids UAF with lazy sweep).
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return None;
+                }
+            }
+        }
         unsafe {
             if (*gc_box_ptr).has_dead_flag()
                 || (*gc_box_ptr).dropping_state() != 0
@@ -2126,7 +2141,10 @@ impl<T: Trace> Weak<T> {
                     .is_ok()
                 {
                     // Post-CAS safety check: same as Weak::upgrade — re-verify after owning a count
-                    if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                    if gc_box.dropping_state() != 0
+                        || gc_box.has_dead_flag()
+                        || gc_box.is_under_construction()
+                    {
                         // SAFETY: we just incremented ref_count via successful CAS;
                         // dec_ref is the correct way to undo it.
                         GcBox::dec_ref(ptr.as_ptr());
@@ -2426,6 +2444,14 @@ impl<T: Trace> Drop for Weak<T> {
         }
 
         unsafe {
+            // Check slot is still allocated before dereferencing (bug232) — avoids UAF when lazy
+            // sweep has reclaimed and reused the slot.
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return;
+                }
+            }
             let gc_box = &*ptr.as_ptr();
             if gc_box.has_dead_flag()
                 || gc_box.dropping_state() != 0

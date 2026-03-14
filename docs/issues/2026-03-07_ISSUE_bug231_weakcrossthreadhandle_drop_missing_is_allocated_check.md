@@ -1,7 +1,7 @@
 # [Bug]: WeakCrossThreadHandle::drop Missing is_allocated Check After is_gc_box_pointer_valid
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -149,3 +149,11 @@ impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可能透過控制 GC timing 來觸發這個問題，進一步利用記憶體佈局進行攻擊。特別是在 is_gc_box_pointer_valid 檢查通過後、dec_weak 執行前的時間窗口。
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Fixed.
+
+Added `is_allocated` check in `WeakCrossThreadHandle::drop` (cross_thread.rs) before dereferencing the pointer. The fix uses `ptr_to_object_index` and `ptr_to_page_header` to verify the slot is still allocated; if not (e.g. lazy sweep reclaimed and reused the slot), the function returns early without calling `dec_weak`. Matches the pattern used in `GcHandle::downgrade` and `GcBoxWeakRef` in ptr.rs.

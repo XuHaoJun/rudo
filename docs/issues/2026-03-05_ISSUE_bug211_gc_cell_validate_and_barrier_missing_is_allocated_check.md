@@ -1,6 +1,6 @@
 # [Bug]: gc_cell_validate_and_barrier 缺少 is_allocated 檢查 - 與 bug200 不同
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 威脅模型評估 (Threat Model Assessment)
@@ -123,3 +123,21 @@ if !(*h.as_ptr()).is_allocated(index) {
 
 **Geohot (Exploit 觀點):**
 攻擊者可以嘗試控制 slot 重用的時序，來操縱 dirty_pages 的內容。
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Already fixed.
+
+The fix is present in `heap.rs` at lines 2930–2933. A unified `is_allocated(index)` check runs for both the large-object and small-object paths before `set_dirty(index)`:
+
+```rust
+// Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug211).
+if !(*h.as_ptr()).is_allocated(index) {
+    return;
+}
+(*h.as_ptr()).set_dirty(index);
+```
+
+No code changes required.

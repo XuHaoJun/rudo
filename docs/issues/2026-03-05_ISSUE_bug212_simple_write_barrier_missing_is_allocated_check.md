@@ -1,7 +1,7 @@
 # [Bug]: simple_write_barrier 缺少 is_allocated 檢查 - 與 bug200/211 不同的 code path
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -120,3 +120,16 @@ if !(*h.as_ptr()).is_allocated(index) {
 
 **Geohot (Exploit 觀點):**
 雖然函數目前標記為 dead code，但若未來啟用，可能成為攻擊向量。
+
+---
+
+## Resolution Note (2026-03-14)
+
+**Outcome:** Already fixed. No code changes required.
+
+The `simple_write_barrier` in `heap.rs` now has `is_allocated` checks in both paths:
+- **Large object** (lines 2757–2759): `if !(*h_ptr).is_allocated(0) { return; }` before gen_old check
+- **Small object** (lines 2786–2788): `if !(*h.as_ptr()).is_allocated(index) { return; }` before gen_old check
+- **Unified** (lines 2798–2801): Additional `is_allocated(index)` check immediately before `set_dirty`, with comment referencing bug212
+
+The fix matches the suggested remediation. Verified by static code inspection.

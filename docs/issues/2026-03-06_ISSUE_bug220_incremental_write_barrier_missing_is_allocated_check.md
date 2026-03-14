@@ -1,6 +1,6 @@
 # [Bug]: incremental_write_barrier 缺少 is_allocated 檢查與大物件處理
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -117,3 +117,9 @@ let (header, index) = if let Some(&(head_addr, size, h_size)) = heap.large_objec
 
 **Geohot (Exploit 觀點):**
 雖然函數目前標記為 dead code，但若未來啟用，可能成為攻擊向量。
+
+---
+
+## Resolution (2026-03-14)
+
+**Fixed.** The `is_allocated` check was already present (bug286). The missing piece was **large object handling**: `incremental_write_barrier` now checks `heap.large_object_map` before calling `ptr_to_page_header`, matching the pattern used in `simple_write_barrier` and `gc_cell_validate_and_barrier`. For tail pages of multi-page large objects, `ptr_to_page_header` would have yielded garbage; the fix routes through `large_object_map` to obtain the correct header.

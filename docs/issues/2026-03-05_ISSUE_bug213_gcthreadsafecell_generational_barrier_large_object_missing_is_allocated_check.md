@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::generational_write_barrier 大型物件路徑缺少 is_allocated 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -98,3 +98,20 @@ if (*header).magic == MAGIC_GC_PAGE && (*header).generation > 0 {
 
 **Geohot (Exploit 觀點):**
 攻擊者可以嘗試控制 slot 重用的時序，來操縱 dirty_pages 的內容。
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Invalid — already fixed.
+
+The large object path in `GcThreadSafeCell::generational_write_barrier` (cell.rs:1230–1234) already includes the `is_allocated(0)` check before calling `set_dirty(0)`:
+
+```rust
+if (*header).is_allocated(0) {
+    (*header).set_dirty(0);
+    heap.add_to_dirty_pages(NonNull::new_unchecked(header));
+}
+```
+
+The suggested fix was applied in a prior commit. No code changes needed.

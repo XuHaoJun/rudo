@@ -332,6 +332,14 @@ impl<T: Trace + 'static> GcHandle<T> {
                 panic!("GcHandle::downgrade: handle has been unregistered");
             }
             unsafe {
+                // Check is_allocated BEFORE dereferencing - slot may have been swept and reused.
+                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
+                {
+                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        panic!("GcHandle::downgrade: slot has been deallocated and reused");
+                    }
+                }
                 let gc_box = &*self.ptr.as_ptr();
                 assert!(
                     !gc_box.has_dead_flag()
@@ -344,14 +352,10 @@ impl<T: Trace + 'static> GcHandle<T> {
                 if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
                 {
                     let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                    if !(*header.as_ptr()).is_allocated(idx) {
-                        // Don't call dec_weak - slot may be reused (bug133)
-                        return WeakCrossThreadHandle {
-                            weak: GcBoxWeakRef::new(NonNull::dangling()),
-                            origin_tcb: Weak::clone(&self.origin_tcb),
-                            origin_thread: self.origin_thread,
-                        };
-                    }
+                    assert!(
+                        (*header.as_ptr()).is_allocated(idx),
+                        "GcHandle::downgrade: object slot was swept during downgrade"
+                    );
                 }
             }
             drop(roots);
@@ -361,6 +365,16 @@ impl<T: Trace + 'static> GcHandle<T> {
                 panic!("GcHandle::downgrade: handle has been unregistered");
             }
             unsafe {
+                // Check is_allocated BEFORE dereferencing - slot may have been swept and reused.
+                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
+                {
+                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        panic!(
+                            "GcHandle::downgrade: slot has been deallocated and reused (orphan)"
+                        );
+                    }
+                }
                 let gc_box = &*self.ptr.as_ptr();
                 assert!(
                     !gc_box.has_dead_flag()
@@ -373,14 +387,10 @@ impl<T: Trace + 'static> GcHandle<T> {
                 if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
                 {
                     let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                    if !(*header.as_ptr()).is_allocated(idx) {
-                        // Don't call dec_weak - slot may be reused (bug133)
-                        return WeakCrossThreadHandle {
-                            weak: GcBoxWeakRef::new(NonNull::dangling()),
-                            origin_tcb: Weak::clone(&self.origin_tcb),
-                            origin_thread: self.origin_thread,
-                        };
-                    }
+                    assert!(
+                        (*header.as_ptr()).is_allocated(idx),
+                        "GcHandle::downgrade: object slot was swept during downgrade (orphan)"
+                    );
                 }
             }
             drop(orphan);
@@ -683,6 +693,14 @@ impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
             return;
         }
         unsafe {
+            // Check slot is still allocated before dereferencing (bug231) — avoids UAF when lazy
+            // sweep has reclaimed and reused the slot.
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return;
+                }
+            }
             let gc_box = &*ptr.as_ptr();
             if gc_box.has_dead_flag()
                 || gc_box.dropping_state() != 0

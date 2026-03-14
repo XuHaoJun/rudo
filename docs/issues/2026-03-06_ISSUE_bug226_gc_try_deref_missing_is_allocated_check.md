@@ -1,7 +1,7 @@
 # [Bug]: Gc::try_deref 缺少 is_allocated 檢查 - 與 Deref::deref 行為不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -161,3 +161,11 @@ pub fn try_deref(gc: &Self) -> Option<&T> {
 
 - bug197: Gc 核心方法 (as_ptr, internal_ptr, etc.) 缺少 is_allocated 檢查 - 本 bug 是 bug197 的補充，專門針對 `try_deref`
 - bug207: Gc::deref 缺少 is_allocated 檢查 - 該 bug 修復了 `Deref::deref`，但未覆蓋 `try_deref`
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Fixed.
+
+Added `is_allocated` check to `Gc::try_deref()` in `ptr.rs`, matching the pattern used in `try_clone`, `as_ptr`, and `Deref::deref`. The check runs before dereferencing the `GcBox` to avoid UAF when lazy sweep has reclaimed the slot. All tests pass.

@@ -3,20 +3,20 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 228
-- **Open**: 60
-- **Invalid**: 14
+- **Fixed**: 247
+- **Open**: 50
+- **Invalid**: 15
 - **Unknown**: 3
-- **Verified**: 14
+- **Verified**: 15
 
 ### By Tags
-- **Verified**: 259
-- **Not Verified**: 17
+- **Verified**: 277
+- **Not Verified**: 16
 - **Not Reproduced**: 11
 - **Fixed**: 1
 - **Unknown**: 2
-- **Unverified**: 28
-- **Verified, Fixed**: 1
+- **Unverified**: 22
+- **Verified, Regression**: 1
 
 ## All Issues
 
@@ -162,6 +162,7 @@
 | [2026-03-12_ISSUE_bug122_weak_upgrade_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug122_weak_upgrade_missing_is_allocated_check.md) | Weak::upgrade 缺少 is_allocated 檢查 - 與 GcBoxWeakRef::upgrade 行為不一致 | Fixed | Verified |
 | [2026-03-13_ISSUE_bug122_gcrwlock_guard_drop_missing_generational_mark.md](./2026-03-13_ISSUE_bug122_gcrwlock_guard_drop_missing_generational_mark.md) | GcRwLock Guard Drop 缺少generational barrier的mark_object_black調用 | Fixed | Verified |
 | [2026-03-13_ISSUE_bug122_gcthreadsafecell_borrow_mut_missing_mark_object_black.md](./2026-03-13_ISSUE_bug122_gcthreadsafecell_borrow_mut_missing_mark_object_black.md) | GcThreadSafeCell::borrow_mut() 缺少標記新 GC 指針為黑色的程式碼 | Fixed | Verified |
+| [2026-03-14_ISSUE_bug122_gc_weak_cross_thread_handle_missing_is_allocated_check.md](./2026-03-14_ISSUE_bug122_gc_weak_cross_thread_handle_missing_is_allocated_check.md) | Gc::weak_cross_thread_handle missing is_allocated check after inc_weak | Fixed | Verified |
 | [2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md) | Incremental Marking `mark_root_for_snapshot` 缺少 is_allocated 檢查 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md) | WeakCrossThreadHandle Clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md](./2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md) | GcBox::try_inc_ref_from_zero 內部缺少 dropping_state 檢查 - API 設計潛在問題 | Fixed | Verified |
@@ -261,29 +262,29 @@
 | [2026-03-05_ISSUE_bug208_weak_strong_count_missing_is_gc_box_pointer_valid_check.md](./2026-03-05_ISSUE_bug208_weak_strong_count_missing_is_gc_box_pointer_valid_check.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 is_gc_box_pointer_valid 檢查 | Invalid | Not Reproduced |
 | [2026-03-05_ISSUE_bug209_weak_raw_addr_ptr_eq_missing_is_gc_box_pointer_valid_check.md](./2026-03-05_ISSUE_bug209_weak_raw_addr_ptr_eq_missing_is_gc_box_pointer_valid_check.md) | Weak::raw_addr() 與 Weak::ptr_eq() 缺少 is_gc_box_pointer_valid 檢查 | Fixed | Verified |
 | [2026-03-05_ISSUE_bug210_handle_to_gc_missing_post_check.md](./2026-03-05_ISSUE_bug210_handle_to_gc_missing_post_check.md) | Handle::to_gc and AsyncHandle::to_gc missing post-increment safety check (TOCTOU) | Fixed | Verified |
-| [2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md) | gc_cell_validate_and_barrier 缺少 is_allocated 檢查 - 與 bug200 不同 | Open | Verified |
-| [2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md) | simple_write_barrier 缺少 is_allocated 檢查 - 與 bug200/211 不同的 code path | Open | Unverified |
-| [2026-03-05_ISSUE_bug213_gcthreadsafecell_generational_barrier_large_object_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug213_gcthreadsafecell_generational_barrier_large_object_missing_is_allocated_check.md) | GcThreadSafeCell::generational_write_barrier 大型物件路徑缺少 is_allocated 檢查 | Open | Unverified |
+| [2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md) | gc_cell_validate_and_barrier 缺少 is_allocated 檢查 - 與 bug200 不同 | Fixed | Verified |
+| [2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md) | simple_write_barrier 缺少 is_allocated 檢查 - 與 bug200/211 不同的 code path | Fixed | Verified |
+| [2026-03-05_ISSUE_bug213_gcthreadsafecell_generational_barrier_large_object_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug213_gcthreadsafecell_generational_barrier_large_object_missing_is_allocated_check.md) | GcThreadSafeCell::generational_write_barrier 大型物件路徑缺少 is_allocated 檢查 | Invalid | Not Verified |
 | [2026-03-05_ISSUE_bug214_weak_may_be_valid_missing_is_gc_box_pointer_valid_check.md](./2026-03-05_ISSUE_bug214_weak_may_be_valid_missing_is_gc_box_pointer_valid_check.md) | Weak::may_be_valid() 缺少 is_gc_box_pointer_valid 檢查 | Verified | Verified |
 | [2026-03-06_ISSUE_bug215_mark_page_dirty_for_ptr_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug215_mark_page_dirty_for_ptr_missing_is_allocated_check.md) | mark_page_dirty_for_ptr 缺少 is_allocated 檢查 - 與 bug200/213 不同的code path | Verified | Verified |
 | [2026-03-06_ISSUE_bug216_gcboxweakref_may_be_valid_missing_is_gc_box_pointer_valid_check.md](./2026-03-06_ISSUE_bug216_gcboxweakref_may_be_valid_missing_is_gc_box_pointer_valid_check.md) | GcBoxWeakRef::may_be_valid() 缺少 is_gc_box_pointer_valid 檢查 | Fixed | Verified |
 | [2026-03-06_ISSUE_bug217_weak_clone_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug217_weak_clone_inc_weak_missing_is_allocated_check.md) | Weak::clone 缺少 inc_weak 後的 is_allocated 檢查導致 TOCTOU | Fixed | Verified |
-| [2026-03-06_ISSUE_bug218_gchandle_downgrade_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug218_gchandle_downgrade_inc_weak_missing_is_allocated_check.md) | GcHandle::downgrade inc_weak 後缺少 is_allocated 檢查導致 TOCTOU | Open | Verified |
-| [2026-03-06_ISSUE_bug219_gc_weak_cross_thread_handle_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug219_gc_weak_cross_thread_handle_inc_weak_missing_is_allocated_check.md) | Gc::weak_cross_thread_handle inc_weak 後缺少 is_allocated 檢查導致 TOCTOU | Open | Unverified |
-| [2026-03-06_ISSUE_bug220_incremental_write_barrier_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug220_incremental_write_barrier_missing_is_allocated_check.md) | incremental_write_barrier 缺少 is_allocated 檢查與大物件處理 | Open | Verified |
-| [2026-03-06_ISSUE_bug221_gcthreadsafecell_incremental_write_barrier_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug221_gcthreadsafecell_incremental_write_barrier_missing_is_allocated_check.md) | GcThreadSafeCell::incremental_write_barrier 缺少 is_allocated 檢查與大物件處理 | Open | Unverified |
-| [2026-03-06_ISSUE_bug222_gc_new_cyclic_non_functional.md](./2026-03-06_ISSUE_bug222_gc_new_cyclic_non_functional.md) | Gc::new_cyclic 函數存在但無法正常運作 | Open | Verified |
-| [2026-03-06_ISSUE_bug223_refcell_gccapture_try_borrow_silent_failure.md](./2026-03-06_ISSUE_bug223_refcell_gccapture_try_borrow_silent_failure.md) | RefCell GcCapture 使用 try_borrow() 導致靜默失敗 - GC 指標可能遺漏 | Open | Verified |
-| [2026-03-06_ISSUE_bug224_gcbox_as_weak_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug224_gcbox_as_weak_inc_weak_missing_is_allocated_check.md) | GcBox::as_weak inc_weak missing is_allocated check | Open | Unverified |
+| [2026-03-06_ISSUE_bug218_gchandle_downgrade_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug218_gchandle_downgrade_inc_weak_missing_is_allocated_check.md) | GcHandle::downgrade inc_weak 後缺少 is_allocated 檢查導致 TOCTOU | Fixed | Verified |
+| [2026-03-06_ISSUE_bug219_gc_weak_cross_thread_handle_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug219_gc_weak_cross_thread_handle_inc_weak_missing_is_allocated_check.md) | Gc::weak_cross_thread_handle inc_weak 後缺少 is_allocated 檢查導致 TOCTOU | Fixed | Verified |
+| [2026-03-06_ISSUE_bug220_incremental_write_barrier_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug220_incremental_write_barrier_missing_is_allocated_check.md) | incremental_write_barrier 缺少 is_allocated 檢查與大物件處理 | Fixed | Verified |
+| [2026-03-06_ISSUE_bug221_gcthreadsafecell_incremental_write_barrier_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug221_gcthreadsafecell_incremental_write_barrier_missing_is_allocated_check.md) | GcThreadSafeCell::incremental_write_barrier 缺少 is_allocated 檢查與大物件處理 | Fixed | Verified |
+| [2026-03-06_ISSUE_bug222_gc_new_cyclic_non_functional.md](./2026-03-06_ISSUE_bug222_gc_new_cyclic_non_functional.md) | Gc::new_cyclic 函數存在但無法正常運作 | Fixed | Verified |
+| [2026-03-06_ISSUE_bug223_refcell_gccapture_try_borrow_silent_failure.md](./2026-03-06_ISSUE_bug223_refcell_gccapture_try_borrow_silent_failure.md) | RefCell GcCapture 使用 try_borrow() 導致靜默失敗 - GC 指標可能遺漏 | Fixed | Verified |
+| [2026-03-06_ISSUE_bug224_gcbox_as_weak_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug224_gcbox_as_weak_inc_weak_missing_is_allocated_check.md) | GcBox::as_weak inc_weak missing is_allocated check | Fixed | Verified |
 | [2026-03-06_ISSUE_bug225_gchandle_downgrade_missing_origin_thread_check.md](./2026-03-06_ISSUE_bug225_gchandle_downgrade_missing_origin_thread_check.md) | GcHandle::downgrade 缺少執行緒親和性檢查 - 與 clone() 和 resolve() 不一致 | Verified | Verified |
-| [2026-03-06_ISSUE_bug226_gc_try_deref_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug226_gc_try_deref_missing_is_allocated_check.md) | Gc::try_deref 缺少 is_allocated 檢查 - 與 Deref::deref 行為不一致 | Open | Unverified |
-| [2026-03-06_ISSUE_bug227_gc_as_weak_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug227_gc_as_weak_inc_weak_missing_is_allocated_check.md) | Gc::as_weak inc_weak missing is_allocated check | Open | Verified |
-| [2026-03-06_ISSUE_bug228_incremental_update_max_worklist_size_toctou.md](./2026-03-06_ISSUE_bug228_incremental_update_max_worklist_size_toctou.md) | IncrementalMarkState::update_max_worklist_size TOCTOU Race Condition | Open | Not Verified |
-| [2026-03-07_ISSUE_bug229_gcbox_as_weak_missing_is_allocated_check.md](./2026-03-07_ISSUE_bug229_gcbox_as_weak_missing_is_allocated_check.md) | GcBox::as_weak Missing is_allocated Check | Open | Verified |
-| [2026-03-07_ISSUE_bug230_gchandle_downgrade_missing_is_allocated_check.md](./2026-03-07_ISSUE_bug230_gchandle_downgrade_missing_is_allocated_check.md) | GcHandle::downgrade Missing is_allocated Check | Open | Unverified |
-| [2026-03-07_ISSUE_bug231_weakcrossthreadhandle_drop_missing_is_allocated_check.md](./2026-03-07_ISSUE_bug231_weakcrossthreadhandle_drop_missing_is_allocated_check.md) | WeakCrossThreadHandle::drop Missing is_allocated Check After is_gc_box_pointer_valid | Open | Unverified |
-| [2026-03-07_ISSUE_bug232_weak_drop_missing_is_allocated_check.md](./2026-03-07_ISSUE_bug232_weak_drop_missing_is_allocated_check.md) | Weak::drop Missing is_allocated Check After is_gc_box_pointer_valid | Open | Unverified |
-| [2026-03-07_ISSUE_bug233_weak_try_upgrade_post_cas_missing_is_under_construction_check.md](./2026-03-07_ISSUE_bug233_weak_try_upgrade_post_cas_missing_is_under_construction_check.md) | Weak::try_upgrade Post-CAS 缺少 is_under_construction 檢查 | Open | Verified |
+| [2026-03-06_ISSUE_bug226_gc_try_deref_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug226_gc_try_deref_missing_is_allocated_check.md) | Gc::try_deref 缺少 is_allocated 檢查 - 與 Deref::deref 行為不一致 | Fixed | Verified |
+| [2026-03-06_ISSUE_bug227_gc_as_weak_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug227_gc_as_weak_inc_weak_missing_is_allocated_check.md) | Gc::as_weak inc_weak missing is_allocated check | Fixed | Verified |
+| [2026-03-06_ISSUE_bug228_incremental_update_max_worklist_size_toctou.md](./2026-03-06_ISSUE_bug228_incremental_update_max_worklist_size_toctou.md) | IncrementalMarkState::update_max_worklist_size TOCTOU Race Condition | Fixed | Verified |
+| [2026-03-07_ISSUE_bug229_gcbox_as_weak_missing_is_allocated_check.md](./2026-03-07_ISSUE_bug229_gcbox_as_weak_missing_is_allocated_check.md) | GcBox::as_weak Missing is_allocated Check | Fixed | Verified |
+| [2026-03-07_ISSUE_bug230_gchandle_downgrade_missing_is_allocated_check.md](./2026-03-07_ISSUE_bug230_gchandle_downgrade_missing_is_allocated_check.md) | GcHandle::downgrade Missing is_allocated Check | Fixed | Verified |
+| [2026-03-07_ISSUE_bug231_weakcrossthreadhandle_drop_missing_is_allocated_check.md](./2026-03-07_ISSUE_bug231_weakcrossthreadhandle_drop_missing_is_allocated_check.md) | WeakCrossThreadHandle::drop Missing is_allocated Check After is_gc_box_pointer_valid | Fixed | Verified |
+| [2026-03-07_ISSUE_bug232_weak_drop_missing_is_allocated_check.md](./2026-03-07_ISSUE_bug232_weak_drop_missing_is_allocated_check.md) | Weak::drop Missing is_allocated Check After is_gc_box_pointer_valid | Fixed | Verified |
+| [2026-03-07_ISSUE_bug233_weak_try_upgrade_post_cas_missing_is_under_construction_check.md](./2026-03-07_ISSUE_bug233_weak_try_upgrade_post_cas_missing_is_under_construction_check.md) | Weak::try_upgrade Post-CAS 缺少 is_under_construction 檢查 | Fixed | Verified |
 | [2026-03-07_ISSUE_bug234_gc_downgrade_inc_weak_missing_is_allocated_check.md](./2026-03-07_ISSUE_bug234_gc_downgrade_inc_weak_missing_is_allocated_check.md) | Gc::downgrade inc_weak 後缺少 is_allocated 檢查導致 TOCTOU | Fixed | Verified |
 | [2026-03-07_ISSUE_bug235_gcboxweakref_upgrade_missing_validation_checks.md](./2026-03-07_ISSUE_bug235_gcboxweakref_upgrade_missing_validation_checks.md) | GcBoxWeakRef::upgrade 缺少驗證檢查 - 與 clone 行為不一致 | Open | Verified |
 | [2026-03-07_ISSUE_bug236_weak_upgrade_try_upgrade_missing_is_allocated_check.md](./2026-03-07_ISSUE_bug236_weak_upgrade_try_upgrade_missing_is_allocated_check.md) | Weak::upgrade 和 Weak::try_upgrade 缺少升級後的 is_allocated 檢查 | Open | Verified |
@@ -312,7 +313,7 @@
 | [2026-03-10_ISSUE_bug258_scan_page_unmarked_refs_toctou_push_work.md](./2026-03-10_ISSUE_bug258_scan_page_unmarked_refs_toctou_push_work.md) | scan_page_for_unmarked_refs TOCTOU Race - is_allocated 檢查與 push_work 之间存在 race | Fixed | Verified |
 | [2026-03-10_ISSUE_bug259_gcrwlock_barrier_state_capture_inconsistent.md](./2026-03-10_ISSUE_bug259_gcrwlock_barrier_state_capture_inconsistent.md) | GcRwLock/GcMutex  barrier state 在 lock 獲取之前捕獲，與 GcThreadSafeCell 不一致 | Verified | Verified |
 | [2026-03-10_ISSUE_bug260_marker_scan_page_toctou.md](./2026-03-10_ISSUE_bug260_marker_scan_page_toctou.md) | PerThreadMarkQueue::scan_page_before_push TOCTOU - is_allocated 檢查與 push 之间存在 race | Fixed | Verified |
-| [2026-03-10_ISSUE_bug261_gcrwlock_readguard_drop_unnecessary_barrier.md](./2026-03-10_ISSUE_bug261_gcrwlock_readguard_drop_unnecessary_barrier.md) | GcRwLockReadGuard::drop() 錯誤地觸發 Write Barrier - Read 操作不應需要 Barrier | Fixed | Verified, Fixed |
+| [2026-03-10_ISSUE_bug261_gcrwlock_readguard_drop_unnecessary_barrier.md](./2026-03-10_ISSUE_bug261_gcrwlock_readguard_drop_unnecessary_barrier.md) | GcRwLockReadGuard::drop() 錯誤地觸發 Write Barrier - Read 操作不應需要 Barrier | Open | Verified, Regression |
 | [2026-03-10_ISSUE_bug261_weak_strong_count_missing_min_valid_heap_address.md](./2026-03-10_ISSUE_bug261_weak_strong_count_missing_min_valid_heap_address.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 MIN_VALID_HEAP_ADDRESS 檢查 | Open | Unverified |
 | [2026-03-11_ISSUE_bug262_weak_strong_count_missing_is_allocated_check.md](./2026-03-11_ISSUE_bug262_weak_strong_count_missing_is_allocated_check.md) | Weak::strong_count() 與 Weak::weak_count() 缺少 is_allocated 檢查導致讀取錯誤計數 | Open | Unverified |
 | [2026-03-11_ISSUE_bug263_gcbox_dec_ref_count_not_zero.md](./2026-03-11_ISSUE_bug263_gcbox_dec_ref_count_not_zero.md) | GcBox::dec_ref 返回 true 时 ref_count 未从 1 递减到 0 | Open | Not Verified |
@@ -324,7 +325,7 @@
 | [2026-03-11_ISSUE_bug269_request_gc_handshake_active_count_toctou.md](./2026-03-11_ISSUE_bug269_request_gc_handshake_active_count_toctou.md) | request_gc_handshake active_count load 有 TOCTOU race condition | Open | Unverified |
 | [2026-03-11_ISSUE_bug270_push_cross_thread_satb_unbounded_growth.md](./2026-03-11_ISSUE_bug270_push_cross_thread_satb_unbounded_growth.md) | push_cross_thread_satb 緩衝區溢位時仍然 push 導致無上限 growth | Fixed | Verified |
 | [2026-03-11_ISSUE_bug271_ephemeron_key_always_returns_none.md](./2026-03-11_ISSUE_bug271_ephemeron_key_always_returns_none.md) | Ephemeron::key() Always Returns None - Missing Key Accessor Implementation | Open | Unverified |
-| [2026-03-11_ISSUE_bug272_mark_new_object_black_missing_post_mark_is_allocated_check.md](./2026-03-11_ISSUE_bug272_mark_new_object_black_missing_post_mark_is_allocated_check.md) | mark_new_object_black 缺少 set_mark 後的 is_allocated 檢查 - 與 mark_object_black 行為不一致 | Open | Unverified |
+| [2026-03-11_ISSUE_bug272_mark_new_object_black_missing_post_mark_is_allocated_check.md](./2026-03-11_ISSUE_bug272_mark_new_object_black_missing_post_mark_is_allocated_check.md) | mark_new_object_black 缺少 set_mark 後的 is_allocated 檢查 - 與 mark_object_black 行為不一致 | Open | Verified |
 | [2026-03-12_ISSUE_bug273_record_satb_old_value_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug273_record_satb_old_value_missing_is_allocated_check.md) | record_satb_old_value 記錄已釋放物件 - 缺少 is_allocated 檢查 | Open | Unverified |
 | [2026-03-12_ISSUE_bug274_trace_and_mark_object_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug274_trace_and_mark_object_missing_is_allocated_check.md) | trace_and_mark_object 缺少 is_allocated 檢查可能導致 UAF | Open | Unverified |
 | [2026-03-12_ISSUE_bug275_scan_dirty_page_minor_trace_missing_is_allocated_check.md](./2026-03-12_ISSUE_bug275_scan_dirty_page_minor_trace_missing_is_allocated_check.md) | scan_dirty_page_minor_trace 缺少 is_allocated 檢查可能導致 UAF | Open | Unverified |
@@ -340,4 +341,14 @@
 | [2026-03-13_ISSUE_bug284_mark_root_for_snapshot_redundant_worklist_push.md](./2026-03-13_ISSUE_bug284_mark_root_for_snapshot_redundant_worklist_push.md) | mark_root_for_snapshot pushes redundant worklist entries when object is already marked | Open | Verified |
 | [2026-03-13_ISSUE_bug285_gcthreadsafecell_capture_gc_ptrs_try_lock_inconsistent.md](./2026-03-13_ISSUE_bug285_gcthreadsafecell_capture_gc_ptrs_try_lock_inconsistent.md) | GcThreadSafeCell::capture_gc_ptrs_into 使用 try_lock 與 GcRwLock/GcMutex 行為不一致 | Open | Not Verified |
 | [2026-03-13_ISSUE_bug286_barrier_functions_gen_old_flag_missing_is_allocated_check.md](./2026-03-13_ISSUE_bug286_barrier_functions_gen_old_flag_missing_is_allocated_check.md) | Multiple barrier functions read has_gen_old_flag before is_allocated check | Fixed | Verified |
-| [2026-03-13_ISSUE_bug287_try_inc_ref_from_zero_separate_atomic_loads.md](./2026-03-13_ISSUE_bug287_try_inc_ref_from_zero_separate_atomic_loads.md) | try_inc_ref_from_zero 分离加载 ref_count 和 weak_count 导致 TOCTOU 竞争条件 | Open | Not Verified |
+| [2026-03-13_ISSUE_bug287_try_inc_ref_from_zero_separate_atomic_loads.md](./2026-03-13_ISSUE_bug287_try_inc_ref_from_zero_separate_atomic_loads.md) | try_inc_ref_from_zero 分离加载 ref_count 和 weak_count 导致 TOCTOU 竞争条件 | Open | Verified |
+| [2026-03-14_ISSUE_bug288_async_handle_missing_send_sync_bounds.md](./2026-03-14_ISSUE_bug288_async_handle_missing_send_sync_bounds.md) | AsyncHandle/GcScope/AsyncGcHandle implement Send+Sync without requiring T: Send/Sync | Verified | Verified |
+| [2026-03-14_ISSUE_bug289_gc_clone_incomplete_toctou_fix.md](./2026-03-14_ISSUE_bug289_gc_clone_incomplete_toctou_fix.md) | Gc::clone has incomplete TOCTOU fix - missing is_allocated check BEFORE inc_ref | Open | Unverified |
+| [2026-03-14_ISSUE_bug290_gcrwlock_try_write_barrier_state_caching.md](./2026-03-14_ISSUE_bug290_gcrwlock_try_write_barrier_state_caching.md) | GcRwLock::try_write caches barrier states AFTER lock acquisition, inconsistent with write() | Fixed | Verified |
+| [2026-03-14_ISSUE_bug291_mark_object_black_toctou_missing_is_allocated_check.md](./2026-03-14_ISSUE_bug291_mark_object_black_toctou_missing_is_allocated_check.md) | mark_object_black TOCTOU - 已在其他地方修復但未同步 | Open | Verified |
+| [2026-03-14_ISSUE_bug292_process_owned_page_toctou_ok_false_missing_is_allocated_check.md](./2026-03-14_ISSUE_bug292_process_owned_page_toctou_ok_false_missing_is_allocated_check.md) | process_owned_page TOCTOU - Ok(false) 路徑缺少 is_allocated 檢查 | Open | Verified |
+| [2026-03-14_ISSUE_bug293_gcmutex_try_lock_barrier_state_caching.md](./2026-03-14_ISSUE_bug293_gcmutex_try_lock_barrier_state_caching.md) | GcMutex::try_lock caches barrier states AFTER lock acquisition, inconsistent with lock() | Fixed | Verified |
+| [2026-03-14_ISSUE_bug294_worker_mark_loop_toctou_is_allocated_set_mark.md](./2026-03-14_ISSUE_bug294_worker_mark_loop_toctou_is_allocated_set_mark.md) | worker_mark_loop TOCTOU - is_allocated check and set_mark have race window with lazy sweep | Open | Unverified |
+| [2026-03-14_ISSUE_bug295_gc_gc_multiple_mark_functions_toctou.md](./2026-03-14_ISSUE_bug295_gc_gc_multiple_mark_functions_toctou.md) | Multiple mark functions in gc/gc.rs have TOCTOU between is_allocated check and set_mark | Open | Unverified |
+| [2026-03-14_ISSUE_bug296_weak_is_valid_increments_ref_count.md](./2026-03-14_ISSUE_bug296_weak_is_valid_increments_ref_count.md) | WeakCrossThreadHandle::is_valid() 錯誤地遞增 ref_count，與 GcHandle::is_valid() 行為不一致 | Open | Verified |
+| [2026-03-14_ISSUE_bug297_mark_object_minor_toctou_is_allocated_set_mark.md](./2026-03-14_ISSUE_bug297_mark_object_minor_toctou_is_allocated_set_mark.md) | mark_object_minor TOCTOU between is_allocated and set_mark | Open | Unverified |

@@ -1,6 +1,6 @@
 # [Bug]: Gc::weak_cross_thread_handle missing is_allocated check after inc_weak
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -115,3 +115,26 @@ if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const 
 
 **Geohot (Exploit 觀點):**
 这是一个 TOCTOU (Time-of-Check to Time-of-Use) 问题。虽然需要精确时序触发，但利用成功可导致任意内存读写。
+
+---
+
+## Resolution (2026-03-14)
+
+**Outcome:** Already fixed.
+
+The `is_allocated` check after `inc_weak()` is present in the current implementation at `ptr.rs:1721-1728`. The code matches the suggested fix:
+
+```rust
+gc_box.inc_weak();
+
+if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+    let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+    // Don't call dec_weak when slot swept - it may be reused (bug133)
+    assert!(
+        (*header.as_ptr()).is_allocated(idx),
+        "Gc::weak_cross_thread_handle: object slot was swept after inc_weak"
+    );
+}
+```
+
+Behavior now matches `Gc::cross_thread_handle` as described in the issue.

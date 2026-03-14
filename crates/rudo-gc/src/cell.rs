@@ -5,7 +5,7 @@
 //! all interior mutability of GC-managed objects.
 
 use crate::gc::incremental::IncrementalMarkState;
-use crate::heap::{ptr_to_page_header, PageHeader, MAGIC_GC_PAGE};
+use crate::heap::{page_mask, ptr_to_page_header, PageHeader, MAGIC_GC_PAGE};
 use crate::ptr::GcBox;
 use crate::trace::Trace;
 use parking_lot::Mutex;
@@ -662,11 +662,13 @@ impl<T: GcCapture + 'static> GcCapture for RefCell<T> {
         &[]
     }
 
+    /// Uses blocking `borrow()` to reliably capture all GC pointers (bug223).
+    /// `try_borrow()` would silently skip when the `RefCell` is mutably borrowed,
+    /// violating the `GcCapture` contract and potentially causing UAF.
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Ok(value) = self.try_borrow() {
-            value.capture_gc_ptrs_into(ptrs);
-        }
+        let value = self.borrow();
+        value.capture_gc_ptrs_into(ptrs);
     }
 }
 
@@ -1187,14 +1189,71 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                 return;
             }
 
-            let header = ptr_to_page_header(ptr);
-            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
-                return;
-            }
+            let ptr_addr = ptr as usize;
+            crate::heap::with_heap(|heap| {
+                if ptr_addr < crate::heap::heap_start() || ptr_addr >= crate::heap::heap_end() {
+                    return;
+                }
 
-            if (*header.as_ptr()).generation > 0 {
-                let _ = record_page_in_remembered_buffer(header);
-            }
+                let page_addr = ptr_addr & page_mask();
+
+                // Tail pages of multi-page large objects have no PageHeader; ptr_to_page_header
+                // would yield garbage. Check large_object_map first (see find_gc_box_from_ptr).
+                let header = if let Some(&(head_addr, size, h_size)) =
+                    heap.large_object_map.get(&page_addr)
+                {
+                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + h_size + size {
+                        return;
+                    }
+                    let h_ptr = head_addr as *mut PageHeader;
+                    if (*h_ptr).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    // Skip if slot was swept; avoids corrupting remembered set with reused slot.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
+                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                    if (*h_ptr).generation == 0 && !has_gen_old {
+                        return;
+                    }
+                    NonNull::new_unchecked(h_ptr)
+                } else {
+                    let h = ptr_to_page_header(ptr);
+                    if (*h.as_ptr()).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    let block_size = (*h.as_ptr()).block_size as usize;
+                    let header_size = (*h.as_ptr()).header_size as usize;
+                    let header_page_addr = h.as_ptr() as usize;
+
+                    if ptr_addr < header_page_addr + header_size {
+                        return;
+                    }
+
+                    let offset = ptr_addr - (header_page_addr + header_size);
+                    let index = offset / block_size;
+                    let obj_count = (*h.as_ptr()).obj_count as usize;
+                    if index >= obj_count {
+                        return;
+                    }
+
+                    // Skip if slot was swept; avoids corrupting remembered set with reused slot.
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
+                    let gc_box_addr =
+                        (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
+                        return;
+                    }
+                    h
+                };
+
+                heap.record_in_remembered_buffer(header);
+            });
         }
     }
 

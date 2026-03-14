@@ -1,6 +1,6 @@
 # [Bug]: GcBox::as_weak Missing is_allocated Check
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -117,3 +117,9 @@ pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
 
 **Geohot (Exploit 觀點):**
 如果攻擊者能夠控制 GC timing，可能利用這個漏洞在 object 被釋放後但指標仍然有效時，建立一個 weak reference，進一步利用記憶體佈局進行攻擊。
+
+---
+
+## Resolution (2026-03-14)
+
+**Fixed.** The `is_allocated` check was already present in `GcBox::as_weak` at `ptr.rs:453-461`. The implementation correctly validates allocation status via `ptr_to_object_index` and `header.is_allocated(idx)` before calling `inc_weak()`, returning a null weak reference when the object has been swept. Full test suite passes.

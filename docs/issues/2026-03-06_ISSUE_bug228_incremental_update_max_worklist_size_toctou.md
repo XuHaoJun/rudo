@@ -1,7 +1,7 @@
 # [Bug]: IncrementalMarkState::update_max_worklist_size TOCTOU Race Condition
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -98,3 +98,9 @@ fn update_max_worklist_size(&self, size: usize) {
 
 **Geohot (Exploit 觀點):**
 此 bug 不會造成可直接利用的記憶體錯誤。攻擊者無法利用統計不準確來達成任意記憶體讀寫。
+
+---
+
+## Resolution (2026-03-14)
+
+Fixed by replacing load-compare-store with `AtomicUsize::fetch_update` in `gc/incremental.rs`, matching the bug91 (`inc_weak`) pattern. Full test suite passes.

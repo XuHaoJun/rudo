@@ -136,4 +136,4 @@ fn promote_all_pages(heap: &LocalHeap) {
 - `promote_young_pages` (gc.rs:1691-1710): 有設置 `gen_old` flag
 - `promote_all_pages` (gc.rs:2324-2330): 沒有設置 `gen_old` flag
 
-**Status: Open** - 等待修復。
+**Status: Fixed** - 已修復。`promote_all_pages` 現已包含 `set_gen_old()` 邏輯（gc.rs:2334-2345），與 `promote_young_pages` 行為一致。

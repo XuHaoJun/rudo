@@ -1,6 +1,6 @@
 # [Bug]: Gc::new_cyclic 函數存在但無法正常運作
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -148,3 +148,9 @@ fn test_new_cyclic_with_immediate_self_ref() {
 ## 驗證狀態
 
 此問題已通過閱讀程式碼和測試驗證。`new_cyclic` 無法達成其預期目的，應該被視為 bug。
+
+---
+
+## Resolution (2026-03-14)
+
+**Fix applied (Option 3):** Improved the deprecation note to explicitly state that the function is non-functional. Changed from "Self-referential cycles are not supported" to "This function is non-functional: the closure receives a null Gc. Use `new_cyclic_weak` instead." This makes it clear to users that the function cannot achieve its intended purpose and directs them to the working alternative.

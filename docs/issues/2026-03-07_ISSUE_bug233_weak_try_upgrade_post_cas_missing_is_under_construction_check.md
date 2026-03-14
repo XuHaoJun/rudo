@@ -1,6 +1,6 @@
 # [Bug]: Weak::try_upgrade Post-CAS 缺少 is_under_construction 檢查
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ---
@@ -134,3 +134,13 @@ if gc_box.dropping_state() != 0
 
 **Geohot (Exploit 攻擊觀點):**
 這個 race window 很難利用，因為需要精確控制時序。但如果成功利用，可能會取得對尚未完全初始化的物件的引用，導致讀取到未初始化的記憶體。
+
+---
+
+## Resolution (2026-03-14)
+
+**Fixed.** Added `is_under_construction()` to post-CAS checks in:
+- `Weak::try_upgrade()` (ptr.rs)
+- `GcBoxWeakRef::try_upgrade()` (ptr.rs) — both `try_inc_ref_from_zero` and `try_inc_ref_if_nonzero` branches
+
+`WeakCrossThreadHandle::try_upgrade()` delegates to `Weak::try_upgrade()`, so it is covered by the fix.
