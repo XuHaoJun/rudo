@@ -619,9 +619,14 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     /// This is a lightweight check that doesn't require dereferencing.
     /// Returns `false` if the weak ref is definitely invalid.
     /// Returns `true` if it might be valid (needs `try_upgrade` to confirm).
+    ///
+    /// Note: Returns `false` if the origin thread has terminated.
     #[inline]
     #[must_use]
     pub fn may_be_valid(&self) -> bool {
+        if self.origin_tcb.upgrade().is_none() {
+            return false;
+        }
         self.weak.may_be_valid()
     }
 
