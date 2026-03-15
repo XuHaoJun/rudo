@@ -323,6 +323,26 @@ impl AsyncHandleScope {
         let gc_ptr = Gc::internal_ptr(gc);
         validate_gc_in_current_heap(gc_ptr);
 
+        // Liveness checks: ensure tracked object was not swept or reclaimed (bug248).
+        // Matches GcScope::spawn() liveness checks.
+        let gc_box_ptr = gc_ptr as *const GcBox<()>;
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "AsyncHandleScope::handle: object slot was swept"
+                );
+            }
+            let gc_box = &*gc_box_ptr;
+            assert!(
+                !gc_box.has_dead_flag()
+                    && gc_box.dropping_state() == 0
+                    && !gc_box.is_under_construction(),
+                "AsyncHandleScope::handle: cannot track a dead, dropping, or under construction Gc"
+            );
+        }
+
         let slot_ptr = unsafe {
             let slots_ptr = self.data.block.slots.get() as *mut HandleSlot;
             slots_ptr.add(idx)

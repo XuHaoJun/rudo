@@ -1,7 +1,7 @@
 # [Bug]: AsyncHandle::track() Missing Liveness Checks After validate_gc_in_current_heap
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 Threat Model Assessment
 
@@ -165,3 +165,29 @@ If an attacker can control GC timing, they could potentially:
 5. The handle now points to attacker-controlled data
 
 This could be leveraged for data flow manipulation attacks.
+
+---
+
+## Verification
+
+**Verification Date:** 2026-03-16
+**Verifier:** opencode
+
+### Verification Result
+
+Confirmed bug exists at `AsyncHandleScope::handle()` (handles/async.rs:323-334):
+- Missing `is_allocated` check before setting handle slot
+- Missing `has_dead_flag()` check
+- Missing `dropping_state()` check  
+- Missing `is_under_construction()` check
+
+Contrast with `GcScope::spawn()` (handles/async.rs:1184-1202) which has all these checks (bug248 fix).
+
+**Status: Fixed**
+
+### Fix Applied
+
+Added liveness checks to `AsyncHandleScope::handle()` in `crates/rudo-gc/src/handles/async.rs`:
+- Added `is_allocated` check after `validate_gc_in_current_heap()`
+- Added `has_dead_flag()`, `dropping_state()`, `is_under_construction()` checks
+- Matches the pattern from `GcScope::spawn()`
