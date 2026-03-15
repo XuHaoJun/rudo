@@ -1871,6 +1871,18 @@ impl<T: Trace> Clone for Gc<T> {
                     && !(*gc_box_ptr).is_under_construction(),
                 "Gc::clone: cannot clone a dead, dropping, or under construction Gc"
             );
+
+            // Check is_allocated BEFORE inc_ref to avoid TOCTOU (bug289).
+            // The slot could be swept and reused between flag check and inc_ref,
+            // causing inc_ref to modify the wrong object's ref count.
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::clone: object slot was swept before inc_ref"
+                );
+            }
+
             (*gc_box_ptr).inc_ref();
 
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
