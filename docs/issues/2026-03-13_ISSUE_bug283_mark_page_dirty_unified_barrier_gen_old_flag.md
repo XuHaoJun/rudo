@@ -1,7 +1,7 @@
 # [Bug]: mark_page_dirty_for_ptr and unified_write_barrier read has_gen_old_flag before is_allocated check
 
-**Status:** Open
-**Tags:** Verified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -107,3 +107,17 @@ Reading `has_gen_old_flag()` from a deallocated/reused slot is undefined behavio
 
 **Geohot (Exploit 觀點):**
 If an attacker can control the timing of slot reuse, they might influence the gen_old_flag value. Combined with other vulnerabilities, this could potentially lead to exploit primitives. However, the primary risk is GC correctness failure causing memory leaks or crashes.
+
+---
+
+## Resolution (2026-03-15)
+
+**Classification: Invalid** — Codebase verification shows the described bug pattern does not exist in the current implementation:
+
+1. **mark_page_dirty_for_ptr** (heap.rs:3450–3508): Does **not** call `has_gen_old_flag()` at all. It only checks `is_allocated()` before `add_to_dirty_pages()`. No TOCTOU with gen_old_flag.
+
+2. **unified_write_barrier** (heap.rs:2974–3050): Already has `is_allocated` check **before** `has_gen_old_flag()` (lines 3000–3006 for large objects, 3028–3035 for small pages). Comments reference bug247.
+
+3. **incremental_write_barrier** (heap.rs:3062–3140): Same correct order — `is_allocated` before `has_gen_old_flag()` (lines 3093–3098, 3125–3131).
+
+The line numbers in the original report (2729, 2754, 2944, 2969) no longer match; the codebase has been refactored and the fix pattern (is_allocated before has_gen_old_flag) is already applied where applicable.

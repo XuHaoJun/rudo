@@ -194,6 +194,11 @@ fn test_execute_snapshot_captures_roots() {
     let gc = Gc::new(Data { value: 42 });
     assert_eq!(gc.value, 42);
 
+    // Run a full GC to clear marks. Roots allocated via Gc::new are marked by
+    // mark_new_object_black; execute_snapshot only pushes unmarked roots to
+    // avoid redundant worklist entries (bug284). A prior GC clears marks.
+    rudo_gc::collect_full();
+
     let state = IncrementalMarkState::global();
     assert_eq!(state.phase(), MarkPhase::Idle);
 
@@ -201,11 +206,6 @@ fn test_execute_snapshot_captures_roots() {
         let heaps: [&rudo_gc::heap::LocalHeap; 1] = [heap];
         rudo_gc::gc::incremental::execute_snapshot(&heaps)
     });
-
-    assert!(
-        root_count >= 1,
-        "execute_snapshot should capture at least 1 root"
-    );
 
     assert!(
         root_count >= 1,
@@ -224,6 +224,9 @@ fn test_root_capture_with_nested_objects() {
 
     let inner = Gc::new(Data { value: 10 });
     let _outer = Gc::new(NestedData { inner, value: 20 });
+
+    // Run a full GC to clear marks so execute_snapshot finds unmarked roots (bug284).
+    rudo_gc::collect_full();
 
     let state = IncrementalMarkState::global();
     let root_count = rudo_gc::heap::with_heap(|heap: &mut rudo_gc::heap::LocalHeap| {

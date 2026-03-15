@@ -1,6 +1,6 @@
 # [Bug]: gc_cell_validate_and_barrier 大型物件路徑 has_gen_old_flag 讀取在 is_allocated 檢查之前 - TOCTOU
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Unverified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -119,3 +119,9 @@ if (*h_ptr).generation == 0 && !has_gen_old {
 
 - bug278: `gc_cell_validate_and_barrier` regular object 路徑的相同問題
 - bug286: barrier 函數 gen_old_flag 缺少 is_allocated 檢查
+
+---
+
+## Resolution (2026-03-15)
+
+**Classified as Invalid.** The fix was already applied (bug247). The large object path in `gc_cell_validate_and_barrier` (heap.rs:2869-2876) now correctly checks `is_allocated(0)` **before** reading `has_gen_old_flag()`. The comment at line 2869 explicitly documents this: "Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247)." No code changes needed.

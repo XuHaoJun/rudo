@@ -3218,11 +3218,16 @@ pub fn sweep_orphan_pages() {
         };
 
         let has_weak_refs = if is_large {
-            let header_size = (*header).header_size as usize;
-            let obj_ptr = (orphan.addr as *mut u8).add(header_size);
-            #[allow(clippy::cast_ptr_alignment)]
-            let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-            (*gc_box_ptr).weak_count_acquire() > 0
+            // Check is_allocated before reading weak_count; avoids reading freed/reused slot (bug280).
+            if (*header).is_allocated(0) {
+                let header_size = (*header).header_size as usize;
+                let obj_ptr = (orphan.addr as *mut u8).add(header_size);
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                (*gc_box_ptr).weak_count_acquire() > 0
+            } else {
+                false
+            }
         } else {
             let block_size = (*header).block_size as usize;
             let obj_count = (*header).obj_count as usize;

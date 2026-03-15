@@ -1223,11 +1223,24 @@ unsafe fn mark_and_push_to_worker_queue(
         let header = crate::heap::ptr_to_page_header(ptr_addr);
         if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box.as_ptr().cast()) {
-                if !(*header.as_ptr()).is_allocated(idx) {
-                    return;
-                }
-                if !(*header.as_ptr()).is_marked(idx) {
-                    (*header.as_ptr()).set_mark(idx);
+                // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug295)
+                loop {
+                    match (*header.as_ptr()).try_mark(idx) {
+                        Ok(false) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                return;
+                            }
+                            break; // Already marked by another thread, slot valid
+                        }
+                        Ok(true) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                return;
+                            }
+                            break; // We marked, slot still valid
+                        }
+                        Err(()) => {} // CAS failed, retry
+                    }
                 }
             }
         }
@@ -2074,12 +2087,26 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
             return;
         }
 
-        if (*header.as_ptr()).is_marked(index) {
-            return;
+        // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug295)
+        loop {
+            match (*header.as_ptr()).try_mark(index) {
+                Ok(false) => {
+                    if !(*header.as_ptr()).is_allocated(index) {
+                        return;
+                    }
+                    return; // Already marked by another thread, slot valid
+                }
+                Ok(true) => {
+                    if !(*header.as_ptr()).is_allocated(index) {
+                        (*header.as_ptr()).clear_mark_atomic(index);
+                        return;
+                    }
+                    visitor.objects_marked += 1;
+                    break;
+                }
+                Err(()) => {} // CAS failed, retry
+            }
         }
-
-        (*header.as_ptr()).set_mark(index);
-        visitor.objects_marked += 1;
 
         if (*header.as_ptr()).generation > 0 {
             return;
@@ -2369,11 +2396,26 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
             if !(*header.as_ptr()).is_allocated(idx) {
                 return;
             }
-            if (*header.as_ptr()).is_marked(idx) {
-                return;
+            // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug295)
+            loop {
+                match (*header.as_ptr()).try_mark(idx) {
+                    Ok(false) => {
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            return;
+                        }
+                        return; // Already marked by another thread, no push needed
+                    }
+                    Ok(true) => {
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            (*header.as_ptr()).clear_mark_atomic(idx);
+                            return;
+                        }
+                        visitor.objects_marked += 1;
+                        break;
+                    }
+                    Err(()) => {} // CAS failed, retry
+                }
             }
-            (*header.as_ptr()).set_mark(idx);
-            visitor.objects_marked += 1;
         } else {
             return;
         }
@@ -2402,11 +2444,26 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
         if !(*header.as_ptr()).is_allocated(idx) {
             return;
         }
-        if (*header.as_ptr()).is_marked(idx) {
-            return;
+        // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug295)
+        loop {
+            match (*header.as_ptr()).try_mark(idx) {
+                Ok(false) => {
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        return;
+                    }
+                    return; // Already marked by another thread, no push needed
+                }
+                Ok(true) => {
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        (*header.as_ptr()).clear_mark_atomic(idx);
+                        return;
+                    }
+                    visitor.objects_marked += 1;
+                    break;
+                }
+                Err(()) => {} // CAS failed, retry
+            }
         }
-        (*header.as_ptr()).set_mark(idx);
-        visitor.objects_marked += 1;
     } else {
         return;
     }

@@ -1,6 +1,6 @@
 # [Bug]: Multiple mark functions in gc/gc.rs have TOCTOU between is_allocated check and set_mark
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -197,3 +197,15 @@ if !(*header.as_ptr()).is_allocated(idx) {
 - Confirmed TOCTOU pattern exists
 
 **建議:** 需要並發測試才能穩定重現
+
+---
+
+## Resolution (2026-03-15)
+
+Fixed by applying try_mark + recheck pattern to all four affected functions in gc/gc.rs:
+- `mark_and_push_to_worker_queue`
+- `mark_object_minor`
+- `mark_object`
+- `mark_and_trace_incremental`
+
+Each now uses `try_mark` in a loop with `is_allocated` recheck after successful mark; if slot was swept, `clear_mark_atomic` and return. Matches the pattern in `process_owned_page` (marker.rs).

@@ -1,6 +1,6 @@
 # [Bug]: incremental_write_barrier has_gen_old_flag 讀取在 is_allocated 檢查之前 - TOCTOU
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Unverified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -109,3 +109,9 @@ if (*header.as_ptr()).generation == 0 && !has_gen_old {
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可能利用這個時序漏洞來控制 remembered set 行為，進一步利用記憶體佈局進行攻擊。
+
+---
+
+## Resolution (2026-03-15)
+
+**Invalid.** The described bug has already been fixed. In the current `incremental_write_barrier` (heap.rs:3122-3130), `is_allocated(index)` is checked **before** `has_gen_old_flag()` is read. The comment at line 3123 explicitly states: "Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247)." No code changes.

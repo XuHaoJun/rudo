@@ -1,6 +1,6 @@
 # [Bug]: try_inc_ref_from_zero 分离加载 ref_count 和 weak_count 导致 TOCTOU 竞争条件
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -158,3 +158,9 @@ GC 的正確性依賴於準確的引用計數狀態。當 ref_count 和 weak_cou
 - Line 249: `let weak_count_raw = self.weak_count.load(Ordering::Acquire);`
 
 這兩個獨立的 atomic load 創造了 TOCTOU 競爭條件，與 issue 描述的問題完全一致。
+
+---
+
+## Resolution (2026-03-15)
+
+**Fix applied:** Post-CAS verification in `try_inc_ref_from_zero()` (`ptr.rs`). After CAS(0,1) succeeds, re-read `weak_count` and `dropping_state`. If `DEAD_FLAG` or `dropping_state` is set, rollback via `ref_count.fetch_sub(1, Release)` and return `false`. This closes the TOCTOU window between the two separate loads. Callers (Weak::upgrade, GcBoxWeakRef::upgrade) already had post-CAS checks; the fix adds defense-in-depth inside the function itself.

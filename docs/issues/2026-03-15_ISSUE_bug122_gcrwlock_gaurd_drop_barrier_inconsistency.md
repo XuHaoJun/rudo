@@ -1,7 +1,7 @@
 # [Bug]: GcRwLockWriteGuard/GcMutexGuard Drop barrier inconsistency - remembered buffer not updated when only incremental marking is active
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -145,3 +145,9 @@ if generational_active || incremental_active {
 在特定條件下（incremental only mode），攻擊者可能能夠利用這個 window 來導致物件被錯誤回收，進而造成 use-after-free。
 
 ---
+
+## Resolution (2026-03-15)
+
+**Outcome:** Fixed.
+
+Updated both `GcRwLockWriteGuard::drop()` and `GcMutexGuard::drop()` in `sync.rs` to call `unified_write_barrier` when `incremental_active || generational_active` (previously only when `generational_active`). This ensures the remembered buffer is updated during incremental marking, matching the mark-black logic. All sync tests pass.

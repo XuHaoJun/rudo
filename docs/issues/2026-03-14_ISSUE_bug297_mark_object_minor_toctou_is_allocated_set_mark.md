@@ -1,7 +1,7 @@
 # [Bug]: mark_object_minor TOCTOU between is_allocated and set_mark
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -68,3 +68,12 @@ Undefined behavior - slot can be reused after is_allocated check, causing mark o
 
 **Geohot (Exploit 觀點):**
 Exploitable with precise timing. Can prevent collection of malicious objects or cause heap corruption.
+
+---
+
+## Resolution (2026-03-15)
+
+**Verified fixed.** The current `mark_object_minor` (gc/gc.rs:2070-2116) already uses the correct `try_mark` + recheck pattern:
+- Uses `try_mark` (atomic CAS) instead of separate `is_allocated` + `set_mark`
+- Re-checks `is_allocated` after successful `try_mark`; clears mark and returns if slot was swept
+- Comment references bug295 fix. `test_mark_object_minor_skips_unallocated_slot` passes.

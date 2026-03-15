@@ -286,7 +286,21 @@ impl<T: Trace + ?Sized> GcBox<T> {
                 .ref_count
                 .compare_exchange_weak(0, 1, Ordering::AcqRel, Ordering::Acquire)
             {
-                Ok(_) => return true,
+                Ok(_) => {
+                    // Post-CAS verification (bug287): Re-read weak_count and dropping_state
+                    // to close the TOCTOU window between the two separate loads above.
+                    // Another thread could have set DEAD_FLAG or dropping_state between
+                    // our pre-CAS checks and the CAS success.
+                    let weak_count_raw = self.weak_count.load(Ordering::Acquire);
+                    let flags = weak_count_raw & Self::FLAGS_MASK;
+                    if (flags & Self::DEAD_FLAG) != 0 || self.dropping_state() != 0 {
+                        // Rollback: undo our increment. Use fetch_sub directly because
+                        // dec_ref returns early without decrementing when DEAD_FLAG is set.
+                        self.ref_count.fetch_sub(1, Ordering::Release);
+                        return false;
+                    }
+                    return true;
+                }
                 Err(new_count) => {
                     if new_count != 0 {
                         return false;

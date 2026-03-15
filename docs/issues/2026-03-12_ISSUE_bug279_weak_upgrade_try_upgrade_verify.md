@@ -1,7 +1,7 @@
 # [Bug]: Weak::upgrade and Weak::try_upgrade missing is_allocated check after CAS (DUPLICATE - verify status)
 
-**Status:** Open
-**Tags:** Verified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -96,3 +96,16 @@ This is a duplicate of bug236 to verify the bug still exists in the current code
 **Verified present in code at:**
 - `Weak::upgrade`: ptr.rs:1870-1929 (no is_allocated check after CAS at line 1901-1927)
 - `Weak::try_upgrade`: ptr.rs:1949-2015 (no is_allocated check after CAS at line 1990-2011)
+
+---
+
+## Resolution (2026-03-15)
+
+**Outcome:** Invalid — already fixed.
+
+Both `Weak::upgrade()` and `Weak::try_upgrade()` in `ptr.rs` already include the `is_allocated` check after successful CAS:
+
+- **Weak::upgrade** (lines 2143-2149): Post-CAS block checks `is_allocated(idx)` before returning `Some(Gc)`; returns `None` without `dec_ref` if slot was swept (bug133).
+- **Weak::try_upgrade** (lines 2247-2253): Same pattern — `is_allocated` check after CAS success.
+
+The fix matches the suggested remediation and is consistent with `GcBoxWeakRef::upgrade()`. No code changes needed.

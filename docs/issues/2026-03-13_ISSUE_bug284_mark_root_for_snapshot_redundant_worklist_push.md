@@ -1,6 +1,6 @@
 # [Bug]: mark_root_for_snapshot pushes redundant worklist entries when object is already marked
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -95,3 +95,9 @@ No soundness issues. The code is safe and the redundant worklist entries are han
 
 **Geohot (Exploit 觀點):**
 No exploit potential. The redundant worklist entries could theoretically increase memory pressure in high-throughput scenarios, but this is not a security concern.
+
+---
+
+## Resolution (2026-03-15)
+
+Fixed by moving `visitor.worklist.push(ptr)` inside the `if !was_marked` block in `mark_root_for_snapshot` (incremental.rs). Only roots that were actually marked are pushed to the worklist, matching `GcVisitor::visit()` behavior. Tests `test_execute_snapshot_captures_roots` and `test_root_capture_with_nested_objects` were updated to run `collect_full()` before `execute_snapshot` so roots are unmarked (objects allocated via `Gc::new` are pre-marked by `mark_new_object_black`).

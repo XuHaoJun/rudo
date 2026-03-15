@@ -455,7 +455,7 @@ unsafe impl<T: Trace> Trace for BinaryHeap<T> {
     }
 }
 
-// SAFETY: HashMap traces all values (keys assumed to not contain Gc)
+// SAFETY: HashMap traces both keys and values
 unsafe impl<K: Trace, V: Trace, S: BuildHasher> Trace for HashMap<K, V, S> {
     #[inline]
     fn trace(&self, visitor: &mut impl Visitor) {

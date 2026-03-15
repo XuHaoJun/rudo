@@ -1,6 +1,6 @@
 # [Bug]: mark_object_black TOCTOU - 已在其他地方修復但未同步
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -110,3 +110,9 @@ Ok(false) => {
 **Geohot (Exploit 觀點):**
 - 若此漏洞被利用，需要精確的執行時序
 - 實際危害可能有限，但應修復以確保正確性
+
+---
+
+## Resolution (2026-03-15)
+
+**Fix verified:** The `Ok(false)` branch in `mark_object_black` (`gc/incremental.rs`) already includes the `is_allocated` re-check (lines 1071–1077). The fix was applied previously; the issue file status is updated to Fixed.

@@ -1,6 +1,6 @@
 # [Bug]: Gc::clone has incomplete TOCTOU fix - missing is_allocated check BEFORE inc_ref
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -154,3 +154,9 @@ If an attacker can control allocation timing, they could:
 ## ✅ Verification
 
 **Verified on 2026-03-15:** Bug confirmed present in `ptr.rs:1868-1883`. The code checks flags (lines 1868-1873), then calls `inc_ref()` (line 1874), then checks `is_allocated` (lines 1876-1882). This is TOCTOU - the slot can be swept and reused between the flag check and inc_ref.
+
+---
+
+## Resolution (2026-03-15)
+
+**Fix applied:** Added `is_allocated` check BEFORE `inc_ref()` in `Gc::clone()` (`ptr.rs:1888-1897`). The check runs after the flag assertions and before `inc_ref()`, closing the TOCTOU window. The post-inc_ref `is_allocated` check (bug206) remains for defense-in-depth.

@@ -1,7 +1,7 @@
 # [Bug]: worker_mark_loop TOCTOU - is_allocated check and set_mark have race window with lazy sweep
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -143,3 +143,9 @@ if !(*header.as_ptr()).is_allocated(idx) {
 
 - bug291: mark_object_black TOCTOU - 修復模式範例
 - bug292: process_owned_page TOCTOU Ok(false) - 類似的 TOCTOU 問題
+
+---
+
+## Resolution (2026-03-15)
+
+Fixed by applying the try_mark + recheck pattern (as in `process_owned_page`) to both `worker_mark_loop` and `worker_mark_loop_with_registry` in `crates/rudo-gc/src/gc/marker.rs`. Replaced the non-atomic `is_allocated` → `is_marked` → `set_mark` sequence with a loop that uses `try_mark`, then re-checks `is_allocated` after successful mark. If the slot was swept between check and mark, `clear_mark_atomic` rolls back. All tests pass including `parallel_gc`.

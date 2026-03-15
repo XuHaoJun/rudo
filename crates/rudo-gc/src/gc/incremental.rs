@@ -581,8 +581,8 @@ unsafe fn mark_root_for_snapshot(ptr: NonNull<GcBox<()>>, visitor: &mut crate::t
         if !was_marked {
             (*header.as_ptr()).set_mark(idx);
             visitor.objects_marked += 1;
+            visitor.worklist.push(ptr);
         }
-        visitor.worklist.push(ptr);
     }
 }
 

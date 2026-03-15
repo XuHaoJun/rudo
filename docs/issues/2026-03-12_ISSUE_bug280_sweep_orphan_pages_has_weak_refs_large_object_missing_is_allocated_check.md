@@ -1,7 +1,7 @@
 # [Bug]: sweep_orphan_pages has_weak_refs large object path 缺少 is_allocated 檢查
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -119,3 +119,11 @@ let has_weak_refs = if is_large {
 ### Geohot (Exploit/Edge Case Expert)
 
 時序依賴：需要 lazy sweep 和 orphan sweep 的交錯。攻擊者可能嘗試控制 slot 重用時序來影響 GC 行為。
+
+---
+
+## Resolution (2026-03-15)
+
+**Outcome:** Fixed and verified.
+
+Added `is_allocated(0)` check before reading `weak_count_acquire()` in the large object path of `sweep_orphan_pages` (`heap.rs`). Behavior now matches the small object path. Full test suite passes.

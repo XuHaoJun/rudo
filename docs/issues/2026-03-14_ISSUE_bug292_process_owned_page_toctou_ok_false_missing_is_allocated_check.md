@@ -1,6 +1,6 @@
 # [Bug]: process_owned_page TOCTOU - Ok(false) 路徑缺少 is_allocated 檢查
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -134,3 +134,9 @@ Ok(false) => {
 - 若此漏洞被利用，需要精確的執行時序
 - 在高負載 GC 環境中有可能被觸發
 - 實際危害可能有限，但應修復以確保正確性
+
+---
+
+## Resolution (2026-03-15)
+
+**Fix applied:** Added `is_allocated` re-check in `process_owned_page` Ok(false) path (`gc/marker.rs`). When `try_mark` returns `Ok(false)` (already marked by another thread), we now re-verify the slot is still allocated before treating it as valid. Aligns with the pattern used in `gc/incremental.rs` (bug291, scan_page_for_unmarked_refs).

@@ -473,7 +473,9 @@ impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
             }
         }
 
-        if generational_active {
+        // Call barrier when either generational or incremental marking is active (bug122).
+        // Incremental marking needs remembered buffer update; generational needs dirty page.
+        if generational_active || incremental_active {
             let ptr = std::ptr::from_ref(&*self.guard).cast::<u8>();
             crate::heap::unified_write_barrier(ptr, incremental_active);
         }
@@ -741,7 +743,8 @@ impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
             }
         }
 
-        if generational_active {
+        // Call barrier when either generational or incremental marking is active (bug122).
+        if generational_active || incremental_active {
             let ptr = std::ptr::from_ref(&*self.guard).cast::<u8>();
             crate::heap::unified_write_barrier(ptr, incremental_active);
         }

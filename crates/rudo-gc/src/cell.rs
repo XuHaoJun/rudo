@@ -265,6 +265,13 @@ impl<T: ?Sized> GcCell<T> {
         }
 
         let header = unsafe { crate::heap::ptr_to_page_header(cell_ptr) };
+        // Skip if slot was swept; avoids reading owner_thread from deallocated/reused slot (bug281).
+        let Some(index) = (unsafe { crate::heap::ptr_to_object_index(cell_ptr) }) else {
+            return;
+        };
+        if !unsafe { (*header.as_ptr()).is_allocated(index) } {
+            return;
+        }
         let owner = unsafe { (*header.as_ptr()).owner_thread };
 
         let current = crate::heap::get_thread_id();
@@ -1427,13 +1434,13 @@ impl<T: GcCapture + ?Sized> GcCapture for GcThreadSafeCell<T> {
 
     /// Captures GC pointers from the inner value.
     ///
-    /// Uses `try_lock()` to avoid data races: if the lock is held by another thread
-    /// (e.g. a writer), we skip capturing. The writer will record SATB in `borrow_mut()`.
+    /// Uses blocking `lock()` to reliably capture all GC pointers, consistent with
+    /// `GcRwLock` and `GcMutex` (bug285). `try_lock()` would silently miss pointers
+    /// when another thread holds the lock, potentially breaking SATB.
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Some(guard) = self.inner.try_lock() {
-            guard.capture_gc_ptrs_into(ptrs);
-        }
+        let guard = self.inner.lock();
+        guard.capture_gc_ptrs_into(ptrs);
     }
 }
 

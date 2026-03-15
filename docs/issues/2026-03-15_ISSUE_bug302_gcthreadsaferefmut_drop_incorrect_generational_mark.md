@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeRefMut::drop incorrectly marks GC pointers during generational barrier (inconsistent with GcCell)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 Threat Model Assessment
 
@@ -164,3 +164,25 @@ No exploitation vector - this is a correctness/performance issue rather than a s
 - Check: Does GcThreadSafeCell::borrow_mut only mark during incremental? YES (bug301 fix)
 - Check: Does GcThreadSafeRefMut::drop only mark during incremental? NO - BUG!
 - Check: Does sync.rs GcRwLockWriteGuard::drop mark during generational? Need to verify
+
+---
+
+## Resolution (2026-03-15)
+
+**Outcome:** Already fixed.
+
+The fix was applied in a prior commit. The current `GcThreadSafeRefMut::drop()` implementation in `cell.rs` (lines 1396–1404) correctly uses `if incremental_active` only:
+
+```rust
+// Mark new GC pointers black only during incremental marking (bug302).
+// Generational barrier should only mark page as dirty, not prevent collection.
+if incremental_active {
+    for gc_ptr in &ptrs {
+        let _ = unsafe {
+            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
+        };
+    }
+}
+```
+
+Behavior now matches `GcCell::borrow_mut` and `GcThreadSafeCell::borrow_mut`. The generational barrier is still correctly triggered via `unified_write_barrier` when `generational_active`.

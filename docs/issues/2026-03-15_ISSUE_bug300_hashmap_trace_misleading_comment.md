@@ -1,7 +1,7 @@
 # [Bug]: HashMap Trace implementation has misleading comment
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -101,3 +101,16 @@ This is a documentation bug only. The implementation is correct - it properly tr
 
 **Geohot (Exploit 觀點):**
 No security impact - this is purely a documentation issue.
+
+---
+
+## Resolution (2026-03-15)
+
+**Outcome:** Fixed.
+
+Updated the misleading comment in `trace.rs` from:
+`// SAFETY: HashMap traces all values (keys assumed to not contain Gc)`
+to:
+`// SAFETY: HashMap traces both keys and values`
+
+The implementation already correctly traces both keys and values (`k.trace(visitor)` and `v.trace(visitor)`); only the comment was incorrect.

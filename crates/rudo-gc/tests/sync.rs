@@ -10,7 +10,7 @@
     clippy::items_after_statements
 )]
 
-use rudo_gc::{Gc, GcMutex, GcRwLock, Trace, Weak};
+use rudo_gc::{Gc, GcMutex, GcRwLock, GcThreadSafeCell, Trace, Weak};
 use std::sync::Arc;
 use std::thread;
 
@@ -761,7 +761,7 @@ fn test_write_exclusivity() {
 }
 
 #[test]
-fn test_gcrwlock_gcmutex_capture_gc_ptrs_into() {
+fn test_gcrwlock_gcmutex_gcthreadsafecell_capture_gc_ptrs_into() {
     use rudo_gc::cell::GcCapture;
 
     rudo_gc::test_util::reset();
@@ -775,6 +775,7 @@ fn test_gcrwlock_gcmutex_capture_gc_ptrs_into() {
     let inner = Gc::new(Inner { value: 42 });
     let rwlock: GcRwLock<Gc<Inner>> = GcRwLock::new(inner.clone());
     let mutex: GcMutex<Gc<Inner>> = GcMutex::new(inner.clone());
+    let cell: GcThreadSafeCell<Gc<Inner>> = GcThreadSafeCell::new(inner.clone());
 
     let mut ptrs = Vec::new();
     rwlock.capture_gc_ptrs_into(&mut ptrs);
@@ -782,6 +783,10 @@ fn test_gcrwlock_gcmutex_capture_gc_ptrs_into() {
     ptrs.clear();
 
     mutex.capture_gc_ptrs_into(&mut ptrs);
+    assert_eq!(ptrs.len(), 1);
+    ptrs.clear();
+
+    cell.capture_gc_ptrs_into(&mut ptrs);
     assert_eq!(ptrs.len(), 1);
 
     assert!(GcRwLock::<Gc<Inner>>::new(inner)
