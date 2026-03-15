@@ -159,6 +159,11 @@ impl<T: Trace + ?Sized> GcBox<T> {
                 // by the sweep phase, not by this dec_ref.
                 return false;
             }
+            if this.is_under_construction() {
+                // Object is under construction (e.g., during Gc::new_cyclic_weak).
+                // Do not decrement ref_count; return false to avoid premature drop.
+                return false;
+            }
 
             let count = this.ref_count.load(Ordering::Acquire);
             if count == 0 {
@@ -174,6 +179,9 @@ impl<T: Trace + ?Sized> GcBox<T> {
                     unsafe {
                         (this.drop_fn)(self_ptr.cast::<u8>());
                     }
+                    // Ensure ref_count reflects "count reached zero" semantics (bug263).
+                    // Release ordering: drop_fn happens-before other threads observe ref_count==0.
+                    this.ref_count.store(0, Ordering::Release);
                     return true;
                 }
                 // CAS failed - another thread beat us to marking
@@ -188,6 +196,25 @@ impl<T: Trace + ?Sized> GcBox<T> {
                 return false;
             }
             // Contention - retry
+        }
+    }
+
+    /// Undo a `ref_count` increment after detecting that the object is dead or dropping.
+    ///
+    /// Use this instead of [`dec_ref`](Self::dec_ref) when rolling back a successful
+    /// `try_inc_ref_from_zero` or `try_inc_ref_if_nonzero` CAS: `dec_ref` returns early
+    /// without decrementing when `DEAD_FLAG` is set, leaving `ref_count` incorrectly at 1.
+    /// A direct `fetch_sub` correctly undoes the increment regardless of flags.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure `self_ptr` is valid and that we just incremented `ref_count`
+    /// via CAS (so `ref_count` >= 1).
+    #[inline]
+    pub(crate) unsafe fn undo_inc_ref(self_ptr: *mut Self) {
+        // SAFETY: Caller guarantees ptr is valid and we own an increment to undo.
+        unsafe {
+            (*self_ptr).ref_count.fetch_sub(1, Ordering::Release);
         }
     }
 
@@ -206,6 +233,15 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// Get the raw weak count value (including flags).
     pub fn weak_count_raw(&self) -> usize {
         self.weak_count.load(Ordering::Relaxed)
+    }
+
+    /// Get the weak reference count with Acquire ordering.
+    ///
+    /// Use this when the result gates safety-critical operations (e.g. sweep deciding
+    /// whether to reclaim a slot). Acquire synchronizes with `dec_weak`'s `AcqRel` CAS,
+    /// preventing TOCTOU races where sweep might miss a concurrent weak decrement.
+    pub(crate) fn weak_count_acquire(&self) -> usize {
+        self.weak_count.load(Ordering::Acquire) & !Self::FLAGS_MASK
     }
 
     /// Increment the weak reference count.
@@ -232,8 +268,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// without racing with concurrent collection. The transition is only allowed
     /// if the object is not dead (`DEAD_FLAG` not set).
     ///
-    /// This function checks `dropping_state()` internally; callers must still check
-    /// `is_under_construction()` before calling.
+    /// This function checks `dropping_state()` and `is_under_construction()` internally.
     ///
     /// # Safety
     ///
@@ -256,6 +291,12 @@ impl<T: Trace + ?Sized> GcBox<T> {
                 return false;
             }
 
+            // Object is under construction - do not allow resurrection
+            // This prevents incorrect inc_ref during Gc::new_cyclic_weak
+            if self.is_under_construction() {
+                return false;
+            }
+
             if ref_count != 0 {
                 return false;
             }
@@ -264,12 +305,68 @@ impl<T: Trace + ?Sized> GcBox<T> {
                 .ref_count
                 .compare_exchange_weak(0, 1, Ordering::AcqRel, Ordering::Acquire)
             {
-                Ok(_) => return true,
+                Ok(_) => {
+                    // Post-CAS verification (bug287): Re-read weak_count and dropping_state
+                    // to close the TOCTOU window between the two separate loads above.
+                    // Another thread could have set DEAD_FLAG or dropping_state between
+                    // our pre-CAS checks and the CAS success.
+                    let weak_count_raw = self.weak_count.load(Ordering::Acquire);
+                    let flags = weak_count_raw & Self::FLAGS_MASK;
+                    if (flags & Self::DEAD_FLAG) != 0 || self.dropping_state() != 0 {
+                        // Rollback: undo our increment. Use fetch_sub directly because
+                        // dec_ref returns early without decrementing when DEAD_FLAG is set.
+                        self.ref_count.fetch_sub(1, Ordering::Release);
+                        return false;
+                    }
+                    return true;
+                }
                 Err(new_count) => {
                     if new_count != 0 {
                         return false;
                     }
                 }
+            }
+        }
+    }
+
+    /// Decrement the weak reference count via raw pointer, without creating a reference.
+    ///
+    /// Use this from `Drop` implementations (e.g. `Weak::drop`, `WeakCrossThreadHandle::drop`)
+    /// when the `GcBox`'s value may be under `drop_in_place` — creating `&*ptr` would
+    /// violate Stacked Borrows. Uses `addr_of!` to access `weak_count` directly.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a valid, allocated `GcBox<T>` (caller checks `is_allocated`).
+    #[inline]
+    #[allow(unsafe_op_in_unsafe_fn)]
+    pub(crate) unsafe fn dec_weak_raw(ptr: *mut Self) -> bool {
+        // SAFETY: Caller ensures ptr is valid and allocated.
+        let weak_count_ptr = std::ptr::addr_of!((*ptr).weak_count);
+        loop {
+            let current = (*weak_count_ptr).load(Ordering::Relaxed);
+            let flags = current & Self::FLAGS_MASK;
+            let count = current & !Self::FLAGS_MASK;
+
+            if count == 0 {
+                return false;
+            } else if count == 1 {
+                if (*weak_count_ptr)
+                    .compare_exchange_weak(current, flags, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    return true;
+                }
+            } else if (*weak_count_ptr)
+                .compare_exchange_weak(
+                    current,
+                    flags | (count - 1),
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                return false;
             }
         }
     }
@@ -318,7 +415,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// may still exist. Use [`is_dead_or_unrooted()`] to check if the object
     /// is collectible (dead flag set OR no strong refs).
     pub fn has_dead_flag(&self) -> bool {
-        (self.weak_count.load(Ordering::Relaxed) & Self::DEAD_FLAG) != 0
+        (self.weak_count.load(Ordering::Acquire) & Self::DEAD_FLAG) != 0
     }
 
     /// Mark the value as dropped.
@@ -339,10 +436,14 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// Mark the value as dead during panic cleanup.
     /// Clears `UNDER_CONSTRUCTION_FLAG` and sets `DEAD_FLAG`.
     /// Used when weak references exist and we can't deallocate.
+    ///
+    /// Uses `Release` ordering for both operations so that concurrent threads
+    /// doing `Acquire` loads (e.g. `has_dead_flag`, `is_under_construction`)
+    /// correctly observe the updated state.
     pub(crate) fn mark_dead(&self) {
-        self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Relaxed);
+        self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Release);
         self.weak_count
-            .fetch_and(!Self::UNDER_CONSTRUCTION_FLAG, Ordering::Relaxed);
+            .fetch_and(!Self::UNDER_CONSTRUCTION_FLAG, Ordering::Release);
     }
 
     /// Set `GEN_OLD_FLAG` on promotion. Enables barrier early-exit for young objects.
@@ -361,10 +462,11 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Clear `GEN_OLD_FLAG`. Used when deallocating so reused slots don't inherit stale state.
+    /// Uses `Release` ordering to synchronize with `has_gen_old_flag()` (Acquire).
     #[inline]
     pub(crate) fn clear_gen_old(&self) {
         self.weak_count
-            .fetch_and(!Self::GEN_OLD_FLAG, Ordering::Relaxed);
+            .fetch_and(!Self::GEN_OLD_FLAG, Ordering::Release);
     }
 
     /// Clear `DEAD_FLAG`. Used when reusing a slot so the new object is not incorrectly
@@ -372,7 +474,16 @@ impl<T: Trace + ?Sized> GcBox<T> {
     #[inline]
     pub(crate) fn clear_dead(&self) {
         self.weak_count
-            .fetch_and(!Self::DEAD_FLAG, Ordering::Relaxed);
+            .fetch_and(!Self::DEAD_FLAG, Ordering::Release);
+    }
+
+    /// Clear `UNDER_CONSTRUCTION_FLAG`. Used when reusing a slot so the new object is not
+    /// incorrectly marked as under construction. Must be called before the slot is used for
+    /// a new allocation (e.g. after a slot from `Gc::new_cyclic_weak` is reclaimed).
+    #[inline]
+    pub(crate) fn clear_under_construction(&self) {
+        self.weak_count
+            .fetch_and(!Self::UNDER_CONSTRUCTION_FLAG, Ordering::Release);
     }
 }
 
@@ -419,16 +530,30 @@ impl<T: Trace> GcBox<T> {
     /// Create a weak reference to this `GcBox`.
     #[allow(dead_code)]
     pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
-        // SAFETY: self is a valid GcBox pointer.
         unsafe {
-            if self.is_under_construction() {
+            if self.is_under_construction() || self.has_dead_flag() || self.dropping_state() != 0 {
                 return GcBoxWeakRef {
                     ptr: AtomicNullable::null(),
                 };
             }
+
+            // inc_weak before is_allocated check to avoid TOCTOU with lazy sweep (bug240).
+            // If slot was swept between check and inc_weak, we'd increment the wrong object.
             (*NonNull::from(self).as_ptr()).inc_weak();
+
+            let self_ptr = NonNull::from(self).as_ptr() as *const u8;
+            if let Some(idx) = crate::heap::ptr_to_object_index(self_ptr) {
+                let header = crate::heap::ptr_to_page_header(self_ptr);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    // Don't call dec_weak - slot may be reused (bug133)
+                    return GcBoxWeakRef {
+                        ptr: AtomicNullable::null(),
+                    };
+                }
+            }
+
+            GcBoxWeakRef::new(NonNull::from(self))
         }
-        GcBoxWeakRef::new(NonNull::from(self))
     }
 }
 
@@ -438,6 +563,24 @@ impl GcBox<()> {
 
     /// A no-op trace function for already-dropped objects.
     pub(crate) const unsafe fn no_op_trace(_ptr: *const u8, _visitor: &mut GcVisitor) {}
+
+    /// Initialize the `GcBox` header at the given raw pointer.
+    /// Used by `alloc_large` when pre-initializing memory for defense-in-depth.
+    /// Caller must ensure ptr is valid and points to uninitialized `GcBox` memory.
+    ///
+    /// # Safety
+    /// The pointer must be valid for writes and properly aligned.
+    #[inline]
+    pub(crate) unsafe fn init_header_at(ptr: *mut Self) {
+        // SAFETY: Caller guarantees ptr is valid and properly aligned.
+        unsafe {
+            std::ptr::addr_of_mut!((*ptr).ref_count).write(AtomicUsize::new(1));
+            std::ptr::addr_of_mut!((*ptr).weak_count).write(AtomicUsize::new(0));
+            std::ptr::addr_of_mut!((*ptr).drop_fn).write(Self::no_op_drop);
+            std::ptr::addr_of_mut!((*ptr).trace_fn).write(Self::no_op_trace);
+            std::ptr::addr_of_mut!((*ptr).is_dropping).write(AtomicUsize::new(0));
+        }
+    }
 }
 
 /// Internal weak reference type for cross-thread handles.
@@ -457,6 +600,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
         }
     }
 
+    /// Create a null weak reference (no underlying object).
+    pub(crate) const fn null() -> Self {
+        Self {
+            ptr: AtomicNullable::null(),
+        }
+    }
+
     /// Upgrade to a strong reference.
     ///
     /// Uses atomic CAS to transition from `ref_count=0` to `ref_count=1`,
@@ -464,6 +614,17 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
     /// If `ref_count` > 0, increments normally since strong refs already exist.
     pub(crate) fn upgrade(&self) -> Option<Gc<T>> {
         let ptr = self.ptr.load(Ordering::Acquire).as_option()?;
+
+        // Validate pointer before dereferencing (same checks as clone())
+        let ptr_addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
+            return None;
+        }
+
+        if !is_gc_box_pointer_valid(ptr_addr) {
+            return None;
+        }
 
         unsafe {
             let gc_box = &*ptr.as_ptr();
@@ -487,10 +648,19 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if gc_box.try_inc_ref_from_zero() {
                 // Second check: verify object wasn't dropped between check and CAS
                 if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
-                    // Undo the increment and return None
+                    // Undo the increment and return None. Use undo_inc_ref, not dec_ref:
+                    // dec_ref returns early without decrementing when DEAD_FLAG is set.
                     let _ = gc_box;
-                    crate::ptr::GcBox::dec_ref(ptr.as_ptr());
+                    crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
+                }
+                // Check is_allocated after successful upgrade to prevent slot reuse issues
+                if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                    let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        // Don't call dec_ref - slot may be reused (bug133)
+                        return None;
+                    }
                 }
                 return Some(Gc {
                     ptr: AtomicNullable::new(ptr),
@@ -502,6 +672,21 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             // concurrent dec_ref (another thread could drop last ref between check and inc_ref)
             if !gc_box.try_inc_ref_if_nonzero() {
                 return None;
+            }
+            // Post-CAS safety check: verify object wasn't dropped between check and CAS
+            // (same pattern as Weak::upgrade). Use undo_inc_ref, not dec_ref: dec_ref
+            // returns early without decrementing when DEAD_FLAG is set.
+            if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                GcBox::undo_inc_ref(ptr.as_ptr());
+                return None;
+            }
+            // Check is_allocated after successful upgrade to prevent slot reuse issues
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    // Don't call dec_ref - slot may be reused (bug133)
+                    return None;
+                }
             }
             Some(Gc {
                 ptr: AtomicNullable::new(ptr),
@@ -552,6 +737,16 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             }
 
             (*ptr.as_ptr()).inc_weak();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    // Don't call dec_weak - slot may be reused (bug133)
+                    return Self {
+                        ptr: AtomicNullable::null(),
+                    };
+                }
+            }
         }
         Self {
             ptr: AtomicNullable::new(ptr),
@@ -577,7 +772,44 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
         let addr = ptr.as_ptr() as usize;
         let alignment = std::mem::align_of::<GcBox<T>>();
-        addr >= 4096 && addr % alignment == 0
+        if addr < MIN_VALID_HEAP_ADDRESS || addr % alignment != 0 {
+            return false;
+        }
+
+        if !is_gc_box_pointer_valid(addr) {
+            return false;
+        }
+
+        true
+    }
+
+    /// Check if this weak reference points to a live object (lightweight check).
+    ///
+    /// Returns true if the object is likely alive (hasn't been collected).
+    /// Does not increment `ref_count`.
+    pub(crate) fn is_live(&self) -> bool {
+        let Some(ptr) = self.as_ptr() else {
+            return false;
+        };
+
+        let addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if addr < MIN_VALID_HEAP_ADDRESS || addr % alignment != 0 {
+            return false;
+        }
+
+        if !is_gc_box_pointer_valid(addr) {
+            return false;
+        }
+
+        unsafe {
+            let gc_box = &*ptr.as_ptr();
+            if gc_box.has_dead_flag() {
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Attempt upgrade with additional safety checks.
@@ -611,11 +843,23 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             // Try atomic transition from 0 to 1 (same as regular upgrade)
             if gc_box.try_inc_ref_from_zero() {
                 // Second check: verify object wasn't dropped between check and CAS
-                if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
-                    // Undo the increment and return None
+                if gc_box.dropping_state() != 0
+                    || gc_box.has_dead_flag()
+                    || gc_box.is_under_construction()
+                {
+                    // Undo the increment and return None. Use undo_inc_ref, not dec_ref:
+                    // dec_ref returns early without decrementing when DEAD_FLAG is set.
                     let _ = gc_box;
-                    crate::ptr::GcBox::dec_ref(ptr.as_ptr());
+                    crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
+                }
+                // Check is_allocated after successful upgrade to prevent slot reuse issues
+                if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                    let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        // Don't call dec_ref - slot may be reused (bug133)
+                        return None;
+                    }
                 }
                 crate::gc::notify_created_gc();
                 return Some(Gc {
@@ -628,6 +872,24 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             // concurrent dec_ref (another thread could drop last ref between check and inc_ref)
             if !gc_box.try_inc_ref_if_nonzero() {
                 return None;
+            }
+            // Post-CAS safety check: verify object wasn't dropped between check and CAS
+            // (same pattern as Weak::try_upgrade). Use undo_inc_ref, not dec_ref: dec_ref
+            // returns early without decrementing when DEAD_FLAG is set.
+            if gc_box.dropping_state() != 0
+                || gc_box.has_dead_flag()
+                || gc_box.is_under_construction()
+            {
+                GcBox::undo_inc_ref(ptr.as_ptr());
+                return None;
+            }
+            // Check is_allocated after successful upgrade to prevent slot reuse issues
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    // Don't call dec_ref - slot may be reused (bug133)
+                    return None;
+                }
             }
             crate::gc::notify_created_gc();
             Some(Gc {
@@ -970,7 +1232,7 @@ impl<T: Trace> Gc<T> {
 
     #[deprecated(
         since = "0.0.1",
-        note = "Self-referential cycles are not supported. Use `new_cyclic_weak` instead."
+        note = "This function is non-functional: the closure receives a null Gc. Use `new_cyclic_weak` instead."
     )]
     #[allow(unused)]
     #[must_use]
@@ -1170,6 +1432,15 @@ impl<T: Trace> Gc<T> {
             return None;
         }
         let gc_box_ptr = ptr.as_ptr();
+        // Check slot is still allocated before dereferencing (avoids UAF with lazy sweep).
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return None;
+                }
+            }
+        }
         unsafe {
             if (*gc_box_ptr).has_dead_flag()
                 || (*gc_box_ptr).dropping_state() != 0
@@ -1191,14 +1462,48 @@ impl<T: Trace> Gc<T> {
         }
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return None;
+                }
+            }
+        }
+        unsafe {
             if (*gc_box_ptr).has_dead_flag()
                 || (*gc_box_ptr).dropping_state() != 0
                 || (*gc_box_ptr).is_under_construction()
             {
                 return None;
             }
+            // Avoid TOCTOU with concurrent drop: atomically increment only when ref_count > 0.
+            if !(*gc_box_ptr).try_inc_ref_if_nonzero() {
+                return None;
+            }
+            // Post-increment safety check: dropping/dead may flip between pre-check and ref bump.
+            // Use undo_inc_ref, not dec_ref: dec_ref returns early without decrementing when
+            // DEAD_FLAG is set.
+            if (*gc_box_ptr).has_dead_flag()
+                || (*gc_box_ptr).dropping_state() != 0
+                || (*gc_box_ptr).is_under_construction()
+            {
+                GcBox::undo_inc_ref(gc_box_ptr);
+                return None;
+            }
+            // Check is_allocated after successful ref bump to prevent slot reuse issues
+            // (same pattern as Gc::clone).
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    // Don't call dec_ref - slot may be reused (bug133)
+                    return None;
+                }
+            }
         }
-        Some(gc.clone())
+        Some(Self {
+            ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(gc_box_ptr) }),
+            _marker: PhantomData,
+        })
     }
 
     /// Get a raw pointer to the data.
@@ -1211,19 +1516,81 @@ impl<T: Trace> Gc<T> {
     /// behaviour. Use [`Gc::try_deref`] for a safe alternative.
     pub fn as_ptr(&self) -> *const T {
         let ptr = self.ptr.load(Ordering::Acquire);
+        assert!(!ptr.is_null(), "Gc::as_ptr: cannot get ptr of a dead Gc");
         let gc_box_ptr = ptr.as_ptr();
-        // SAFETY: ptr is not null (checked in callers), and ptr is valid
-        unsafe { std::ptr::addr_of!((*gc_box_ptr).value) }
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::as_ptr: slot has been swept and reused"
+                );
+            }
+        }
+        unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::as_ptr: cannot get ptr of a dead, dropping, or under construction Gc"
+            );
+            std::ptr::addr_of!((*gc_box_ptr).value)
+        }
     }
 
     /// Get the internal `GcBox` pointer.
     pub fn internal_ptr(gc: &Self) -> *const u8 {
-        gc.ptr.load(Ordering::Acquire).as_ptr() as *const u8
+        let ptr = gc.ptr.load(Ordering::Acquire);
+        assert!(
+            !ptr.is_null(),
+            "Gc::internal_ptr: cannot get ptr of a dead Gc"
+        );
+        let gc_box_ptr = ptr.as_ptr();
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::internal_ptr: slot has been swept and reused"
+                );
+            }
+        }
+        unsafe {
+            assert!(
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::internal_ptr: cannot get ptr of a dead, dropping, or under construction Gc"
+            );
+            gc_box_ptr as *const u8
+        }
     }
 
     /// Check if two Gcs point to the same allocation.
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
-        this.ptr.load(Ordering::Acquire).as_ptr() == other.ptr.load(Ordering::Acquire).as_ptr()
+        let this_ptr = this.ptr.load(Ordering::Acquire);
+        let other_ptr = other.ptr.load(Ordering::Acquire);
+
+        if this_ptr.is_null() || other_ptr.is_null() {
+            return this_ptr.as_ptr() == other_ptr.as_ptr();
+        }
+
+        let this_gc_box_ptr = this_ptr.as_ptr();
+        let other_gc_box_ptr = other_ptr.as_ptr();
+
+        unsafe {
+            if (*this_gc_box_ptr).has_dead_flag()
+                || (*this_gc_box_ptr).dropping_state() != 0
+                || (*this_gc_box_ptr).is_under_construction()
+                || (*other_gc_box_ptr).has_dead_flag()
+                || (*other_gc_box_ptr).dropping_state() != 0
+                || (*other_gc_box_ptr).is_under_construction()
+            {
+                panic!("Gc::ptr_eq: cannot compare dead, dropping, or under construction Gc");
+            }
+        }
+
+        this_ptr.as_ptr() == other_ptr.as_ptr()
     }
 
     /// Get the current reference count.
@@ -1238,6 +1605,15 @@ impl<T: Trace> Gc<T> {
             "Gc::ref_count: cannot get ref_count of a dead Gc"
         );
         let gc_box_ptr = ptr.as_ptr();
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::ref_count: slot has been swept and reused"
+                );
+            }
+        }
         unsafe {
             assert!(
                 !(*gc_box_ptr).has_dead_flag()
@@ -1261,6 +1637,15 @@ impl<T: Trace> Gc<T> {
             "Gc::weak_count: cannot get weak_count of a dead Gc"
         );
         let gc_box_ptr = ptr.as_ptr();
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::weak_count: slot has been swept and reused"
+                );
+            }
+        }
         unsafe {
             assert!(
                 !(*gc_box_ptr).has_dead_flag()
@@ -1296,6 +1681,15 @@ impl<T: Trace> Gc<T> {
         assert!(!ptr.is_null(), "Gc::downgrade: cannot downgrade a dead Gc");
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::downgrade: slot has been swept and reused"
+                );
+            }
+        }
+        unsafe {
             assert!(
                 !(*gc_box_ptr).has_dead_flag()
                     && (*gc_box_ptr).dropping_state() == 0
@@ -1303,6 +1697,15 @@ impl<T: Trace> Gc<T> {
                 "Gc::downgrade: cannot downgrade a dead, dropping, or under construction Gc"
             );
             (*gc_box_ptr).inc_weak();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                // Don't call dec_weak when slot swept - it may be reused (bug133)
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::downgrade: slot was swept during downgrade"
+                );
+            }
         }
         Weak {
             ptr: AtomicNullable::new(unsafe { NonNull::new_unchecked(gc_box_ptr) }),
@@ -1340,6 +1743,15 @@ impl<T: Trace> Gc<T> {
             };
         };
         unsafe {
+            // Check is_allocated before inc_weak to avoid operating on swept-and-reused slot (bug257).
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return GcBoxWeakRef {
+                        ptr: AtomicNullable::null(),
+                    };
+                }
+            }
             let gc_box = &*ptr.as_ptr();
             if gc_box.is_under_construction()
                 || gc_box.has_dead_flag()
@@ -1350,6 +1762,16 @@ impl<T: Trace> Gc<T> {
                 };
             }
             (*ptr.as_ptr()).inc_weak();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    // Don't call dec_weak - slot may be reused (bug133)
+                    return GcBoxWeakRef {
+                        ptr: AtomicNullable::null(),
+                    };
+                }
+            }
         }
         GcBoxWeakRef {
             ptr: AtomicNullable::new(ptr),
@@ -1382,7 +1804,7 @@ impl<T: Trace + 'static> Gc<T> {
     pub fn cross_thread_handle(&self) -> crate::handles::GcHandle<T> {
         use std::sync::Arc;
 
-        use crate::handles::GcHandle;
+        use crate::handles::{GcHandle, TcbRootRemoveGuard};
 
         let tcb = crate::heap::current_thread_control_block()
             .expect("cross_thread_handle called outside of GC context");
@@ -1400,18 +1822,33 @@ impl<T: Trace + 'static> Gc<T> {
                 "Gc::cross_thread_handle: cannot create handle for dead, dropping, or under construction Gc"
             );
             (*ptr.as_ptr()).inc_ref();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                // Don't call dec_ref when slot swept - it may be reused (bug133)
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::cross_thread_handle: object slot was swept after inc_ref"
+                );
+            }
         }
 
         roots.strong.insert(handle_id, ptr.cast::<GcBox<()>>());
-
+        let guard = TcbRootRemoveGuard {
+            tcb: Arc::clone(&tcb),
+            handle_id,
+            ptr: ptr.cast::<GcBox<()>>(),
+        };
         drop(roots);
 
-        GcHandle {
+        let handle = GcHandle {
             ptr,
             origin_tcb: Arc::downgrade(&tcb),
             origin_thread: std::thread::current().id(),
             handle_id,
-        }
+        };
+        std::mem::forget(guard);
+        handle
     }
 
     /// Creates a weak cross-thread handle that doesn't prevent collection.
@@ -1433,8 +1870,18 @@ impl<T: Trace + 'static> Gc<T> {
     /// ```
     #[must_use]
     pub fn weak_cross_thread_handle(&self) -> crate::handles::WeakCrossThreadHandle<T> {
+        let ptr = self.as_non_null();
+
         unsafe {
-            let gc_box = &*self.as_non_null().as_ptr();
+            // Check is_allocated before inc_weak to avoid operating on swept-and-reused slot (bug257).
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::weak_cross_thread_handle: slot has been swept and reused"
+                );
+            }
+            let gc_box = &*ptr.as_ptr();
             assert!(
                 !gc_box.has_dead_flag()
                     && gc_box.dropping_state() == 0
@@ -1442,9 +1889,18 @@ impl<T: Trace + 'static> Gc<T> {
                 "Gc::weak_cross_thread_handle: cannot create handle for dead, dropping, or under construction Gc"
             );
             gc_box.inc_weak();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                // Don't call dec_weak when slot swept - it may be reused (bug133)
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::weak_cross_thread_handle: object slot was swept after inc_weak"
+                );
+            }
         }
         crate::handles::WeakCrossThreadHandle {
-            weak: GcBoxWeakRef::new(self.as_non_null()),
+            weak: GcBoxWeakRef::new(ptr),
             origin_tcb: std::sync::Arc::downgrade(
                 &crate::heap::current_thread_control_block()
                     .expect("weak_cross_thread_handle called outside of GC context"),
@@ -1457,8 +1913,13 @@ impl<T: Trace + 'static> Gc<T> {
 impl<T: Trace> Deref for Gc<T> {
     type Target = T;
 
+    /// Hot path: only checks `GcBox` flags (same cache line as the value).
+    /// Page header / `is_allocated` lookups are avoided to prevent performance regression.
+    /// Swept slots are caught by `has_dead_flag()` (`set_dead` is called before `clear_allocated`).
+    #[inline]
     fn deref(&self) -> &Self::Target {
         let ptr = self.ptr.load(Ordering::Acquire);
+        assert!(!ptr.is_null(), "Gc::deref: cannot dereference a null Gc");
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
             assert!(
@@ -1493,7 +1954,28 @@ impl<T: Trace> Clone for Gc<T> {
                     && !(*gc_box_ptr).is_under_construction(),
                 "Gc::clone: cannot clone a dead, dropping, or under construction Gc"
             );
+
+            // Check is_allocated BEFORE inc_ref to avoid TOCTOU (bug289).
+            // The slot could be swept and reused between flag check and inc_ref,
+            // causing inc_ref to modify the wrong object's ref count.
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::clone: object slot was swept before inc_ref"
+                );
+            }
+
             (*gc_box_ptr).inc_ref();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                // Don't call dec_ref when slot swept - it may be reused (bug133)
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::clone: object slot was swept after inc_ref"
+                );
+            }
         }
 
         Self {
@@ -1512,13 +1994,9 @@ impl<T: Trace> Drop for Gc<T> {
 
         let gc_box_ptr = ptr.as_ptr();
 
-        let is_last = GcBox::<T>::dec_ref(gc_box_ptr);
+        let was_last = GcBox::<T>::dec_ref(gc_box_ptr);
 
-        if is_last {
-            unsafe {
-                ((*gc_box_ptr).drop_fn)(gc_box_ptr.cast::<u8>());
-            }
-        } else {
+        if !was_last {
             notify_dropped_gc();
         }
     }
@@ -1673,6 +2151,29 @@ impl<T: Trace> Weak<T> {
     pub fn upgrade(&self) -> Option<Gc<T>> {
         let ptr = self.ptr.load(Ordering::Acquire).as_option()?;
 
+        // Validate pointer before any use (alignment, minimum address, GC box validity).
+        // Must match try_upgrade() to ensure consistent safety guarantees.
+        let addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if addr % alignment != 0 {
+            return None;
+        }
+        if addr < MIN_VALID_HEAP_ADDRESS {
+            return None;
+        }
+        if !is_gc_box_pointer_valid(addr) {
+            return None;
+        }
+
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return None;
+                }
+            }
+        }
+
         unsafe {
             let gc_box = &*ptr.as_ptr();
 
@@ -1711,6 +2212,25 @@ impl<T: Trace> Weak<T> {
                     )
                     .is_ok()
                 {
+                    // Post-CAS safety check: `dec_ref` marks dropping (sets dropping_state=1)
+                    // and calls drop_fn_for (which sets DEAD_FLAG then drop_in_place) *without*
+                    // decrementing ref_count, so our CAS can succeed while the value is freed.
+                    // Re-read the flags now that we own a count; the GcBox header remains valid
+                    // (allocation stays live until weak_count reaches 0).
+                    if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                        // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+                        // decrementing when DEAD_FLAG is set, leaving ref_count at 1.
+                        GcBox::undo_inc_ref(ptr.as_ptr());
+                        return None;
+                    }
+                    // Check is_allocated after successful upgrade to prevent slot reuse issues
+                    if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                        let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            // Don't call dec_ref - slot may be reused (bug133)
+                            return None;
+                        }
+                    }
                     crate::gc::notify_created_gc();
                     return Some(Gc {
                         ptr: AtomicNullable::new(ptr),
@@ -1758,6 +2278,15 @@ impl<T: Trace> Weak<T> {
         }
 
         unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return None;
+                }
+            }
+        }
+
+        unsafe {
             // SAFETY: Pointer passed validation checks above (alignment, addr >= 4096)
             let gc_box = &*ptr.as_ptr();
 
@@ -1789,6 +2318,24 @@ impl<T: Trace> Weak<T> {
                     )
                     .is_ok()
                 {
+                    // Post-CAS safety check: same as Weak::upgrade — re-verify after owning a count
+                    if gc_box.dropping_state() != 0
+                        || gc_box.has_dead_flag()
+                        || gc_box.is_under_construction()
+                    {
+                        // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+                        // decrementing when DEAD_FLAG is set, leaving ref_count at 1.
+                        GcBox::undo_inc_ref(ptr.as_ptr());
+                        return None;
+                    }
+                    // Check is_allocated after successful upgrade to prevent slot reuse issues
+                    if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                        let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            // Don't call dec_ref - slot may be reused (bug133)
+                            return None;
+                        }
+                    }
                     crate::gc::notify_created_gc();
                     return Some(Gc {
                         ptr: AtomicNullable::new(ptr),
@@ -1878,11 +2425,22 @@ impl<T: Trace> Weak<T> {
         };
         let ptr_addr = ptr.as_ptr() as usize;
         let alignment = std::mem::align_of::<GcBox<T>>();
-        if ptr_addr % alignment != 0 {
+        if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
+            return 0;
+        }
+        if !is_gc_box_pointer_valid(ptr_addr) {
             return 0;
         }
 
         unsafe {
+            // Check is_allocated before reading ref_count; slot may have been swept and reused
+            // (bug262).
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return 0;
+                }
+            }
             let gc_box = &*ptr.as_ptr();
             if gc_box.is_under_construction()
                 || gc_box.has_dead_flag()
@@ -1906,11 +2464,22 @@ impl<T: Trace> Weak<T> {
         };
         let ptr_addr = ptr.as_ptr() as usize;
         let alignment = std::mem::align_of::<GcBox<T>>();
-        if ptr_addr % alignment != 0 {
+        if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
+            return 0;
+        }
+        if !is_gc_box_pointer_valid(ptr_addr) {
             return 0;
         }
 
         unsafe {
+            // Check is_allocated before reading weak_count; slot may have been swept and reused
+            // (bug262).
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return 0;
+                }
+            }
             let gc_box = &*ptr.as_ptr();
             if gc_box.is_under_construction()
                 || gc_box.has_dead_flag()
@@ -1932,16 +2501,47 @@ impl<T: Trace> Weak<T> {
     /// to point to different (invalid) memory.
     #[must_use]
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
-        this.ptr.load(Ordering::Acquire) == other.ptr.load(Ordering::Acquire)
+        let this_ptr = this.ptr.load(Ordering::Acquire);
+        let other_ptr = other.ptr.load(Ordering::Acquire);
+
+        if let Some(p) = this_ptr.as_option() {
+            let addr = p.as_ptr() as usize;
+            let alignment = std::mem::align_of::<GcBox<T>>();
+            if addr % alignment != 0
+                || addr < MIN_VALID_HEAP_ADDRESS
+                || !is_gc_box_pointer_valid(addr)
+            {
+                return false;
+            }
+        }
+        if let Some(p) = other_ptr.as_option() {
+            let addr = p.as_ptr() as usize;
+            let alignment = std::mem::align_of::<GcBox<T>>();
+            if addr % alignment != 0
+                || addr < MIN_VALID_HEAP_ADDRESS
+                || !is_gc_box_pointer_valid(addr)
+            {
+                return false;
+            }
+        }
+        this_ptr == other_ptr
     }
 
     /// Returns the raw gc-box address stored by this weak pointer.
     #[must_use]
     pub fn raw_addr(&self) -> usize {
-        self.ptr
-            .load(Ordering::Acquire)
-            .as_option()
-            .map_or(0, |p| p.as_ptr() as usize)
+        let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
+            return 0;
+        };
+        let ptr_addr = ptr.as_ptr() as usize;
+        let alignment = std::mem::align_of::<GcBox<T>>();
+        if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
+            return 0;
+        }
+        if !is_gc_box_pointer_valid(ptr_addr) {
+            return 0;
+        }
+        ptr_addr
     }
 }
 
@@ -1982,6 +2582,16 @@ impl<T: Trace> Clone for Weak<T> {
                 };
             }
             (*ptr.as_ptr()).inc_weak();
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    // Don't call dec_weak - slot may be reused (bug133)
+                    return Self {
+                        ptr: AtomicNullable::null(),
+                    };
+                }
+            }
         }
         Self {
             ptr: AtomicNullable::new(ptr),
@@ -2016,7 +2626,7 @@ pub fn is_gc_box_pointer_valid(ptr_addr: usize) -> bool {
 
 impl<T: Trace> Drop for Weak<T> {
     fn drop(&mut self) {
-        let ptr = self.ptr.load(Ordering::Relaxed);
+        let ptr = self.ptr.load(Ordering::Acquire);
         let Some(ptr) = ptr.as_option() else {
             return;
         };
@@ -2036,6 +2646,19 @@ impl<T: Trace> Drop for Weak<T> {
         // By using addr_of! to get the address of weak_count directly, we avoid
         // creating a reference to the GcBox and thus avoid the borrow conflict.
         unsafe {
+            // Check slot is still allocated before dereferencing (bug232) — avoids UAF when lazy
+            // sweep has reclaimed and reused the slot.
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return;
+                }
+            }
+            // Always decrement weak_count when dropping a Weak. The is_allocated check above
+            // protects against slot reuse (bug133). We must NOT skip dec_weak when
+            // has_dead_flag/dropping_state/is_under_construction — that would prevent
+            // weak_count from reaching 0 and block reclamation. The TOCTOU race (bug265)
+            // between a pre-check and dec_weak is eliminated by always decrementing.
             let weak_count_ptr = std::ptr::addr_of!((*ptr.as_ptr()).weak_count);
 
             let mut current = (*weak_count_ptr).load(Ordering::Relaxed);
@@ -2165,13 +2788,15 @@ impl<K: Trace + 'static, V: Trace + 'static> Ephemeron<K, V> {
         }
     }
 
-    /// Returns a reference to the key (if still alive).
+    /// Returns the key as a strong reference if it is still alive.
     ///
+    /// Returns `Some(Gc<K>)` if the key has not been collected.
     /// Returns `None` if the key has been collected.
-    pub const fn key(&self) -> Option<&Gc<K>> {
-        // This is tricky - Weak doesn't give us &Gc<K>, it gives us Option<Gc<K>>
-        // For now, we don't expose direct key access
-        None
+    ///
+    /// This upgrades the internal weak reference to a strong reference,
+    /// giving the caller ownership of a `Gc<K>` that keeps the key alive.
+    pub fn key(&self) -> Option<Gc<K>> {
+        self.key.upgrade()
     }
 
     /// Returns a reference to the value without checking if the key is alive.
@@ -2192,12 +2817,13 @@ impl<K: Trace + 'static, V: Trace + 'static> Ephemeron<K, V> {
     /// This is the primary way to access the value - it ensures type safety
     /// by only returning the value when the key is still alive.
     #[allow(clippy::option_if_let_else)]
+    #[allow(unused_variables)]
     pub fn upgrade(&self) -> Option<Gc<V>> {
         // FIX: Keep the key alive while checking value. This fixes TOCTOU race
         // where key could become invalid between is_key_alive() check and value clone.
         // We upgrade the key first (acquiring a strong ref), then clone the value
         // while holding that ref, ensuring atomicity.
-        if let Some(_key_gc) = self.key.upgrade() {
+        if let Some(key_gc) = self.key.upgrade() {
             // Key is alive and we hold a ref. Now safely clone the value.
             Gc::try_clone(&self.value)
         } else {
@@ -2257,11 +2883,14 @@ impl<K: Trace + 'static, V: Trace + 'static> std::fmt::Debug for Ephemeron<K, V>
 unsafe impl<K: Trace + 'static, V: Trace + 'static> Trace for Ephemeron<K, V> {
     fn trace(&self, visitor: &mut impl Visitor) {
         // Ephemeron semantics: value is only reachable if key is reachable.
-        // - The key is stored as a Weak, so it's not traced (correct)
-        // - Only trace value when key is alive; when key dies, value can be collected
-        if self.is_key_alive() {
+        // - The key is stored as a Weak, so it's not traced directly (correct)
+        // - Use try_upgrade() to atomically confirm key liveness and obtain a strong ref,
+        //   avoiding TOCTOU with is_key_alive() (matches GcCapture implementation).
+        if let Some(key_gc) = self.key.try_upgrade() {
+            key_gc.trace(visitor);
             visitor.visit(&self.value);
         }
+        // If key is dead, value can be collected — trace nothing (ephemeron semantics).
     }
 }
 
@@ -2299,12 +2928,17 @@ impl<K: Trace + 'static, V: Trace + 'static> GcCapture for Ephemeron<K, V> {
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
         // Ephemeron semantics: only capture when key is alive (matches Trace).
         // When key is dead, value can be collected; capturing would incorrectly retain it.
-        if self.is_key_alive() {
+        //
+        // Use try_upgrade() *first* to atomically confirm key liveness and obtain a
+        // strong reference. The previous is_key_alive() + try_upgrade() pattern had a
+        // TOCTOU window: the key could die after is_key_alive() returned true but before
+        // try_upgrade() ran, leaving the key's GC pointers uncaptured in the SATB buffer.
+        if let Some(key_gc) = self.key.try_upgrade() {
+            // Key is alive; we hold a strong ref that keeps it alive for this call.
+            key_gc.capture_gc_ptrs_into(ptrs);
             self.value.capture_gc_ptrs_into(ptrs);
-            if let Some(key_gc) = self.key.try_upgrade() {
-                key_gc.capture_gc_ptrs_into(ptrs);
-            }
         }
+        // If key is dead, value can be collected — capture nothing (ephemeron semantics).
     }
 }
 

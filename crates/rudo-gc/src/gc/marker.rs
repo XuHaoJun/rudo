@@ -685,7 +685,10 @@ impl PerThreadMarkQueue {
         let obj_count = unsafe { (*header).obj_count } as usize;
 
         for i in 0..obj_count {
-            if unsafe { (*header).is_allocated(i) && !(*header).is_marked(i) } {
+            // Only check is_marked at entry; is_allocated recheck after try_mark is sufficient.
+            // Redundant entry is_allocated check removed (bug258): provides no additional TOCTOU
+            // protection — lazy sweep can flip is_allocated between any check and push.
+            if unsafe { !(*header).is_marked(i) } {
                 if kind == VisitorKind::Minor && unsafe { (*header).generation } > 0 {
                     continue;
                 }
@@ -694,10 +697,33 @@ impl PerThreadMarkQueue {
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                unsafe { (*header).set_mark(i) };
-                marked += 1;
-
-                self.push(gc_box_ptr.as_ptr());
+                // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep
+                unsafe {
+                    loop {
+                        match (*header).try_mark(i) {
+                            Ok(false) => {
+                                // Re-check is_allocated to fix TOCTOU with lazy sweep (bug292).
+                                // If slot was swept after we entered the loop, skip it.
+                                if !(*header).is_allocated(i) {
+                                    break;
+                                }
+                                break; // Already marked by another thread, slot is still valid
+                            }
+                            Ok(true) => {
+                                // Re-check is_allocated to fix TOCTOU with lazy sweep (bug292).
+                                // If slot was swept after try_mark, clear mark and skip.
+                                if !(*header).is_allocated(i) {
+                                    (*header).clear_mark_atomic(i);
+                                    break;
+                                }
+                                marked += 1;
+                                self.push(gc_box_ptr.as_ptr());
+                                break;
+                            }
+                            Err(()) => {} // CAS failed, retry
+                        }
+                    }
+                }
             }
         }
 
@@ -911,11 +937,28 @@ pub fn worker_mark_loop(
                     continue;
                 }
 
-                (*header.as_ptr()).set_mark(idx);
-                marked += 1;
-
-                let gc_box_ptr = obj.cast_mut();
-                ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
+                // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug294).
+                loop {
+                    match (*header.as_ptr()).try_mark(idx) {
+                        Ok(false) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                break;
+                            }
+                            break;
+                        }
+                        Ok(true) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                break;
+                            }
+                            marked += 1;
+                            let gc_box_ptr = obj.cast_mut();
+                            ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
+                            break;
+                        }
+                        Err(()) => {}
+                    }
+                }
             }
         }
 
@@ -1033,11 +1076,28 @@ pub fn worker_mark_loop_with_registry(
                     continue;
                 }
 
-                (*header.as_ptr()).set_mark(idx);
-                marked += 1;
-
-                let gc_box_ptr = obj.cast_mut();
-                ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
+                // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug294).
+                loop {
+                    match (*header.as_ptr()).try_mark(idx) {
+                        Ok(false) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                break;
+                            }
+                            break;
+                        }
+                        Ok(true) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                break;
+                            }
+                            marked += 1;
+                            let gc_box_ptr = obj.cast_mut();
+                            ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
+                            break;
+                        }
+                        Err(()) => {}
+                    }
+                }
             }
         }
 

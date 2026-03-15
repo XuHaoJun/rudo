@@ -96,6 +96,22 @@
 //!     let _guard = LockGuard::new(LockOrder::GcRequest); // Level 3
 //! }
 //! ```
+//!
+//! ## Exempt Global Mutexes (bug203)
+//!
+//! The following global mutexes are intentionally **not** in the lock ordering
+//! validation system, as they are acquired from contexts that already hold
+//! higher-level locks or from separate subsystems:
+//!
+//! - **`CROSS_THREAD_SATB_BUFFER`**: Acquired during write barriers (no other locks)
+//!   and during GC drain (may hold other locks). Documented in `heap.rs`.
+//! - **`SEGMENT_MANAGER`**: Acquired during marking via `find_gc_box_from_orphan`
+//!   while holding `GlobalMarkState`. Documented in `heap.rs`.
+//! - **`GcRootSet`**: Tokio root tracking; separate subsystem. Documented in
+//!   `tokio/root.rs`.
+//!
+//! Developers must avoid acquiring these locks in an order that could deadlock
+//! with the validated locks.
 
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::AtomicBool;

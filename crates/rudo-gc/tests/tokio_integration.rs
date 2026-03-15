@@ -33,7 +33,10 @@ fn test_gcrootset_register_unregister() {
         initial_len + 1,
         "Len should increment after register"
     );
-    assert!(set.is_registered(test_ptr), "Pointer should be registered");
+    assert!(
+        unsafe { set.is_registered(test_ptr) },
+        "Pointer should be registered"
+    );
 
     set.unregister(test_ptr);
     assert_eq!(
@@ -42,7 +45,7 @@ fn test_gcrootset_register_unregister() {
         "Len should return to initial after unregister"
     );
     assert!(
-        !set.is_registered(test_ptr),
+        !unsafe { set.is_registered(test_ptr) },
         "Pointer should not be registered"
     );
 }
@@ -66,10 +69,10 @@ fn test_guard_registration() {
     register_test_root(ptr);
 
     let guard = unsafe { GcRootGuard::new(ptr) };
-    assert!(GcRootSet::global().is_registered(ptr.as_ptr() as usize));
+    assert!(unsafe { GcRootSet::global().is_registered(ptr.as_ptr() as usize) });
 
     drop(guard);
-    assert!(!GcRootSet::global().is_registered(ptr.as_ptr() as usize));
+    assert!(!unsafe { GcRootSet::global().is_registered(ptr.as_ptr() as usize) });
 }
 
 #[test]
@@ -81,7 +84,7 @@ fn test_guard_unregistration_only_once() {
     let guard = unsafe { GcRootGuard::new(ptr) };
     drop(guard);
 
-    assert!(!GcRootSet::global().is_registered(ptr.as_ptr() as usize));
+    assert!(!unsafe { GcRootSet::global().is_registered(ptr.as_ptr() as usize) });
 }
 
 #[test]

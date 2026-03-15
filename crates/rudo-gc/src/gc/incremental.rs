@@ -132,11 +132,14 @@ impl Default for IncrementalConfig {
 /// The `worklist` field is reserved for future parallel marking coordination and
 /// is currently unused.
 ///
-/// **Important**: The `unsafe impl Sync` declaration is intentionally removed.
-/// When parallel marking is implemented, proper synchronization (Mutex or atomic
-/// operations) must be added to the `worklist` field before it can be safely accessed
-/// from multiple threads. The blanket `unsafe impl Sync` was removed because the
-/// `UnsafeCell<SegQueue>` does not provide thread-safe interior mutability.
+/// **Important**: The `unsafe impl Sync` declaration was previously removed but has been
+/// restored with proper safety justification. The worklist field is accessed single-threaded
+/// from the GC thread during synchronized mark slices, and proper safety rationale is provided
+/// at the impl site (see lines 219-232).
+///
+/// When parallel marking is implemented:
+/// 1. The `worklist` field MUST be protected with proper synchronization
+/// 2. Concurrent access without synchronization is undefined behavior
 ///
 /// # Usage
 ///
@@ -408,10 +411,15 @@ impl IncrementalMarkState {
 
     #[inline]
     fn update_max_worklist_size(&self, size: usize) {
-        let current_max = self.max_worklist_size.load(Ordering::SeqCst);
-        if size > current_max {
-            self.max_worklist_size.store(size, Ordering::SeqCst);
-        }
+        self.max_worklist_size
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current_max| {
+                if size > current_max {
+                    Some(size)
+                } else {
+                    None
+                }
+            })
+            .ok();
     }
 
     fn max_worklist_size(&self) -> usize {
@@ -431,12 +439,12 @@ impl IncrementalMarkState {
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::Relaxed)
+        self.enabled.load(Ordering::Acquire)
     }
 
     pub fn set_config(&self, config: IncrementalConfig) {
         *self.config.lock() = config;
-        self.enabled.store(config.enabled, Ordering::Relaxed);
+        self.enabled.store(config.enabled, Ordering::Release);
     }
 
     #[cfg(feature = "tracing")]
@@ -490,9 +498,7 @@ pub fn is_write_barrier_active() -> bool {
 
 pub fn write_barrier_needed() -> bool {
     let state = IncrementalMarkState::global();
-    state.enabled.load(Ordering::Relaxed)
-        && !state.fallback_requested()
-        && is_write_barrier_active()
+    state.is_enabled() && !state.fallback_requested() && is_write_barrier_active()
 }
 
 /// Returns true when the generational write barrier should record OLD→YOUNG references.
@@ -575,8 +581,8 @@ unsafe fn mark_root_for_snapshot(ptr: NonNull<GcBox<()>>, visitor: &mut crate::t
         if !was_marked {
             (*header.as_ptr()).set_mark(idx);
             visitor.objects_marked += 1;
+            visitor.worklist.push(ptr);
         }
-        visitor.worklist.push(ptr);
     }
 }
 
@@ -779,6 +785,19 @@ pub fn mark_slice(heap: &mut LocalHeap, budget: usize) -> MarkSliceResult {
 unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalMarkState) {
     let ptr = gc_box.as_ptr() as *const u8;
     let header = crate::heap::ptr_to_page_header(ptr);
+
+    // Validate page magic and slot allocation before dereferencing. Avoids UAF when lazy
+    // sweep runs concurrently with incremental marking (bug274).
+    if (*header.as_ptr()).magic != crate::heap::MAGIC_GC_PAGE {
+        return;
+    }
+    let Some(idx) = crate::heap::ptr_to_object_index(ptr) else {
+        return;
+    };
+    if !(*header.as_ptr()).is_allocated(idx) {
+        return;
+    }
+
     let block_size = (*header.as_ptr()).block_size as usize;
     let header_size = crate::heap::PageHeader::header_size(block_size);
     let data_ptr = ptr.add(header_size);
@@ -804,16 +823,38 @@ unsafe fn scan_page_for_marked_refs(
     let mut refs_found = 0;
 
     for i in 0..obj_count {
-        if (*header).is_allocated(i) && !(*header).is_marked(i) {
+        // Only check is_marked at entry; is_allocated recheck after try_mark is sufficient.
+        // Redundant entry is_allocated check removed (bug258): provides no additional TOCTOU
+        // protection — lazy sweep can flip is_allocated between any check and push_work.
+        if !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
-            refs_found += 1;
-            (*header).set_mark(i);
-            #[allow(clippy::cast_ptr_alignment)]
-            #[allow(clippy::unnecessary_cast)]
-            #[allow(clippy::ptr_as_ptr)]
-            let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-            if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
-                state.push_work(gc_box);
+            // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep
+            loop {
+                match (*header).try_mark(i) {
+                    Ok(false) => {
+                        // Already marked by another thread; move to next slot.
+                        // No recheck needed: we didn't mark, so nothing to roll back.
+                        break;
+                    }
+                    Ok(true) => {
+                        // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
+                        // If slot was swept after try_mark, clear mark and skip.
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
+                        refs_found += 1;
+                        #[allow(clippy::cast_ptr_alignment)]
+                        #[allow(clippy::unnecessary_cast)]
+                        #[allow(clippy::ptr_as_ptr)]
+                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                        if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
+                            state.push_work(gc_box);
+                        }
+                        break;
+                    }
+                    Err(()) => {} // CAS failed, retry
+                }
             }
         }
     }
@@ -913,9 +954,20 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
     let obj_count = (*header).obj_count as usize;
 
     for i in 0..obj_count {
-        if (*header).is_allocated(i) && !(*header).is_marked(i) {
+        // Only check is_marked at entry; is_allocated recheck after set_mark is sufficient.
+        // Redundant entry is_allocated check removed (bug258): provides no additional TOCTOU
+        // protection — lazy sweep can flip is_allocated between any check and push_work.
+        if !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
+            // set_mark returns true if we successfully marked - use it as try_mark
+            // Re-check is_allocated after successful mark to fix TOCTOU with lazy sweep.
             if (*header).set_mark(i) {
+                // Re-check is_allocated to fix TOCTOU with lazy sweep.
+                // If slot was swept after set_mark, clear mark and skip.
+                if !(*header).is_allocated(i) {
+                    (*header).clear_mark_atomic(i);
+                    continue;
+                }
                 #[allow(clippy::cast_ptr_alignment)]
                 #[allow(clippy::unnecessary_cast)]
                 #[allow(clippy::ptr_as_ptr)]
@@ -955,8 +1007,21 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
             if !(*header.as_ptr()).is_allocated(idx) {
                 return false;
             }
+            // Skip if object is under construction (e.g. during Gc::new_cyclic_weak).
+            // Avoids incorrectly marking partially-initialized objects (bug238).
+            #[allow(clippy::cast_ptr_alignment)]
+            let gc_box = &*ptr.cast::<GcBox<()>>();
+            if gc_box.is_under_construction() {
+                return false;
+            }
             if !(*header.as_ptr()).is_marked(idx) {
                 (*header.as_ptr()).set_mark(idx);
+                // Re-check is_allocated to fix TOCTOU with lazy sweep (bug272).
+                // If slot was swept between initial check and set_mark, roll back.
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    (*header.as_ptr()).clear_mark_atomic(idx);
+                    return false;
+                }
                 return true;
             }
         }
@@ -970,21 +1035,52 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
 ///
 /// Skips marking if the object has been swept (`!is_allocated`), preventing
 /// use-after-free when `GcThreadSafeRefMut::drop` runs concurrently with GC sweep.
+///
+/// Uses optimistic marking with post-CAS validation to fix TOCTOU: we atomically
+/// set the mark via `try_mark`, then re-check `is_allocated`. If the slot was
+/// swept between our initial check and the mark, we roll back the mark.
 #[inline]
 #[allow(clippy::missing_safety_doc)]
 #[allow(unsafe_op_in_unsafe_fn)]
 pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
-    if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
-        let header = crate::heap::ptr_to_page_header(ptr);
-        let h = header.as_ptr();
-        // Skip if object was swept; avoids UAF when Drop runs during/concurrent with sweep.
-        if !(*h).is_allocated(idx) {
-            return None;
-        }
-        if !(*h).is_marked(idx) {
-            (*h).set_mark(idx);
-            return Some(idx);
+    let idx = crate::heap::ptr_to_object_index(ptr.cast())?;
+    let header = crate::heap::ptr_to_page_header(ptr);
+    let h = header.as_ptr();
+
+    // Skip if object was swept; avoids UAF when Drop runs during/concurrent with sweep.
+    if !(*h).is_allocated(idx) {
+        return None;
+    }
+
+    // Skip if object is under construction (e.g. during Gc::new_cyclic_weak).
+    // Avoids incorrectly marking partially-initialized objects (bug238).
+    #[allow(clippy::cast_ptr_alignment)]
+    let gc_box = &*ptr.cast::<GcBox<()>>();
+    if gc_box.is_under_construction() {
+        return None;
+    }
+
+    loop {
+        match (*h).try_mark(idx) {
+            Ok(false) => {
+                // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
+                // If slot was swept after initial check but before we get here,
+                // return None to avoid using a reused slot.
+                if (*h).is_allocated(idx) {
+                    return Some(idx);
+                }
+                return None;
+            }
+            Ok(true) => {
+                // We just marked. Re-check is_allocated to fix TOCTOU with lazy sweep.
+                if (*h).is_allocated(idx) {
+                    return Some(idx);
+                }
+                // Slot was swept between our check and try_mark. Roll back.
+                (*h).clear_mark_atomic(idx);
+                return None;
+            }
+            Err(()) => {} // CAS failed, retry
         }
     }
-    None
 }

@@ -66,11 +66,35 @@ fn test_ephemeron_key_and_value() {
     let value = Gc::new(123);
     let ephemeron = Ephemeron::new(&key, value.clone());
 
-    // key() returns Option - None because key is stored as Weak internally
-    // The important thing is that value upgrade works while key is alive
+    // key() returns Some(Gc<K>) when key is alive (bug271 fix)
+    let key_ref = ephemeron.key();
+    assert!(key_ref.is_some());
+    assert!(Gc::ptr_eq(key_ref.as_ref().unwrap(), &key));
+    assert_eq!(*key_ref.unwrap(), "my_key");
+
+    // Value upgrade works while key is alive
     let upgraded_value = ephemeron.upgrade();
     assert!(upgraded_value.is_some());
     assert!(Gc::ptr_eq(&upgraded_value.unwrap(), &value));
+}
+
+#[test]
+fn test_ephemeron_key_returns_none_when_key_dropped() {
+    let ephemeron: Ephemeron<&'static str, i32>;
+    {
+        let key = Gc::new("key");
+        let value = Gc::new(42);
+        ephemeron = Ephemeron::new(&key, value);
+        assert!(
+            ephemeron.key().is_some(),
+            "key should be Some while key is alive"
+        );
+    }
+    collect_full();
+    assert!(
+        ephemeron.key().is_none(),
+        "key() should return None after key is dropped and collected (bug271)"
+    );
 }
 
 #[test]

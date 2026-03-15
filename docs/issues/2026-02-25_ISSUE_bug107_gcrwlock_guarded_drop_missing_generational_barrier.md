@@ -1,7 +1,7 @@
 # [Bug]: GcRwLockWriteGuard/GcMutexGuard Drop 缺少 Generational Barrier 檢查
 
-**Status:** Invalid
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -161,3 +161,77 @@ Generational GC 的核心原則是 OLD→YOUNG 引用必須被追蹤，無論是
 ## Resolution Note (2026-02-26)
 
 **Classification: Invalid** — The fix is already implemented. Both `GcRwLockWriteGuard::drop()` and `GcMutexGuard::drop()` in `sync.rs` (lines 408–411 and 650–653) already check `is_generational_barrier_active() || is_incremental_marking_active()` before capturing and marking GC pointers. The behavior matches `trigger_write_barrier()`. No code changes required.
+
+---
+
+## Reopening Note (2026-03-09)
+
+**REOPENED - Bug is still present!**
+
+The resolution above was INCORRECT. Upon re-examination:
+
+**Root Cause - Wrong function called:**
+
+1. `GcRwLockReadGuard::drop` (sync.rs:386-396) - Calls `mark_object_black` only
+2. `GcRwLockWriteGuard::drop` (sync.rs:436-449) - Calls `mark_object_black` only
+3. `GcMutexGuard::drop` (sync.rs:691-704) - Calls `mark_object_black` only
+
+All three Drop implementations:
+- Capture GC pointers via `capture_gc_ptrs_into` ✓
+- Call `mark_object_black` which handles **incremental marking** (SATB) only
+- Do NOT call `unified_write_barrier` which handles **generational barrier** (remembered set)
+
+Compare to acquisition (e.g., `GcRwLock::write()` at line 256-270):
+- Calls `record_satb_old_values_with_state` for SATB ✓
+- Calls `trigger_write_barrier_with_state(generational_active, incremental_active)` 
+- Which calls `unified_write_barrier` for generational barrier ✓
+
+The Drop implementations are calling the WRONG function:
+- `mark_object_black` = incremental marking only (SATB)
+- `unified_write_barrier` = generational barrier (remembered set for OLD→YOUNG)
+
+Even if incremental marking is disabled but generational GC is enabled, the Drop should still record pointers in the remembered set via `unified_write_barrier`!
+
+**The bug109 (GcThreadSafeRefMut) was also marked "Fixed" but the same bug is still present in cell.rs:1276-1288.**
+
+---
+
+## Additional Verification (2026-03-09)
+
+**Confirmed bug still present in current code:**
+
+- `GcRwLockWriteGuard::drop()` (sync.rs:436-448) - Only calls `mark_object_black`, missing `unified_write_barrier`
+- `GcMutexGuard::drop()` (sync.rs:691-704) - Same issue
+
+Verified by code inspection:
+- Drop only captures GC pointers and calls `mark_object_black` (for incremental/SATB)
+- Does NOT call `unified_write_barrier` which handles generational barrier
+- When generational GC enabled but incremental marking disabled → OLD→YOUNG refs not recorded
+
+---
+
+## Resolution (2026-03-13)
+
+**Outcome:** Fixed and verified.
+
+### Code Changes
+
+- Updated `GcRwLockReadGuard::drop`, `GcRwLockWriteGuard::drop`, and `GcMutexGuard::drop` in `sync.rs` to:
+  - Cache `incremental_active = is_incremental_marking_active()` and `generational_active = is_generational_barrier_active()` at the start of `drop`.
+  - Continue calling `mark_object_black` for captured pointers only when `incremental_active` is true (SATB path).
+  - Call `unified_write_barrier(ptr, incremental_active)` when `generational_active` is true, using the raw pointer to the inner lock-protected value (`&*self.guard`) as the barrier address.
+
+This ensures that:
+- SATB marking remains correct and idempotent across barrier state transitions.
+- Generational write barriers are triggered on guard drop even when incremental marking is disabled but generational GC is active, so OLD→YOUNG references established while holding the guard are recorded in the remembered set.
+
+### Verification
+
+- Added `test_gc_rwlock_write_guard_drop_triggers_generational_barrier` in `crates/rudo-gc/tests/sync.rs`:
+  - Configures `IncrementalMarkState` with generational support enabled while leaving incremental marking idle.
+  - Promotes a `Gc<GcRwLock<Option<Gc<Inner>>>>` to the old generation.
+  - Stores a young `Gc<Inner>` into the lock via `write()` and guard drop.
+  - Runs a full/minor-eligible collection and asserts that the young object remains reachable via the lock (`assert_eq!(lock.read().as_ref().unwrap().value, 42)`).
+- Ran the targeted test binary:
+  - `cargo test -p rudo-gc --test sync test_gc_rwlock_write_guard_drop_triggers_generational_barrier -- --test-threads=1`
+  - Result: test passed.

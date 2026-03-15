@@ -5,7 +5,7 @@
 //! all interior mutability of GC-managed objects.
 
 use crate::gc::incremental::IncrementalMarkState;
-use crate::heap::{ptr_to_page_header, PageHeader, MAGIC_GC_PAGE};
+use crate::heap::{page_mask, ptr_to_page_header, PageHeader, MAGIC_GC_PAGE};
 use crate::ptr::GcBox;
 use crate::trace::Trace;
 use parking_lot::Mutex;
@@ -158,8 +158,10 @@ impl<T: ?Sized> GcCell<T> {
     {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        // Cache incremental marking state once to avoid TOCTOU between check and use
+        // Cache barrier states once to avoid TOCTOU between check and use.
         // (bug110: triple is_incremental_marking_active call caused inconsistent barrier state)
+        // FIX bug301: mark_object_black should only be called during incremental marking, not generational barrier.
+        // Note: generational barrier is always triggered via gc_cell_validate_and_barrier (marks page as dirty).
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
 
         if incremental_active {
@@ -263,6 +265,13 @@ impl<T: ?Sized> GcCell<T> {
         }
 
         let header = unsafe { crate::heap::ptr_to_page_header(cell_ptr) };
+        // Skip if slot was swept; avoids reading owner_thread from deallocated/reused slot (bug281).
+        let Some(index) = (unsafe { crate::heap::ptr_to_object_index(cell_ptr) }) else {
+            return;
+        };
+        if !unsafe { (*header.as_ptr()).is_allocated(index) } {
+            return;
+        }
         let owner = unsafe { (*header.as_ptr()).owner_thread };
 
         let current = crate::heap::get_thread_id();
@@ -659,11 +668,13 @@ impl<T: GcCapture + 'static> GcCapture for RefCell<T> {
         &[]
     }
 
+    /// Uses blocking `borrow()` to reliably capture all GC pointers (bug223).
+    /// `try_borrow()` would silently skip when the `RefCell` is mutably borrowed,
+    /// violating the `GcCapture` contract and potentially causing UAF.
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Ok(value) = self.try_borrow() {
-            value.capture_gc_ptrs_into(ptrs);
-        }
+        let value = self.borrow();
+        value.capture_gc_ptrs_into(ptrs);
     }
 }
 
@@ -1041,9 +1052,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     {
         let guard = self.inner.lock();
 
-        // Cache incremental marking state once to avoid TOCTOU between SATB capture
-        // and trigger_write_barrier (bug116)
+        // Cache barrier states once to avoid TOCTOU between SATB capture
+        // and trigger_write_barrier (bug116, bug153)
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
         if incremental_active {
             let value = &*guard;
@@ -1074,7 +1086,25 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
             }
         }
 
-        self.trigger_write_barrier_with_incremental(incremental_active);
+        self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
+
+        // Immediate mark of GC pointers (bug192: match GcCell::borrow_mut behavior).
+        // Marking only on Drop creates a race window where another thread's GC can miss
+        // these pointers. Mark immediately when handing out the guard.
+        // FIX bug301: Only mark black during incremental marking, not during generational barrier.
+        if incremental_active {
+            unsafe {
+                let guard_ref = &*guard;
+                let mut new_gc_ptrs = Vec::with_capacity(32);
+                guard_ref.capture_gc_ptrs_into(&mut new_gc_ptrs);
+                if !new_gc_ptrs.is_empty() {
+                    for gc_ptr in new_gc_ptrs {
+                        let _ =
+                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
+                    }
+                }
+            }
+        }
 
         GcThreadSafeRefMut {
             inner: guard,
@@ -1100,7 +1130,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     where
         T: Trace,
     {
-        self.trigger_write_barrier();
+        // Cache barrier states once to avoid TOCTOU (bug116, bug153, bug173)
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
         self.inner.lock()
     }
 
@@ -1125,19 +1158,16 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         self.inner.lock()
     }
 
+    /// Barrier with cached incremental and generational state. Used by `borrow_mut` to avoid
+    /// TOCTOU (bug116, bug153).
     #[inline]
-    fn trigger_write_barrier(&self) {
-        self.trigger_write_barrier_with_incremental(
-            crate::gc::incremental::is_incremental_marking_active(),
-        );
-    }
-
-    /// Barrier with cached incremental state. Used by `borrow_mut` to avoid TOCTOU (bug116).
-    #[inline]
-    fn trigger_write_barrier_with_incremental(&self, incremental_active: bool) {
+    fn trigger_write_barrier_with_incremental(
+        &self,
+        incremental_active: bool,
+        generational_active: bool,
+    ) {
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
-        let generational_active = crate::gc::incremental::is_generational_barrier_active();
         if generational_active || incremental_active {
             crate::heap::unified_write_barrier(ptr, incremental_active);
         }
@@ -1165,14 +1195,71 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                 return;
             }
 
-            let header = ptr_to_page_header(ptr);
-            if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
-                return;
-            }
+            let ptr_addr = ptr as usize;
+            crate::heap::with_heap(|heap| {
+                if ptr_addr < crate::heap::heap_start() || ptr_addr >= crate::heap::heap_end() {
+                    return;
+                }
 
-            if (*header.as_ptr()).generation > 0 {
-                let _ = record_page_in_remembered_buffer(header);
-            }
+                let page_addr = ptr_addr & page_mask();
+
+                // Tail pages of multi-page large objects have no PageHeader; ptr_to_page_header
+                // would yield garbage. Check large_object_map first (see find_gc_box_from_ptr).
+                let header = if let Some(&(head_addr, size, h_size)) =
+                    heap.large_object_map.get(&page_addr)
+                {
+                    if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + h_size + size {
+                        return;
+                    }
+                    let h_ptr = head_addr as *mut PageHeader;
+                    if (*h_ptr).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    // Skip if slot was swept; avoids corrupting remembered set with reused slot.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
+                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                    if (*h_ptr).generation == 0 && !has_gen_old {
+                        return;
+                    }
+                    NonNull::new_unchecked(h_ptr)
+                } else {
+                    let h = ptr_to_page_header(ptr);
+                    if (*h.as_ptr()).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    let block_size = (*h.as_ptr()).block_size as usize;
+                    let header_size = (*h.as_ptr()).header_size as usize;
+                    let header_page_addr = h.as_ptr() as usize;
+
+                    if ptr_addr < header_page_addr + header_size {
+                        return;
+                    }
+
+                    let offset = ptr_addr - (header_page_addr + header_size);
+                    let index = offset / block_size;
+                    let obj_count = (*h.as_ptr()).obj_count as usize;
+                    if index >= obj_count {
+                        return;
+                    }
+
+                    // Skip if slot was swept; avoids corrupting remembered set with reused slot.
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
+                    let gc_box_addr =
+                        (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
+                        return;
+                    }
+                    h
+                };
+
+                heap.record_in_remembered_buffer(header);
+            });
         }
     }
 
@@ -1189,43 +1276,59 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                 let is_large = heap.large_object_map.contains_key(&page_addr);
 
                 if is_large {
-                    if let Some(&(head_addr, _, _)) = heap.large_object_map.get(&page_addr) {
-                        let header = head_addr as *mut crate::heap::PageHeader;
-                        if (*header).magic == MAGIC_GC_PAGE && (*header).generation > 0 {
-                            let block_size = (*header).block_size as usize;
-                            let header_size = (*header).header_size as usize;
-                            let header_page_addr = head_addr;
-                            let ptr_addr = ptr as usize;
-
-                            if ptr_addr >= header_page_addr + header_size {
-                                let offset = ptr_addr - (header_page_addr + header_size);
-                                let index = offset / block_size;
-
-                                if index < (*header).obj_count as usize {
-                                    (*header).set_dirty(index);
-                                    heap.add_to_dirty_pages(NonNull::new_unchecked(header));
-                                }
-                            }
+                    if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr)
+                    {
+                        let ptr_addr = ptr as usize;
+                        if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + h_size + size {
+                            return;
                         }
+                        let header = head_addr as *mut crate::heap::PageHeader;
+                        if (*header).magic != MAGIC_GC_PAGE {
+                            return;
+                        }
+                        // Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247).
+                        if !(*header).is_allocated(0) {
+                            return;
+                        }
+                        // GEN_OLD early-exit: skip if page young AND object has no gen_old_flag
+                        // (bug202, matches unified_write_barrier).
+                        let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                        let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                        if (*header).generation == 0 && !has_gen_old {
+                            return;
+                        }
+                        (*header).set_dirty(0);
+                        heap.add_to_dirty_pages(NonNull::new_unchecked(header));
                     }
                 } else {
                     let header = ptr_to_page_header(ptr);
-                    if (*header.as_ptr()).magic == MAGIC_GC_PAGE
-                        && (*header.as_ptr()).generation > 0
-                    {
-                        let block_size = (*header.as_ptr()).block_size as usize;
-                        let header_size = (*header.as_ptr()).header_size as usize;
-                        let header_page_addr = header.as_ptr() as usize;
-                        let ptr_addr = ptr as usize;
+                    if (*header.as_ptr()).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    let block_size = (*header.as_ptr()).block_size as usize;
+                    let header_size = (*header.as_ptr()).header_size as usize;
+                    let header_page_addr = header.as_ptr() as usize;
+                    let ptr_addr = ptr as usize;
 
-                        if ptr_addr >= header_page_addr + header_size {
-                            let offset = ptr_addr - (header_page_addr + header_size);
-                            let index = offset / block_size;
+                    if ptr_addr >= header_page_addr + header_size {
+                        let offset = ptr_addr - (header_page_addr + header_size);
+                        let index = offset / block_size;
 
-                            if index < (*header.as_ptr()).obj_count as usize {
-                                (*header.as_ptr()).set_dirty(index);
-                                heap.add_to_dirty_pages(header);
+                        if index < (*header.as_ptr()).obj_count as usize {
+                            // Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247).
+                            if !(*header.as_ptr()).is_allocated(index) {
+                                return;
                             }
+                            // GEN_OLD early-exit: skip if page young AND object has no gen_old_flag
+                            // (bug202, matches unified_write_barrier).
+                            let gc_box_addr = (header_page_addr + header_size + index * block_size)
+                                as *const GcBox<()>;
+                            let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                            if (*header.as_ptr()).generation == 0 && !has_gen_old {
+                                return;
+                            }
+                            (*header.as_ptr()).set_dirty(index);
+                            heap.add_to_dirty_pages(header);
                         }
                     }
                 }
@@ -1242,6 +1345,13 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 
         unsafe {
             crate::heap::with_heap(|heap| {
+                // Validate heap bounds before dereferencing (bug191).
+                // Dereferencing ptr_to_page_header(ptr) without this check is UB for
+                // arbitrary addresses outside the GC heap.
+                if !heap.is_in_range(addr) {
+                    return false;
+                }
+
                 let page_addr = addr & crate::heap::page_mask();
 
                 if heap.large_object_map.contains_key(&page_addr) {
@@ -1277,23 +1387,27 @@ impl<T: GcCapture + ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
 
 impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
     fn drop(&mut self) {
-        // Cache barrier state at start to avoid TOCTOU: state may change between check and mark.
-        let barrier_active_at_start = crate::gc::incremental::is_generational_barrier_active()
-            || crate::gc::incremental::is_incremental_marking_active();
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
         let mut ptrs = Vec::with_capacity(32);
         (*self.inner).capture_gc_ptrs_into(&mut ptrs);
 
-        // Re-check before mark: if state flipped INACTIVE→ACTIVE, we must still mark.
-        let barrier_active_before_mark = crate::gc::incremental::is_generational_barrier_active()
-            || crate::gc::incremental::is_incremental_marking_active();
-
-        if barrier_active_at_start || barrier_active_before_mark {
-            for gc_ptr in ptrs {
+        // Mark new GC pointers black only during incremental marking (bug302).
+        // Generational barrier should only mark page as dirty, not prevent collection.
+        if incremental_active {
+            for gc_ptr in &ptrs {
                 let _ = unsafe {
                     crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
                 };
             }
+        }
+
+        // Call barrier when either generational or incremental marking is active (bug122).
+        // Incremental marking needs remembered buffer update; generational needs dirty page.
+        if generational_active || incremental_active {
+            let ptr = std::ptr::from_ref(&*self.inner).cast::<u8>();
+            crate::heap::unified_write_barrier(ptr, incremental_active);
         }
     }
 }
@@ -1322,13 +1436,13 @@ impl<T: GcCapture + ?Sized> GcCapture for GcThreadSafeCell<T> {
 
     /// Captures GC pointers from the inner value.
     ///
-    /// Uses `try_lock()` to avoid data races: if the lock is held by another thread
-    /// (e.g. a writer), we skip capturing. The writer will record SATB in `borrow_mut()`.
+    /// Uses blocking `lock()` to reliably capture all GC pointers, consistent with
+    /// `GcRwLock` and `GcMutex` (bug285). `try_lock()` would silently miss pointers
+    /// when another thread holds the lock, potentially breaking SATB.
     #[inline]
     fn capture_gc_ptrs_into(&self, ptrs: &mut Vec<NonNull<GcBox<()>>>) {
-        if let Some(guard) = self.inner.try_lock() {
-            guard.capture_gc_ptrs_into(ptrs);
-        }
+        let guard = self.inner.lock();
+        guard.capture_gc_ptrs_into(ptrs);
     }
 }
 

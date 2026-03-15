@@ -1096,6 +1096,8 @@ unsafe fn scan_dirty_page_minor(page_ptr: NonNull<PageHeader>, visitor: &mut GcV
 }
 
 /// Scan a single dirty page for minor GC (`trace_fn` path): trace refs and clear dirty state.
+/// Uses `mark_and_trace_incremental` (like `scan_dirty_page_minor`) to ensure `is_allocated`
+/// is checked before dereferencing, avoiding UAF when lazy sweep reclaims slots concurrently.
 #[inline]
 #[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn scan_dirty_page_minor_trace(page_ptr: NonNull<PageHeader>, visitor: &mut GcVisitor) {
@@ -1104,7 +1106,7 @@ unsafe fn scan_dirty_page_minor_trace(page_ptr: NonNull<PageHeader>, visitor: &m
         let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
         #[allow(clippy::cast_ptr_alignment)]
         let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-        ((*gc_box_ptr).trace_fn)(obj_ptr, visitor);
+        mark_and_trace_incremental(std::ptr::NonNull::new_unchecked(gc_box_ptr), visitor);
     } else {
         let obj_count = (*header).obj_count as usize;
         for i in 0..obj_count {
@@ -1114,7 +1116,7 @@ unsafe fn scan_dirty_page_minor_trace(page_ptr: NonNull<PageHeader>, visitor: &m
                 let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                ((*gc_box_ptr).trace_fn)(obj_ptr, visitor);
+                mark_and_trace_incremental(std::ptr::NonNull::new_unchecked(gc_box_ptr), visitor);
             }
         }
     }
@@ -1221,11 +1223,24 @@ unsafe fn mark_and_push_to_worker_queue(
         let header = crate::heap::ptr_to_page_header(ptr_addr);
         if (*header.as_ptr()).magic == crate::heap::MAGIC_GC_PAGE {
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box.as_ptr().cast()) {
-                if !(*header.as_ptr()).is_allocated(idx) {
-                    return;
-                }
-                if !(*header.as_ptr()).is_marked(idx) {
-                    (*header.as_ptr()).set_mark(idx);
+                // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug295)
+                loop {
+                    match (*header.as_ptr()).try_mark(idx) {
+                        Ok(false) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                return;
+                            }
+                            break; // Already marked by another thread, slot valid
+                        }
+                        Ok(true) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                return;
+                            }
+                            break; // We marked, slot still valid
+                        }
+                        Err(()) => {} // CAS failed, retry
+                    }
                 }
             }
         }
@@ -2068,12 +2083,30 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
         let offset = ptr_addr as usize - data_start;
         let index = offset / block_size;
 
-        if (*header.as_ptr()).is_marked(index) {
+        if !(*header.as_ptr()).is_allocated(index) {
             return;
         }
 
-        (*header.as_ptr()).set_mark(index);
-        visitor.objects_marked += 1;
+        // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug295)
+        loop {
+            match (*header.as_ptr()).try_mark(index) {
+                Ok(false) => {
+                    if !(*header.as_ptr()).is_allocated(index) {
+                        return;
+                    }
+                    return; // Already marked by another thread, slot valid
+                }
+                Ok(true) => {
+                    if !(*header.as_ptr()).is_allocated(index) {
+                        (*header.as_ptr()).clear_mark_atomic(index);
+                        return;
+                    }
+                    visitor.objects_marked += 1;
+                    break;
+                }
+                Err(()) => {} // CAS failed, retry
+            }
+        }
 
         if (*header.as_ptr()).generation > 0 {
             return;
@@ -2172,7 +2205,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                    let weak_count = (*gc_box_ptr).weak_count();
+                    let weak_count = (*gc_box_ptr).weak_count_acquire();
 
                     if weak_count > 0 {
                         // Has weak refs - drop value but keep allocation
@@ -2263,7 +2296,7 @@ fn sweep_phase2_reclaim(
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                    let weak_count = (*gc_box_ptr).weak_count();
+                    let weak_count = (*gc_box_ptr).weak_count_acquire();
 
                     if weak_count == 0 && (*gc_box_ptr).has_dead_flag() {
                         // No weak refs, already dropped and dead - reclaim
@@ -2275,6 +2308,7 @@ fn sweep_phase2_reclaim(
                         free_head = Some(u16::try_from(i).unwrap());
 
                         (*header).clear_allocated(i);
+                        (*gc_box_ptr).clear_gen_old();
                         reclaimed += 1;
                         is_alloc = false;
                         continue;
@@ -2319,7 +2353,25 @@ fn sweep_phase2_reclaim(
 fn promote_all_pages(heap: &LocalHeap) {
     for page_ptr in heap.all_pages() {
         unsafe {
-            (*page_ptr.as_ptr()).generation = 1;
+            let header = page_ptr.as_ptr();
+            (*header).generation = 1;
+
+            let block_size = (*header).block_size as usize;
+            let header_size = crate::heap::PageHeader::header_size(block_size);
+            let page_addr = header as usize;
+
+            for word_idx in 0..crate::heap::BITMAP_SIZE {
+                let bits = (*header).allocated_bitmap[word_idx].load(Ordering::Acquire);
+                let mut b = bits;
+                while b != 0 {
+                    let bit_idx = b.trailing_zeros() as usize;
+                    let obj_idx = word_idx * 64 + bit_idx;
+                    let gc_box_addr = (page_addr + header_size + obj_idx * block_size)
+                        as *const crate::ptr::GcBox<()>;
+                    (*gc_box_addr).set_gen_old();
+                    b &= b - 1;
+                }
+            }
         }
     }
 }
@@ -2339,11 +2391,31 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
         }
 
         if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
-            if (*header.as_ptr()).is_marked(idx) {
+            // Skip if slot was swept and potentially reused; avoids UAF when lazy sweep
+            // runs concurrently with cross-thread SATB buffer processing.
+            if !(*header.as_ptr()).is_allocated(idx) {
                 return;
             }
-            (*header.as_ptr()).set_mark(idx);
-            visitor.objects_marked += 1;
+            // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug295)
+            loop {
+                match (*header.as_ptr()).try_mark(idx) {
+                    Ok(false) => {
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            return;
+                        }
+                        return; // Already marked by another thread, no push needed
+                    }
+                    Ok(true) => {
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            (*header.as_ptr()).clear_mark_atomic(idx);
+                            return;
+                        }
+                        visitor.objects_marked += 1;
+                        break;
+                    }
+                    Err(()) => {} // CAS failed, retry
+                }
+            }
         } else {
             return;
         }
@@ -2367,11 +2439,31 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
             return;
         }
 
-        if (*header.as_ptr()).is_marked(idx) {
+        // Skip if slot was swept and potentially reused; avoids UAF when lazy sweep
+        // runs concurrently with cross-thread SATB buffer processing.
+        if !(*header.as_ptr()).is_allocated(idx) {
             return;
         }
-        (*header.as_ptr()).set_mark(idx);
-        visitor.objects_marked += 1;
+        // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug295)
+        loop {
+            match (*header.as_ptr()).try_mark(idx) {
+                Ok(false) => {
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        return;
+                    }
+                    return; // Already marked by another thread, no push needed
+                }
+                Ok(true) => {
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        (*header.as_ptr()).clear_mark_atomic(idx);
+                        return;
+                    }
+                    visitor.objects_marked += 1;
+                    break;
+                }
+                Err(()) => {} // CAS failed, retry
+            }
+        }
     } else {
         return;
     }
@@ -2402,7 +2494,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                let weak_count = (*gc_box_ptr).weak_count();
+                let weak_count = (*gc_box_ptr).weak_count_acquire();
 
                 if weak_count > 0 {
                     if !(*gc_box_ptr).has_dead_flag() {
@@ -2505,7 +2597,7 @@ unsafe fn lazy_sweep_page(
             #[allow(clippy::cast_ptr_alignment)]
             let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-            let weak_count = (*gc_box_ptr).weak_count();
+            let weak_count = (*gc_box_ptr).weak_count_acquire();
 
             if weak_count > 0 {
                 if !(*gc_box_ptr).has_dead_flag() {
@@ -2518,6 +2610,8 @@ unsafe fn lazy_sweep_page(
             } else {
                 ((*gc_box_ptr).drop_fn)(obj_ptr);
                 (*gc_box_ptr).set_dead();
+                // Clear GEN_OLD_FLAG so reused slots don't inherit stale barrier state (bug135).
+                (*gc_box_ptr).clear_gen_old();
 
                 #[allow(clippy::cast_ptr_alignment)]
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
@@ -2629,7 +2723,7 @@ unsafe fn lazy_sweep_page_all_dead(
             #[allow(clippy::cast_ptr_alignment)]
             let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-            let weak_count = (*gc_box_ptr).weak_count();
+            let weak_count = (*gc_box_ptr).weak_count_acquire();
 
             if weak_count > 0 {
                 if !(*gc_box_ptr).has_dead_flag() {
@@ -2640,6 +2734,8 @@ unsafe fn lazy_sweep_page_all_dead(
                 }
             } else {
                 ((*gc_box_ptr).drop_fn)(obj_ptr);
+                // Clear GEN_OLD_FLAG so reused slots don't inherit stale barrier state (bug135).
+                (*gc_box_ptr).clear_gen_old();
 
                 #[allow(clippy::cast_ptr_alignment)]
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
@@ -2918,6 +3014,14 @@ impl GcVisitor {
                 }
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+                    // Skip freed slots (lazy sweep may have reclaimed this between enqueue and
+                    // processing) and already-marked objects to avoid double-counting.
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        continue;
+                    }
+                    if (*header.as_ptr()).is_marked(idx) {
+                        continue;
+                    }
                     (*header.as_ptr()).set_mark(idx);
                     self.objects_marked += 1;
                 } else {
@@ -2953,6 +3057,11 @@ impl Visitor for GcVisitor {
                 }
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.cast()) {
+                    // Skip if slot was swept and potentially reused; avoids UAF when lazy sweep
+                    // runs concurrently with incremental marking (trace_and_mark_object path).
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        return;
+                    }
                     if (*header.as_ptr()).is_marked(idx) {
                         return;
                     }
@@ -3324,5 +3433,49 @@ mod tests {
         crate::collect_full();
 
         assert!(DROP_COUNT.with(std::cell::Cell::get) >= 1);
+    }
+
+    #[test]
+    fn test_mark_object_minor_skips_unallocated_slot() {
+        clear_test_roots();
+
+        let gc = crate::Gc::new(123_i32);
+        let raw = crate::Gc::internal_ptr(&gc);
+        #[allow(clippy::cast_ptr_alignment)]
+        // raw is GcBox<i32>*, cast to GcBox<()>* for erased type
+        let ptr = NonNull::new(raw as *mut GcBox<()>).expect("Gc::internal_ptr must be non-null");
+
+        let (objects_marked, was_marked_while_unallocated) = unsafe {
+            let header = crate::heap::ptr_to_page_header(raw);
+            let idx =
+                crate::heap::ptr_to_object_index(raw).expect("pointer must map to object index");
+
+            (*header.as_ptr()).clear_mark(idx);
+            (*header.as_ptr()).clear_allocated(idx);
+
+            let mut visitor = GcVisitor::new(VisitorKind::Minor);
+            mark_object_minor(ptr, &mut visitor);
+
+            let marked = (*header.as_ptr()).is_marked(idx);
+            let count = visitor.objects_marked();
+
+            // Restore page/object state before assertions so panic won't leave heap corrupted.
+            (*header.as_ptr()).set_allocated(idx);
+            (*header.as_ptr()).clear_mark(idx);
+
+            (count, marked)
+        };
+
+        assert_eq!(
+            objects_marked, 0,
+            "mark_object_minor must not increment count for unallocated slots"
+        );
+        assert!(
+            !was_marked_while_unallocated,
+            "mark_object_minor must not set mark bit for unallocated slots"
+        );
+
+        drop(gc);
+        clear_test_roots();
     }
 }

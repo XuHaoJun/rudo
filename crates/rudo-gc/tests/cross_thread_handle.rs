@@ -179,6 +179,16 @@ fn test_clone_unregistered_handle_panics() {
     let _ = handle.clone();
 }
 
+/// Test that downgrading an unregistered handle panics (Bug 177 - `handle_id` check).
+#[test]
+#[should_panic(expected = "cannot downgrade an unregistered GcHandle")]
+fn test_downgrade_unregistered_handle_panics() {
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let mut handle = gc.cross_thread_handle();
+    handle.unregister();
+    let _ = handle.downgrade();
+}
+
 /// Test clone-then-unregister: cloned handle keeps object alive (expected behavior).
 #[test]
 fn test_clone_then_unregister_cloned_keeps_alive() {
@@ -262,6 +272,29 @@ fn test_weak_is_valid_after_gc() {
 
     assert!(DROPPED.load(Ordering::SeqCst));
     assert!(!weak.is_valid());
+}
+
+/// Test weak handle `is_valid()` returns false when origin thread has terminated (bug189).
+#[test]
+fn test_weak_is_valid_after_origin_thread_terminated() {
+    let (sender, receiver) = mpsc::channel();
+
+    let origin = thread::spawn(move || {
+        let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+        let weak = gc.weak_cross_thread_handle();
+        sender.send(weak).unwrap();
+        // Thread exits here; origin_tcb will be dropped
+    });
+
+    let weak = receiver.recv().unwrap();
+    origin.join().unwrap();
+
+    // is_valid() must return false when origin thread has terminated,
+    // consistent with try_resolve() returning None and resolve() panicking.
+    assert!(
+        !weak.is_valid(),
+        "is_valid() should return false when origin thread has terminated"
+    );
 }
 
 /// Test weak handle `try_resolve()` returns None after GC collection.
