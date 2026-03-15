@@ -1,7 +1,7 @@
 # [Bug]: Gc::clone has incomplete TOCTOU fix - missing is_allocated check BEFORE inc_ref
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -148,3 +148,9 @@ If an attacker can control allocation timing, they could:
 - bug206: GcHandle::resolve/clone missing is_allocated check after inc_ref (Fixed - partial fix)
 - bug250: Gc::try_clone missing is_allocated check (similar pattern, Open)
 - bug271: Ephemeron::key() always returns None (different issue)
+
+---
+
+## ✅ Verification
+
+**Verified on 2026-03-15:** Bug confirmed present in `ptr.rs:1868-1883`. The code checks flags (lines 1868-1873), then calls `inc_ref()` (line 1874), then checks `is_allocated` (lines 1876-1882). This is TOCTOU - the slot can be swept and reused between the flag check and inc_ref.
