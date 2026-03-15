@@ -1,7 +1,7 @@
 # [Bug]: Multiple mark functions in gc/gc.rs have TOCTOU between is_allocated check and set_mark
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -183,3 +183,17 @@ if !(*header.as_ptr()).is_allocated(idx) {
 - bug291: mark_object_black TOCTOU - 修復模式範例
 - bug292: process_owned_page TOCTOU Ok(false)
 - bug294: worker_mark_loop TOCTOU - 與此 bug 相同的模式
+
+---
+
+## ✅ 驗證紀錄 (Verification Record)
+
+**日期:** 2026-03-15
+
+**驗證結果:** Verified
+
+**驗證方法:**
+- Code review of `mark_and_push_to_worker_queue` at gc/gc.rs:1226-1230
+- Confirmed TOCTOU pattern exists
+
+**建議:** 需要並發測試才能穩定重現
