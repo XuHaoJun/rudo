@@ -1,6 +1,6 @@
 # [Bug]: HashMap<K, V, S> Missing GcCapture Implementation
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -102,3 +102,9 @@ impl<K: GcCapture + 'static, V: GcCapture + 'static, S: std::hash::BuildHasher +
 
 **Geohot (Exploit 觀點):**
 雖然不是傳統意義上的安全漏洞，但這會迫開發者使用較不安全的替代方案（如手動管理的 Vec），這些方案更容易引入 race conditions 或其他錯誤。
+
+---
+
+## Invalid Reason (Added by bug hunt)
+
+**FALSE POSITIVE**: HashMap<K, V, S> already has GcCapture implementation in `cell.rs` at lines 524-541. The issue was incorrectly filed. The implementation iterates over keys and values using `self.keys()` and `self.values()`, which is correct.
