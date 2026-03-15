@@ -684,8 +684,11 @@ impl PerThreadMarkQueue {
         let header_size = PageHeader::header_size(block_size);
         let obj_count = unsafe { (*header).obj_count } as usize;
 
-        for mut i in 0..obj_count {
-            if unsafe { (*header).is_allocated(i) && !(*header).is_marked(i) } {
+        for i in 0..obj_count {
+            // Only check is_marked at entry; is_allocated recheck after try_mark is sufficient.
+            // Redundant entry is_allocated check removed (bug258): provides no additional TOCTOU
+            // protection — lazy sweep can flip is_allocated between any check and push.
+            if unsafe { !(*header).is_marked(i) } {
                 if kind == VisitorKind::Minor && unsafe { (*header).generation } > 0 {
                     continue;
                 }
@@ -700,19 +703,15 @@ impl PerThreadMarkQueue {
                         match (*header).try_mark(i) {
                             Ok(false) => {
                                 // Re-check is_allocated to fix TOCTOU with lazy sweep (bug292).
-                                // If slot was swept after initial check at line 687, skip it.
+                                // If slot was swept after we entered the loop, skip it.
                                 if !(*header).is_allocated(i) {
                                     break;
                                 }
                                 break; // Already marked by another thread, slot is still valid
                             }
                             Ok(true) => {
-                                // Re-check is_allocated to fix TOCTOU
-                                if !(*header).is_allocated(i) {
-                                    (*header).clear_mark_atomic(i);
-                                    break;
-                                }
-                                // Second check to fix TOCTOU: slot can be swept between first check and push
+                                // Re-check is_allocated to fix TOCTOU with lazy sweep (bug292).
+                                // If slot was swept after try_mark, clear mark and skip.
                                 if !(*header).is_allocated(i) {
                                     (*header).clear_mark_atomic(i);
                                     break;

@@ -844,6 +844,7 @@ unsafe impl<T: Trace + 'static> Sync for AsyncHandle<T> {}
 ///
 /// - Panics if called outside a GC thread
 /// - Panics if more than 256 handles are created in the scope
+#[cfg(feature = "tokio")]
 #[macro_export]
 macro_rules! spawn_with_gc {
     ($gc:expr => |$handle:ident| $body:expr) => {{
@@ -1325,6 +1326,11 @@ impl AsyncGcHandle {
     /// `Some(&T)` if the handle contains the specified type and the object is alive,
     /// `None` if the type does not match or the object is dead or in dropping state.
     ///
+    /// # Panics
+    ///
+    /// Panics if the scope that created this handle has been dropped (consistent with
+    /// `AsyncHandle::get`). This distinguishes scope-use-after-drop from type mismatch.
+    ///
     /// # Example
     ///
     /// ```
@@ -1350,15 +1356,25 @@ impl AsyncGcHandle {
     /// }
     /// ```
     #[inline]
+    #[track_caller]
     pub fn downcast_ref<T: Trace + 'static>(&self) -> Option<&T> {
         if self.type_id == TypeId::of::<T>() {
             let tcb = crate::heap::current_thread_control_block()
                 .expect("AsyncGcHandle::downcast_ref() must be called within a GC thread");
 
-            let gc_box_ptr = tcb.with_scope_lock_if_active(self.scope_id, || unsafe {
-                let slot = &*self.slot;
-                slot.as_ptr() as *const GcBox<T>
-            })?;
+            // Panic on scope drop (like AsyncHandle::get), don't conflate with "wrong type" None.
+            let gc_box_ptr = tcb
+                .with_scope_lock_if_active(self.scope_id, || unsafe {
+                    let slot = &*self.slot;
+                    slot.as_ptr() as *const GcBox<T>
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "AsyncGcHandle::downcast_ref used after scope was dropped. \
+                         The GcScope that created this handle has been dropped. \
+                         Ensure the scope stays alive as long as any handles are in use."
+                    )
+                });
 
             unsafe {
                 // Validate pointer before dereferencing (avoids UAF if slot was swept and reused).

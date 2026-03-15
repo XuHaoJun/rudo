@@ -199,6 +199,25 @@ impl<T: Trace + ?Sized> GcBox<T> {
         }
     }
 
+    /// Undo a `ref_count` increment after detecting that the object is dead or dropping.
+    ///
+    /// Use this instead of [`dec_ref`](Self::dec_ref) when rolling back a successful
+    /// `try_inc_ref_from_zero` or `try_inc_ref_if_nonzero` CAS: `dec_ref` returns early
+    /// without decrementing when `DEAD_FLAG` is set, leaving `ref_count` incorrectly at 1.
+    /// A direct `fetch_sub` correctly undoes the increment regardless of flags.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure `self_ptr` is valid and that we just incremented `ref_count`
+    /// via CAS (so `ref_count` >= 1).
+    #[inline]
+    pub(crate) unsafe fn undo_inc_ref(self_ptr: *mut Self) {
+        // SAFETY: Caller guarantees ptr is valid and we own an increment to undo.
+        unsafe {
+            (*self_ptr).ref_count.fetch_sub(1, Ordering::Release);
+        }
+    }
+
     /// Get a reference to the value.
     #[allow(dead_code)]
     #[must_use]
@@ -306,6 +325,48 @@ impl<T: Trace + ?Sized> GcBox<T> {
                         return false;
                     }
                 }
+            }
+        }
+    }
+
+    /// Decrement the weak reference count via raw pointer, without creating a reference.
+    ///
+    /// Use this from `Drop` implementations (e.g. `Weak::drop`, `WeakCrossThreadHandle::drop`)
+    /// when the `GcBox`'s value may be under `drop_in_place` — creating `&*ptr` would
+    /// violate Stacked Borrows. Uses `addr_of!` to access `weak_count` directly.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a valid, allocated `GcBox<T>` (caller checks `is_allocated`).
+    #[inline]
+    #[allow(unsafe_op_in_unsafe_fn)]
+    pub(crate) unsafe fn dec_weak_raw(ptr: *mut Self) -> bool {
+        // SAFETY: Caller ensures ptr is valid and allocated.
+        let weak_count_ptr = std::ptr::addr_of!((*ptr).weak_count);
+        loop {
+            let current = (*weak_count_ptr).load(Ordering::Relaxed);
+            let flags = current & Self::FLAGS_MASK;
+            let count = current & !Self::FLAGS_MASK;
+
+            if count == 0 {
+                return false;
+            } else if count == 1 {
+                if (*weak_count_ptr)
+                    .compare_exchange_weak(current, flags, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    return true;
+                }
+            } else if (*weak_count_ptr)
+                .compare_exchange_weak(
+                    current,
+                    flags | (count - 1),
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                return false;
             }
         }
     }
@@ -587,9 +648,10 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if gc_box.try_inc_ref_from_zero() {
                 // Second check: verify object wasn't dropped between check and CAS
                 if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
-                    // Undo the increment and return None
+                    // Undo the increment and return None. Use undo_inc_ref, not dec_ref:
+                    // dec_ref returns early without decrementing when DEAD_FLAG is set.
                     let _ = gc_box;
-                    crate::ptr::GcBox::dec_ref(ptr.as_ptr());
+                    crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
                 }
                 // Check is_allocated after successful upgrade to prevent slot reuse issues
@@ -612,9 +674,10 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return None;
             }
             // Post-CAS safety check: verify object wasn't dropped between check and CAS
-            // (same pattern as Weak::upgrade)
+            // (same pattern as Weak::upgrade). Use undo_inc_ref, not dec_ref: dec_ref
+            // returns early without decrementing when DEAD_FLAG is set.
             if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
-                GcBox::dec_ref(ptr.as_ptr());
+                GcBox::undo_inc_ref(ptr.as_ptr());
                 return None;
             }
             // Check is_allocated after successful upgrade to prevent slot reuse issues
@@ -784,9 +847,10 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                     || gc_box.has_dead_flag()
                     || gc_box.is_under_construction()
                 {
-                    // Undo the increment and return None
+                    // Undo the increment and return None. Use undo_inc_ref, not dec_ref:
+                    // dec_ref returns early without decrementing when DEAD_FLAG is set.
                     let _ = gc_box;
-                    crate::ptr::GcBox::dec_ref(ptr.as_ptr());
+                    crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
                 }
                 // Check is_allocated after successful upgrade to prevent slot reuse issues
@@ -810,12 +874,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return None;
             }
             // Post-CAS safety check: verify object wasn't dropped between check and CAS
-            // (same pattern as Weak::try_upgrade)
+            // (same pattern as Weak::try_upgrade). Use undo_inc_ref, not dec_ref: dec_ref
+            // returns early without decrementing when DEAD_FLAG is set.
             if gc_box.dropping_state() != 0
                 || gc_box.has_dead_flag()
                 || gc_box.is_under_construction()
             {
-                GcBox::dec_ref(ptr.as_ptr());
+                GcBox::undo_inc_ref(ptr.as_ptr());
                 return None;
             }
             // Check is_allocated after successful upgrade to prevent slot reuse issues
@@ -1416,11 +1481,13 @@ impl<T: Trace> Gc<T> {
                 return None;
             }
             // Post-increment safety check: dropping/dead may flip between pre-check and ref bump.
+            // Use undo_inc_ref, not dec_ref: dec_ref returns early without decrementing when
+            // DEAD_FLAG is set.
             if (*gc_box_ptr).has_dead_flag()
                 || (*gc_box_ptr).dropping_state() != 0
                 || (*gc_box_ptr).is_under_construction()
             {
-                GcBox::dec_ref(gc_box_ptr);
+                GcBox::undo_inc_ref(gc_box_ptr);
                 return None;
             }
             // Check is_allocated after successful ref bump to prevent slot reuse issues
@@ -1737,7 +1804,7 @@ impl<T: Trace + 'static> Gc<T> {
     pub fn cross_thread_handle(&self) -> crate::handles::GcHandle<T> {
         use std::sync::Arc;
 
-        use crate::handles::GcHandle;
+        use crate::handles::{GcHandle, TcbRootRemoveGuard};
 
         let tcb = crate::heap::current_thread_control_block()
             .expect("cross_thread_handle called outside of GC context");
@@ -1767,15 +1834,21 @@ impl<T: Trace + 'static> Gc<T> {
         }
 
         roots.strong.insert(handle_id, ptr.cast::<GcBox<()>>());
-
+        let guard = TcbRootRemoveGuard {
+            tcb: Arc::clone(&tcb),
+            handle_id,
+            ptr: ptr.cast::<GcBox<()>>(),
+        };
         drop(roots);
 
-        GcHandle {
+        let handle = GcHandle {
             ptr,
             origin_tcb: Arc::downgrade(&tcb),
             origin_thread: std::thread::current().id(),
             handle_id,
-        }
+        };
+        std::mem::forget(guard);
+        handle
     }
 
     /// Creates a weak cross-thread handle that doesn't prevent collection.
@@ -1840,19 +1913,15 @@ impl<T: Trace + 'static> Gc<T> {
 impl<T: Trace> Deref for Gc<T> {
     type Target = T;
 
+    /// Hot path: only checks `GcBox` flags (same cache line as the value).
+    /// Page header / `is_allocated` lookups are avoided to prevent performance regression.
+    /// Swept slots are caught by `has_dead_flag()` (`set_dead` is called before `clear_allocated`).
+    #[inline]
     fn deref(&self) -> &Self::Target {
         let ptr = self.ptr.load(Ordering::Acquire);
         assert!(!ptr.is_null(), "Gc::deref: cannot dereference a null Gc");
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
-            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr.cast()) {
-                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
-                assert!(
-                    (*header.as_ptr()).is_allocated(idx),
-                    "Gc::deref: slot has been swept and reused"
-                );
-            }
-
             assert!(
                 !(*gc_box_ptr).has_dead_flag()
                     && (*gc_box_ptr).dropping_state() == 0
@@ -2149,9 +2218,9 @@ impl<T: Trace> Weak<T> {
                     // Re-read the flags now that we own a count; the GcBox header remains valid
                     // (allocation stays live until weak_count reaches 0).
                     if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
-                        // SAFETY: we just incremented ref_count via successful CAS;
-                        // dec_ref is the correct way to undo it.
-                        GcBox::dec_ref(ptr.as_ptr());
+                        // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+                        // decrementing when DEAD_FLAG is set, leaving ref_count at 1.
+                        GcBox::undo_inc_ref(ptr.as_ptr());
                         return None;
                     }
                     // Check is_allocated after successful upgrade to prevent slot reuse issues
@@ -2254,9 +2323,9 @@ impl<T: Trace> Weak<T> {
                         || gc_box.has_dead_flag()
                         || gc_box.is_under_construction()
                     {
-                        // SAFETY: we just incremented ref_count via successful CAS;
-                        // dec_ref is the correct way to undo it.
-                        GcBox::dec_ref(ptr.as_ptr());
+                        // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+                        // decrementing when DEAD_FLAG is set, leaving ref_count at 1.
+                        GcBox::undo_inc_ref(ptr.as_ptr());
                         return None;
                     }
                     // Check is_allocated after successful upgrade to prevent slot reuse issues
@@ -2568,6 +2637,14 @@ impl<T: Trace> Drop for Weak<T> {
             return;
         }
 
+        // SAFETY: Use raw pointer access to weak_count field directly.
+        // This is critical for Stacked Borrows compliance: when Weak::drop is called
+        // during the drop of a value inside a GcBox (e.g., a struct containing Weak<T>),
+        // the GcBox's value field is under a mutable borrow from drop_in_place.
+        // Creating a reference to the whole GcBox via (*ptr.as_ptr()).dec_weak() would
+        // violate Stacked Borrows because it conflicts with the existing mutable borrow.
+        // By using addr_of! to get the address of weak_count directly, we avoid
+        // creating a reference to the GcBox and thus avoid the borrow conflict.
         unsafe {
             // Check slot is still allocated before dereferencing (bug232) — avoids UAF when lazy
             // sweep has reclaimed and reused the slot.

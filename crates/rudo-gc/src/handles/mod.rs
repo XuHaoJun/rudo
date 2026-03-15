@@ -64,6 +64,7 @@ mod local_handles;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use cross_thread::TcbRootRemoveGuard;
 pub use cross_thread::{GcHandle, WeakCrossThreadHandle};
 pub use local_handles::{
     HandleBlock, HandleScopeData, HandleSlot, LocalHandles, HANDLE_BLOCK_SIZE,

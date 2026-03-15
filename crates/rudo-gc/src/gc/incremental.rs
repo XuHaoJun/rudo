@@ -822,28 +822,23 @@ unsafe fn scan_page_for_marked_refs(
     let obj_count = (*header).obj_count as usize;
     let mut refs_found = 0;
 
-    for mut i in 0..obj_count {
-        if (*header).is_allocated(i) && !(*header).is_marked(i) {
+    for i in 0..obj_count {
+        // Only check is_marked at entry; is_allocated recheck after try_mark is sufficient.
+        // Redundant entry is_allocated check removed (bug258): provides no additional TOCTOU
+        // protection — lazy sweep can flip is_allocated between any check and push_work.
+        if !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
             // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep
             loop {
                 match (*header).try_mark(i) {
                     Ok(false) => {
-                        // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
-                        // If slot was swept after initial check at line 808, skip it.
-                        if (*header).is_allocated(i) {
-                            break;
-                        }
-                        // Slot was swept, continue to next index
+                        // Already marked by another thread; move to next slot.
+                        // No recheck needed: we didn't mark, so nothing to roll back.
                         break;
                     }
                     Ok(true) => {
-                        // Re-check is_allocated to fix TOCTOU
-                        if !(*header).is_allocated(i) {
-                            (*header).clear_mark_atomic(i);
-                            break;
-                        }
-                        // Second check to fix TOCTOU: slot can be swept between first check and push_work (bug258)
+                        // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
+                        // If slot was swept after try_mark, clear mark and skip.
                         if !(*header).is_allocated(i) {
                             (*header).clear_mark_atomic(i);
                             break;
@@ -958,18 +953,17 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
     let header_size = crate::heap::PageHeader::header_size(block_size);
     let obj_count = (*header).obj_count as usize;
 
-    for mut i in 0..obj_count {
-        if (*header).is_allocated(i) && !(*header).is_marked(i) {
+    for i in 0..obj_count {
+        // Only check is_marked at entry; is_allocated recheck after set_mark is sufficient.
+        // Redundant entry is_allocated check removed (bug258): provides no additional TOCTOU
+        // protection — lazy sweep can flip is_allocated between any check and push_work.
+        if !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
             // set_mark returns true if we successfully marked - use it as try_mark
-            // But we still need to re-check is_allocated after successful mark
+            // Re-check is_allocated after successful mark to fix TOCTOU with lazy sweep.
             if (*header).set_mark(i) {
-                // Re-check is_allocated to fix TOCTOU with lazy sweep
-                if !(*header).is_allocated(i) {
-                    (*header).clear_mark_atomic(i);
-                    continue;
-                }
-                // Second check to fix TOCTOU: slot can be swept between first check and push_work (bug258)
+                // Re-check is_allocated to fix TOCTOU with lazy sweep.
+                // If slot was swept after set_mark, clear mark and skip.
                 if !(*header).is_allocated(i) {
                     (*header).clear_mark_atomic(i);
                     continue;

@@ -278,10 +278,11 @@ impl<T: ?Sized> GcRwLock<T> {
     where
         T: GcCapture,
     {
+        let guard = self.inner.write();
+        // Cache barrier state AFTER acquiring lock to avoid stale values if incremental
+        // marking started while blocked (matches GcThreadSafeCell::borrow_mut).
         let incremental_active = is_incremental_marking_active();
         let generational_active = is_generational_barrier_active();
-
-        let guard = self.inner.write();
         record_satb_old_values_with_state(&*guard, incremental_active);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
         // FIX bug302: Only mark GC pointers black during incremental marking, not generational barrier.
@@ -320,10 +321,9 @@ impl<T: ?Sized> GcRwLock<T> {
     where
         T: GcCapture,
     {
-        let incremental_active = is_incremental_marking_active();
-        let generational_active = is_generational_barrier_active();
-
         self.inner.try_write().map(|guard| {
+            let incremental_active = is_incremental_marking_active();
+            let generational_active = is_generational_barrier_active();
             record_satb_old_values_with_state(&*guard, incremental_active);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
             // FIX bug302: Only mark GC pointers black during incremental marking, not generational barrier.
@@ -582,10 +582,11 @@ impl<T: ?Sized> GcMutex<T> {
     where
         T: GcCapture,
     {
+        let guard = self.inner.lock();
+        // Cache barrier state AFTER acquiring lock to avoid stale values if incremental
+        // marking started while blocked (matches GcThreadSafeCell::borrow_mut).
         let incremental_active = is_incremental_marking_active();
         let generational_active = is_generational_barrier_active();
-
-        let guard = self.inner.lock();
         record_satb_old_values_with_state(&*guard, incremental_active);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
         // FIX bug302: Only mark GC pointers black during incremental marking, not generational barrier.
@@ -622,10 +623,9 @@ impl<T: ?Sized> GcMutex<T> {
     where
         T: GcCapture,
     {
-        let incremental_active = is_incremental_marking_active();
-        let generational_active = is_generational_barrier_active();
-
         self.inner.try_lock().map(|guard| {
+            let incremental_active = is_incremental_marking_active();
+            let generational_active = is_generational_barrier_active();
             record_satb_old_values_with_state(&*guard, incremental_active);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
             // FIX bug302: Only mark GC pointers black during incremental marking, not generational barrier.

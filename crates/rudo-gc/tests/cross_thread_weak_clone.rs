@@ -257,17 +257,26 @@ fn test_weak_try_upgrade_wrong_thread() {
     );
 }
 
-/// Test that clone panics when called from non-origin thread (bug124).
+/// Test that clone from non-origin thread succeeds but `try_resolve` returns None from wrong thread (bug156).
+///
+/// Clone is allowed from any thread (Weak does not expose T). `try_resolve` enforces
+/// origin-thread affinity when actually accessing the value.
 #[test]
-fn test_weak_clone_wrong_thread_panics() {
+fn test_weak_clone_wrong_thread_try_resolve_none() {
     let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
     let weak = gc.weak_cross_thread_handle();
 
-    let result = std::thread::spawn(move || weak.clone()).join();
+    // Clone and try_resolve from spawned thread (non-origin); try_resolve returns None
+    let try_resolve_result = std::thread::spawn(move || {
+        let cloned = weak.clone();
+        cloned.try_resolve()
+    })
+    .join()
+    .unwrap();
 
     assert!(
-        result.is_err(),
-        "clone should panic when called from non-origin thread"
+        try_resolve_result.is_none(),
+        "try_resolve should return None when called from non-origin thread"
     );
 }
 

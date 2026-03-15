@@ -239,6 +239,26 @@ pub fn clone_orphan_root(
     (new_id, true)
 }
 
+/// Guard that removes orphan root and `dec_ref`s on drop. Used to prevent dangling
+/// root entry when panic occurs after insert but before return to caller.
+struct OrphanInsertGuard {
+    thread_id: ThreadId,
+    handle_id: HandleId,
+    ptr: NonNull<GcBox<()>>,
+}
+
+impl Drop for OrphanInsertGuard {
+    fn drop(&mut self) {
+        if orphaned_cross_thread_roots()
+            .lock()
+            .remove(&(self.thread_id, self.handle_id))
+            .is_some()
+        {
+            GcBox::dec_ref(self.ptr.as_ptr());
+        }
+    }
+}
+
 /// Clone an orphan root and `inc_ref` the pointer atomically (under the lock).
 /// Prevents TOCTOU with unregister: check, insert, and `inc_ref` are all atomic.
 #[must_use]
@@ -253,6 +273,8 @@ pub fn clone_orphan_root_with_inc_ref(
     }
     // SAFETY: ptr came from a live GcHandle whose orphan entry still exists in the table.
     // The orphan lock is held here, preventing concurrent removal of the entry.
+    // Order: is_allocated check -> inc_ref -> insert. If inc_ref or insert panics,
+    // no root entry exists; the extra ref would leak but no UAF from orphaned root.
     unsafe {
         let gc_box = &*ptr.as_ptr();
         assert!(
@@ -261,22 +283,25 @@ pub fn clone_orphan_root_with_inc_ref(
                 && !gc_box.is_under_construction(),
             "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle (orphan)"
         );
+        // Check is_allocated before inc_ref; if this panics, no root entry exists yet.
+        if let Some(idx) = ptr_to_object_index(ptr.as_ptr() as *const u8) {
+            let header = ptr_to_page_header(ptr.as_ptr() as *const u8);
+            assert!(
+                (*header.as_ptr()).is_allocated(idx),
+                "clone_orphan_root_with_inc_ref: object slot was swept"
+            );
+        }
+        (*ptr.as_ptr()).inc_ref();
     }
     let new_id = allocate_orphan_handle_id();
     orphan.insert((thread_id, new_id), ptr.as_ptr() as usize);
-    unsafe {
-        (*ptr.as_ptr()).inc_ref();
-
-        if let Some(idx) = ptr_to_object_index(ptr.as_ptr() as *const u8) {
-            let header = ptr_to_page_header(ptr.as_ptr() as *const u8);
-            // Don't call dec_ref when slot swept - it may be reused (bug133)
-            assert!(
-                (*header.as_ptr()).is_allocated(idx),
-                "clone_orphan_root_with_inc_ref: object slot was swept after inc_ref"
-            );
-        }
-    }
+    let guard = OrphanInsertGuard {
+        thread_id,
+        handle_id: new_id,
+        ptr,
+    };
     drop(orphan);
+    std::mem::forget(guard);
     (new_id, true)
 }
 
