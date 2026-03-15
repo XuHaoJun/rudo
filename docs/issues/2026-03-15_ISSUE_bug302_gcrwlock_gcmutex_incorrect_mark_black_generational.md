@@ -1,7 +1,7 @@
 # [Bug]: GcRwLock/GcMutex incorrectly marks new GC pointers black during generational barrier
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 Threat Model Assessment
 
