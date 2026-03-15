@@ -31,7 +31,7 @@ jobs:
       - name: Install Nightly Rust
         uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly-2026-03-03
+          toolchain: nightly-2026-03-14
           components: miri, rust-src, rustfmt, clippy
       
       - name: Rust Cache
