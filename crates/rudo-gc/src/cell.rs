@@ -1386,9 +1386,9 @@ impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
         let mut ptrs = Vec::with_capacity(32);
         (*self.inner).capture_gc_ptrs_into(&mut ptrs);
 
-        // Mark new GC pointers black when either barrier is active (bug122: match GcCell behavior).
-        // Generational barrier also requires marking new pointers for OLD->YOUNG reference tracking.
-        if incremental_active || generational_active {
+        // Mark new GC pointers black only during incremental marking (bug302).
+        // Generational barrier should only mark page as dirty, not prevent collection.
+        if incremental_active {
             for gc_ptr in &ptrs {
                 let _ = unsafe {
                     crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
