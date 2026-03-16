@@ -1,7 +1,7 @@
 # [Bug]: Write Guard Drop TOCTOU - Barrier States Re-checked Instead of Using Cached Values
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
