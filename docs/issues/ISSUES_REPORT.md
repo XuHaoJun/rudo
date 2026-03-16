@@ -8,7 +8,7 @@
 - **Resolved**: 1
 - **Unknown**: 2
 - **Verified**: 18
-- **Open**: 1
+- **Open**: 2
 
 ### By Tags
 - **Verified**: 306
@@ -364,3 +364,4 @@
 | [2026-03-15_ISSUE_bug304_gcrwlock_gcmutex_guard_drop_incorrect_mark_black_generational.md](./2026-03-15_ISSUE_bug304_gcrwlock_gcmutex_guard_drop_incorrect_mark_black_generational.md) | GcRwLockWriteGuard and GcMutexGuard Drop implementations incorrectly mark GC pointers black during generational barrier | Verified | Verified |
 | [2026-03-16_ISSUE_bug310_gcvisitorconcurrent_route_reference_toctou_set_mark.md](./2026-03-16_ISSUE_bug310_gcvisitorconcurrent_route_reference_toctou_set_mark.md) | GcVisitorConcurrent::route_reference TOCTOU - set_mark return value ignored | Open | Not Verified |
 | [2026-03-16_ISSUE_bug312_gccell_borrow_mut_gen_only_missing_generational_barrier.md](./2026-03-16_ISSUE_bug312_gccell_borrow_mut_gen_only_missing_generational_barrier.md) | GcCell::borrow_mut_gen_only 缺少世代寫屏障 - 導致 OLD→YOUNG 引用遺漏 | Open | Verified |
+| [2026-03-16_ISSUE_bug315_generational_barrier_active_idle.md](./2026-03-16_ISSUE_bug315_generational_barrier_active_idle.md) | is_generational_barrier_active() 在 Idle 階段返回 true 導致不必要的效能開銷 | Open | Not Verified |
