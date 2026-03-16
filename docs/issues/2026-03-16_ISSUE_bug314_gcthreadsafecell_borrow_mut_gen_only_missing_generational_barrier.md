@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::borrow_mut_gen_only 缺少世代寫屏障 - 導致 OLD→YOUNG 引用遺漏
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -150,3 +150,21 @@ pub fn borrow_mut_gen_only(&self) -> parking_lot::MutexGuard<'_, T> {
 
 **Geohot (Exploit 觀點):**
 攻擊者可以濫用這個行為來觸發 UAF。在高性能場景下使用 `borrow_mut_gen_only` 的應用程式可能成為目標。結合其他記憶體錯誤，這可以構成更複雜的攻擊。
+
+---
+
+## ✅ 修復記錄 (Fix Record)
+
+**Date:** 2026-03-16
+**Fix:** Added generational barrier call to `GcThreadSafeCell::borrow_mut_gen_only()` in `crates/rudo-gc/src/cell.rs:1157-1162`.
+
+```rust
+pub fn borrow_mut_gen_only(&self) -> parking_lot::MutexGuard<'_, T> {
+    let incremental_active = false;
+    let generational_active = crate::gc::incremental::is_generational_barrier_active();
+    self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
+    self.inner.lock()
+}
+```
+
+**Verification:** All 11 gc_thread_safe_cell tests pass.
