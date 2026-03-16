@@ -1,7 +1,7 @@
 # [Bug]: GcVisitorConcurrent::route_reference TOCTOU - set_mark return value ignored
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -134,3 +134,35 @@ if !(*header.as_ptr()).is_allocated(idx) {
 
 **Geohot (Exploit 觀點):**
 攻擊者可以嘗試控制 lazy sweep 的時序來觸發這個 bug。雖然難以可靠觸發，但成功利用可導致記憶體洩漏（拒絕服務）。在即時編譯器 (JIT) 場景中，控制記憶體配置時機可能更容易觸發。
+
+---
+
+## Verification
+
+**Verified by:** opencode  
+**Date:** 2026-03-17
+
+### Code Location Confirmed
+
+The bug is confirmed at `crates/rudo-gc/src/trace.rs:179-185`:
+
+```rust
+if !(*header.as_ptr()).is_allocated(idx) {
+    return;
+}
+if (*header.as_ptr()).is_marked(idx) {
+    return;
+}
+(*header.as_ptr()).set_mark(idx);  // Return value IGNORED!
+```
+
+**Issue confirmed:**
+- Line 185 calls `set_mark(idx)` but ignores the return value
+- Between the `is_allocated` check (line 179) and `set_mark` (line 185), lazy sweep can:
+  1. Sweep the slot (set `is_allocated` to false)
+  2. Reallocate to a new object
+  3. The mark gets incorrectly applied to the new object
+
+**Contrast with correct implementation** in `gc/gc.rs:2400-2410` which uses `try_mark` + post-CAS validation.
+
+**Status: VERIFIED - Bug confirmed present in code**
