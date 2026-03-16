@@ -8,10 +8,11 @@
 - **Resolved**: 1
 - **Unknown**: 2
 - **Verified**: 18
+- **Open**: 1
 
 ### By Tags
 - **Verified**: 306
-- **Not Verified**: 18
+- **Not Verified**: 19
 - **Not Reproduced**: 11
 - **Fixed**: 1
 - **Unknown**: 2
@@ -361,3 +362,4 @@
 | [2026-03-15_ISSUE_bug302_gcthreadsaferefmut_drop_incorrect_generational_mark.md](./2026-03-15_ISSUE_bug302_gcthreadsaferefmut_drop_incorrect_generational_mark.md) | GcThreadSafeRefMut::drop incorrectly marks GC pointers during generational barrier (inconsistent with GcCell) | Fixed | Verified |
 | [2026-03-15_ISSUE_bug303_hashmap_missing_gccapture.md](./2026-03-15_ISSUE_bug303_hashmap_missing_gccapture.md) | HashMap<K, V, S> Missing GcCapture Implementation | Invalid | Verified |
 | [2026-03-15_ISSUE_bug304_gcrwlock_gcmutex_guard_drop_incorrect_mark_black_generational.md](./2026-03-15_ISSUE_bug304_gcrwlock_gcmutex_guard_drop_incorrect_mark_black_generational.md) | GcRwLockWriteGuard and GcMutexGuard Drop implementations incorrectly mark GC pointers black during generational barrier | Verified | Verified |
+| [2026-03-16_ISSUE_bug310_gcvisitorconcurrent_route_reference_toctou_set_mark.md](./2026-03-16_ISSUE_bug310_gcvisitorconcurrent_route_reference_toctou_set_mark.md) | GcVisitorConcurrent::route_reference TOCTOU - set_mark return value ignored | Open | Not Verified |
