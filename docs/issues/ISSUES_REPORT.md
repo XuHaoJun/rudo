@@ -8,7 +8,7 @@
 - **Resolved**: 1
 - **Unknown**: 2
 - **Verified**: 18
-- **Open**: 3
+- **Open**: 4
 
 ### By Tags
 - **Verified**: 306
@@ -367,3 +367,4 @@
 | [2026-03-16_ISSUE_bug315_generational_barrier_active_idle.md](./2026-03-16_ISSUE_bug315_generational_barrier_active_idle.md) | is_generational_barrier_active() 在 Idle 階段返回 true 導致不必要的效能開銷 | Open | Not Verified |
 | [2026-03-16_ISSUE_bug316_write_guard_drop_toctou_cached_barrier_not_used.md](./2026-03-16_ISSUE_bug316_write_guard_drop_toctou_cached_barrier_not_used.md) | Write Guard Drop TOCTOU - Barrier states re-checked on drop instead of using cached values from guard acquisition | Verified | Verified |
 | [2026-03-16_ISSUE_bug122_gcboxweakref_is_live_missing_dropping_state.md](./2026-03-16_ISSUE_bug122_gcboxweakref_is_live_missing_dropping_state.md) | GcBoxWeakRef::is_live() 缺少 dropping_state 檢查導致不一致行為 | Open | Unverified |
+| [2026-03-17_ISSUE_bug325_orphan_root_migration_race.md](./2026-03-17_ISSUE_bug325_orphan_root_migration_race.md) | Orphan Root Migration Race - handle appears unregistered during migration window | Open | Not Verified |
