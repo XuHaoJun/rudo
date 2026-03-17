@@ -1,7 +1,7 @@
 # [Bug]: Sweep TOCTOU - weak_count_acquire 與 has_dead_flag 讀取之間的 Race Condition
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -129,3 +129,20 @@ pub(crate) fn can_reclaim(&self) -> bool {
 
 **Geohot (Exploit 觀點):**
 如果攻擊者能夠控制 GC timing，他們可能利用這個 UAF 進行記憶體佈局攻擊。特別是在即時編譯器或 FFI 情境下，這種不確定的記憶體錯誤可能被利用。
+
+---
+
+## Verification
+
+**Verified by:** opencode  
+**Date:** 2026-03-17
+
+### Fix Applied
+
+Fixed by adding `weak_count_and_dead_flag()` method in `ptr.rs` that atomically reads both `weak_count` and `dead_flag` with a single load. Updated all sweep locations in `gc/gc.rs` to use this new method, eliminating the TOCTOU race between `weak_count_acquire()` and `has_dead_flag()`.
+
+**Changes:**
+1. Added `weak_count_and_dead_flag()` method in `crates/rudo-gc/src/ptr.rs`
+2. Updated 5 sweep locations in `crates/rudo-gc/src/gc/gc.rs` to use the new atomic method
+
+All tests pass; clippy clean.

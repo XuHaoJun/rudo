@@ -2205,11 +2205,11 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                    let weak_count = (*gc_box_ptr).weak_count_acquire();
+                    let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
                     if weak_count > 0 {
                         // Has weak refs - drop value but keep allocation
-                        if !(*gc_box_ptr).has_dead_flag() {
+                        if !dead_flag {
                             ((*gc_box_ptr).drop_fn)(obj_ptr);
                             (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                             (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
@@ -2296,9 +2296,9 @@ fn sweep_phase2_reclaim(
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                    let weak_count = (*gc_box_ptr).weak_count_acquire();
+                    let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
-                    if weak_count == 0 && (*gc_box_ptr).has_dead_flag() {
+                    if weak_count == 0 && dead_flag {
                         // No weak refs, already dropped and dead - reclaim
                         // CRITICAL FIX: Write free list head BEFORE clearing allocated bit
                         // to prevent new allocations from reusing this slot with corrupted metadata
@@ -2494,10 +2494,10 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                let weak_count = (*gc_box_ptr).weak_count_acquire();
+                let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
                 if weak_count > 0 {
-                    if !(*gc_box_ptr).has_dead_flag() {
+                    if !dead_flag {
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
                         (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                         (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
@@ -2597,10 +2597,10 @@ unsafe fn lazy_sweep_page(
             #[allow(clippy::cast_ptr_alignment)]
             let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-            let weak_count = (*gc_box_ptr).weak_count_acquire();
+            let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
             if weak_count > 0 {
-                if !(*gc_box_ptr).has_dead_flag() {
+                if !dead_flag {
                     ((*gc_box_ptr).drop_fn)(obj_ptr);
                     (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                     (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
@@ -2723,10 +2723,10 @@ unsafe fn lazy_sweep_page_all_dead(
             #[allow(clippy::cast_ptr_alignment)]
             let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-            let weak_count = (*gc_box_ptr).weak_count_acquire();
+            let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
             if weak_count > 0 {
-                if !(*gc_box_ptr).has_dead_flag() {
+                if !dead_flag {
                     ((*gc_box_ptr).drop_fn)(obj_ptr);
                     (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                     (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;

@@ -418,6 +418,20 @@ impl<T: Trace + ?Sized> GcBox<T> {
         (self.weak_count.load(Ordering::Acquire) & Self::DEAD_FLAG) != 0
     }
 
+    /// Atomically check both `weak_count` and `dead_flag` with a single load.
+    ///
+    /// Returns (`weak_count`, `dead_flag`) where:
+    /// - `weak_count`: the number of weak references (without flags)
+    /// - `dead_flag`: true if the `DEAD_FLAG` is set
+    ///
+    /// This avoids TOCTOU races between reading `weak_count` and checking `dead_flag`.
+    pub(crate) fn weak_count_and_dead_flag(&self) -> (usize, bool) {
+        let raw = self.weak_count.load(Ordering::Acquire);
+        let weak_count = raw & !Self::FLAGS_MASK;
+        let dead_flag = (raw & Self::DEAD_FLAG) != 0;
+        (weak_count, dead_flag)
+    }
+
     /// Mark the value as dropped.
     pub(crate) fn set_dead(&self) {
         self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Relaxed);
