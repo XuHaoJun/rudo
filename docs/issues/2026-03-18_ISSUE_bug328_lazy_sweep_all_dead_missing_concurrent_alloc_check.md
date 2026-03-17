@@ -1,7 +1,7 @@
 # [Bug]: Lazy Sweep 未設置 all_dead = false 導致並發配置時頁面狀態錯誤
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -102,3 +102,27 @@ if (*header).is_allocated(i) {
 
 - **Date:** 
 - **Fix:**
+
+---
+
+## 🔍 驗證記錄 (Verification)
+
+已確認 bug 存在於 `crates/rudo-gc/src/gc/gc.rs:2663`:
+
+```rust
+// Line 2630-2663
+if (*header).is_allocated(i) {
+    // Slot was concurrently allocated - rollback free list changes
+    let next_head = current_free;
+    // ... rollback code ...
+    break; // BUG: 沒有設置 all_dead = false!
+}
+```
+
+問題分析:
+1. 當 weak_count == 0 且並發分配發生時，程式進入此分支
+2. 在 break 之前，all_dead 仍然是 true
+3. 如果後續所有 slot 都是並發分配，永遠不會觸發 line 2686 的 else 分支
+4. 導致函數返回錯誤的 all_dead 狀態
+
+修復方法: 在 break 之前添加 `all_dead = false;`
