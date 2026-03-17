@@ -249,6 +249,10 @@ impl<T: ?Sized> GcCell<T> {
     #[inline]
     pub fn borrow_mut_gen_only(&self) -> RefMut<'_, T> {
         self.validate_thread_affinity("borrow_mut_gen_only");
+
+        let ptr = std::ptr::from_ref(self).cast::<u8>();
+        crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut_gen_only", false);
+
         self.inner.borrow_mut()
     }
 
