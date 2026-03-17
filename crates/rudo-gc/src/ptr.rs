@@ -807,6 +807,9 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if gc_box.has_dead_flag() {
                 return false;
             }
+            if gc_box.dropping_state() != 0 {
+                return false;
+            }
         }
 
         true
