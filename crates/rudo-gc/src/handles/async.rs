@@ -115,7 +115,7 @@ fn validate_gc_in_current_heap(gc_ptr: *const u8) {
         return;
     }
 
-    if ptr_addr < heap_start || ptr_addr > heap_end {
+    if ptr_addr < heap_start || ptr_addr >= heap_end {
         panic!(
             "AsyncHandleScope cannot track Gc from a different thread. \
              The Gc was allocated on another thread's heap (address: {gc_ptr:p}). \

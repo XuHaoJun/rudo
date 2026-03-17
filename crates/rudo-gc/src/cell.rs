@@ -264,7 +264,7 @@ impl<T: ?Sized> GcCell<T> {
         let heap_end = crate::heap::heap_end();
         let ptr_addr = cell_ptr as usize;
 
-        if ptr_addr < heap_start || ptr_addr > heap_end {
+        if ptr_addr < heap_start || ptr_addr >= heap_end {
             return;
         }
 
