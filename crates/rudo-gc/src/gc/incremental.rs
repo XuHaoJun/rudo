@@ -824,8 +824,7 @@ unsafe fn scan_page_for_marked_refs(
 
     for i in 0..obj_count {
         // Only check is_marked at entry; is_allocated recheck after try_mark is sufficient.
-        // Redundant entry is_allocated check removed (bug258): provides no additional TOCTOU
-        // protection — lazy sweep can flip is_allocated between any check and push_work.
+        // Added second is_allocated check before push_work to fix TOCTOU (bug258).
         if !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
             // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep
@@ -839,6 +838,12 @@ unsafe fn scan_page_for_marked_refs(
                     Ok(true) => {
                         // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
                         // If slot was swept after try_mark, clear mark and skip.
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
+                        // Second check to fix TOCTOU (bug258): slot can be swept between
+                        // first check and push_work. Re-check before pushing.
                         if !(*header).is_allocated(i) {
                             (*header).clear_mark_atomic(i);
                             break;
@@ -964,6 +969,12 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
             if (*header).set_mark(i) {
                 // Re-check is_allocated to fix TOCTOU with lazy sweep.
                 // If slot was swept after set_mark, clear mark and skip.
+                if !(*header).is_allocated(i) {
+                    (*header).clear_mark_atomic(i);
+                    continue;
+                }
+                // Second check to fix TOCTOU (bug258): slot can be swept between
+                // first check and push_work. Re-check before pushing.
                 if !(*header).is_allocated(i) {
                     (*header).clear_mark_atomic(i);
                     continue;

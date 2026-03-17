@@ -1,6 +1,6 @@
 # [Bug]: PerThreadMarkQueue::scan_page_before_push TOCTOU - is_allocated 檢查與 push 之间存在 race
 
-**Status:** Fixed
+**Status:** Open
 **Tags:** Verified
 
 ---

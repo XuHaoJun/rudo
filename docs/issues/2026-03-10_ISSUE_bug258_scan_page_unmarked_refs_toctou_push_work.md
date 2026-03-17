@@ -1,6 +1,6 @@
 # [Bug]: scan_page_for_unmarked_refs TOCTOU Race - is_allocated 檢查與 push_work 之间存在 race
 
-**Status:** Fixed
+**Status:** Open
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
