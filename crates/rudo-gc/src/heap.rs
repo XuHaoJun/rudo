@@ -169,6 +169,10 @@ static ORPHAN_HANDLE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Migrate cross-thread roots from a terminating thread's TCB to the orphan table.
 /// Called from `ThreadLocalHeap::drop` before unregistering, so the TCB can be dropped.
+///
+/// FIX bug325: Hold both locks simultaneously to prevent race window where `resolve()`
+/// finds handle in neither TCB roots nor orphan table.
+#[allow(clippy::significant_drop_tightening)]
 pub fn migrate_roots_to_orphan(tcb: &ThreadControlBlock, thread_id: ThreadId) {
     let mut roots = tcb
         .cross_thread_roots
@@ -182,8 +186,9 @@ pub fn migrate_roots_to_orphan(tcb: &ThreadControlBlock, thread_id: ThreadId) {
         .drain()
         .map(|(k, v)| (k, v.as_ptr() as usize))
         .collect();
-    drop(roots);
 
+    // Acquire orphan lock BEFORE releasing TCB roots lock to prevent race (bug325).
+    // This ensures handle is either in TCB roots or orphan table at all times.
     let mut orphan = orphaned_cross_thread_roots().lock();
     for (handle_id, ptr) in drained {
         orphan.insert((thread_id, handle_id), ptr);

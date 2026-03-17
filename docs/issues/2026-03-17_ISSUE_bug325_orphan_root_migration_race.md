@@ -1,7 +1,7 @@
 # [Bug]: Orphan Root Migration Race - handle appears unregistered during migration window
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -180,3 +180,14 @@ pub fn migrate_roots_to_orphan(tcb: &ThreadControlBlock, thread_id: ThreadId) {
 
 **Geohot (Exploit 觀點):**
 雖然這不是傳統的安全漏洞，但攻擊者可能透過精心設計的執行緒時序來觸發此 panic，導致服務阻斷（DoS）。在多執行緒 GC 系統中，此類時序問題是經典的攻擊面。
+
+---
+
+## Fix Applied (2026-03-17)
+
+**Fix:** Modified `migrate_roots_to_orphan()` in `heap.rs` to acquire orphan lock BEFORE releasing TCB roots lock, eliminating the race window.
+
+**Changes:**
+- Removed the `drop(roots)` call between draining TCB roots and acquiring orphan lock
+- Added `#[allow(clippy::significant_drop_tightening)]` to suppress clippy warning about the intentional lock hold pattern
+- Added documentation comment explaining the fix (bug325)
