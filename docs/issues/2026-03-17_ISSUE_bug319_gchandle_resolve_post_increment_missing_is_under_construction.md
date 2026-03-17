@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::resolve/try_resolve Post-Increment Check 缺少 is_under_construction 檢查
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
