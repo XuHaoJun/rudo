@@ -1113,6 +1113,8 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         GcThreadSafeRefMut {
             inner: guard,
             _marker: std::marker::PhantomData,
+            incremental_active,
+            generational_active,
         }
     }
 
@@ -1376,6 +1378,8 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 pub struct GcThreadSafeRefMut<'a, T: GcCapture + ?Sized> {
     inner: parking_lot::MutexGuard<'a, T>,
     _marker: std::marker::PhantomData<&'a mut T>,
+    incremental_active: bool,
+    generational_active: bool,
 }
 
 impl<T: GcCapture + ?Sized> std::ops::Deref for GcThreadSafeRefMut<'_, T> {
@@ -1394,8 +1398,8 @@ impl<T: GcCapture + ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
 
 impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
     fn drop(&mut self) {
-        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
-        let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        let incremental_active = self.incremental_active;
+        let generational_active = self.generational_active;
 
         let mut ptrs = Vec::with_capacity(32);
         (*self.inner).capture_gc_ptrs_into(&mut ptrs);
