@@ -1,7 +1,7 @@
 # [Bug]: Gc::cross_thread_handle Missing Pre-Incrment is_allocated Check (TOCTOU)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -158,4 +158,18 @@ bug289 修復了 `Gc::clone()` 的相同問題，但忘記同時修復 `Gc::cros
 
 ## ✅ Verification
 
-**待驗證:** 需要驗證此 bug 是否存在於當前程式碼中。
+**已驗證:** 在 `ptr.rs:1834-1851` 確認 bug 存在 - is_allocated 檢查在 inc_ref 之後。
+
+**修復已套用:** 在 `ptr.rs` 的 `Gc::cross_thread_handle()` 中添加了 is_allocated 預檢查（位於 inc_ref 之前），與 Gc::clone() 的修復模式一致。
+
+修復內容：
+```rust
+// Check is_allocated BEFORE inc_ref to avoid TOCTOU with lazy sweep (bug339).
+if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+    let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+    assert!(
+        (*header.as_ptr()).is_allocated(idx),
+        "Gc::cross_thread_handle: object slot was swept before inc_ref"
+    );
+}
+```

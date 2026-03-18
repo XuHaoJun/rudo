@@ -1832,6 +1832,17 @@ impl<T: Trace + 'static> Gc<T> {
         let ptr = self.as_non_null();
 
         unsafe {
+            // Check is_allocated BEFORE inc_ref to avoid TOCTOU with lazy sweep.
+            // The slot could be swept and reused between flag check and inc_ref,
+            // causing inc_ref to modify the wrong object's ref count (bug339).
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::cross_thread_handle: object slot was swept before inc_ref"
+                );
+            }
+
             assert!(
                 !(*ptr.as_ptr()).has_dead_flag()
                     && (*ptr.as_ptr()).dropping_state() == 0
