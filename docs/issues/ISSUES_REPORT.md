@@ -8,7 +8,7 @@
 - **Resolved**: 1
 - **Unknown**: 2
 - **Verified**: 19
-- **Open**: 5
+- **Open**: 6
 
 ### By Tags
 - **Verified**: 307
@@ -16,12 +16,13 @@
 - **Not Reproduced**: 11
 - **Fixed**: 1
 - **Unknown**: 2
-- **Unverified**: 2
+- **Unverified**: 3
 
 ## All Issues
 
 | Issue | Title | Status | Tags |
 |---|---|---|---|
+| [2026-03-18_ISSUE_bug334_gcmutexguard_missing_barrier_state_cache.md](./2026-03-18_ISSUE_bug334_gcmutexguard_missing_barrier_state_cache.md) | GcMutexGuard 缺少 barrier state 快取，與 GcRwLockWriteGuard 不一致 | Open | Unverified |
 | [2026-03-18_ISSUE_bug332_gchandle_downgrade_weak_count_leak.md](./2026-03-18_ISSUE_bug332_gchandle_downgrade_weak_count_leak.md) | GcHandle::downgrade Weak Count Leak - dec_weak Not Called When Slot Swept | Open | Verified |
 | [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Fixed | Not Reproduced |
