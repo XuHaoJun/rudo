@@ -1,7 +1,7 @@
 # [Bug]: GcCell::borrow_mut 不檢查 is_generational_barrier_active，與 GcThreadSafeCell::borrow_mut 行為不一致
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -169,3 +169,14 @@ where
 ## 🔗 相關 Issue
 
 - 類似問題存在於其他 API 中，需要確保一致性
+
+---
+
+## ✅ Fix Applied
+
+The fix has been applied in `cell.rs`:
+
+1. Added `generational_active` check before triggering the barrier in `GcCell::borrow_mut()`
+2. Changed the barrier call from unconditional to conditional: `if generational_active || incremental_active`
+
+This now matches the behavior of `GcThreadSafeCell::borrow_mut()` and other similar APIs.

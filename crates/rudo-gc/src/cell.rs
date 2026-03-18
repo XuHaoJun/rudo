@@ -161,8 +161,9 @@ impl<T: ?Sized> GcCell<T> {
         // Cache barrier states once to avoid TOCTOU between check and use.
         // (bug110: triple is_incremental_marking_active call caused inconsistent barrier state)
         // FIX bug301: mark_object_black should only be called during incremental marking, not generational barrier.
-        // Note: generational barrier is always triggered via gc_cell_validate_and_barrier (marks page as dirty).
+        // FIX bug302: Check is_generational_barrier_active() before triggering barrier, matching GcThreadSafeCell.
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
         if incremental_active {
             unsafe {
@@ -185,7 +186,10 @@ impl<T: ?Sized> GcCell<T> {
             }
         }
 
-        crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut", incremental_active);
+        // FIX bug302: Check is_generational_barrier_active() before triggering barrier, matching GcThreadSafeCell.
+        if generational_active || incremental_active {
+            crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut", incremental_active);
+        }
 
         let result = self.inner.borrow_mut();
 
