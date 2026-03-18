@@ -369,3 +369,4 @@
 | [2026-03-16_ISSUE_bug122_gcboxweakref_is_live_missing_dropping_state.md](./2026-03-16_ISSUE_bug122_gcboxweakref_is_live_missing_dropping_state.md) | GcBoxWeakRef::is_live() 缺少 dropping_state 檢查導致不一致行為 | Open | Unverified |
 | [2026-03-18_ISSUE_bug327_gcrootset_snapshot_single_heap_filter.md](./2026-03-18_ISSUE_bug327_gcrootset_snapshot_single_heap_filter.md) | GcRootSet::snapshot 單一 heap 過濾導致跨執行緒 roots 丟失 | Open | Not Verified |
 | [2026-03-17_ISSUE_bug325_orphan_root_migration_race.md](./2026-03-17_ISSUE_bug325_orphan_root_migration_race.md) | Orphan Root Migration Race - handle appears unregistered during migration window | Open | Not Verified |
+| [2026-03-18_ISSUE_bug331_gchandle_try_resolve_impl_ref_count_leak.md](./2026-03-18_ISSUE_bug331_gchandle_try_resolve_impl_ref_count_leak.md) | GcHandle::try_resolve_impl Reference Count Leak - inc_ref not undone when slot swept | Open | Verified |
