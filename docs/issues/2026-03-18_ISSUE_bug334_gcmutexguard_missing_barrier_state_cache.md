@@ -1,7 +1,7 @@
 # [Bug]: GcMutexGuard 缺少 barrier state 快取，與 GcRwLockWriteGuard 不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -161,3 +161,20 @@ GC 的 barrier 行為必須在物件生命週期內保持一致。如果在 lock
 
 **Geohot (Exploit 攻擊觀點):**
 攻擊者可能嘗試在 lock 獲取和 drop 之間觸發 GC 配置變更，導致不一致的 barrier 行為。在極端情況下，這可能導致 use-after-free。
+
+---
+
+## ✅ Fix Applied (2026-03-19)
+
+**Fix:** Added `incremental_active` and `generational_active` fields to `GcMutexGuard` struct to cache barrier state, matching `GcRwLockWriteGuard`.
+
+**Changes in `sync.rs`:**
+1. Added `incremental_active: bool` and `generational_active: bool` fields to `GcMutexGuard` struct (line 709-710)
+2. Updated `lock()` method to populate cached values (lines 604-607)
+3. Updated `try_lock()` method to populate cached values (lines 645-648)
+4. Updated `Drop` implementation to use cached values instead of dynamically fetching (lines 743-744)
+
+**Verification:**
+- Build: ✅ `cargo build --workspace` succeeds
+- Clippy: ✅ No warnings
+- Tests: ✅ All tests pass

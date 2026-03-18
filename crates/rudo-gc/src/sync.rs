@@ -600,6 +600,8 @@ impl<T: ?Sized> GcMutex<T> {
         GcMutexGuard {
             guard,
             _marker: PhantomData,
+            incremental_active,
+            generational_active,
         }
     }
 
@@ -639,6 +641,8 @@ impl<T: ?Sized> GcMutex<T> {
             GcMutexGuard {
                 guard,
                 _marker: PhantomData,
+                incremental_active,
+                generational_active,
             }
         })
     }
@@ -706,6 +710,8 @@ where
 pub struct GcMutexGuard<'a, T: GcCapture + ?Sized> {
     guard: parking_lot::MutexGuard<'a, T>,
     _marker: PhantomData<&'a T>,
+    incremental_active: bool,
+    generational_active: bool,
 }
 
 impl<T: GcCapture + ?Sized> Deref for GcMutexGuard<'_, T> {
@@ -734,8 +740,8 @@ impl<T: GcCapture + ?Sized> DerefMut for GcMutexGuard<'_, T> {
 /// swept between check and mark. No explicit pre-check is needed here.
 impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
     fn drop(&mut self) {
-        let incremental_active = is_incremental_marking_active();
-        let generational_active = is_generational_barrier_active();
+        let incremental_active = self.incremental_active;
+        let generational_active = self.generational_active;
 
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
