@@ -7,11 +7,11 @@
 - **Invalid**: 25
 - **Resolved**: 1
 - **Unknown**: 2
-- **Verified**: 18
+- **Verified**: 19
 - **Open**: 5
 
 ### By Tags
-- **Verified**: 306
+- **Verified**: 307
 - **Not Verified**: 19
 - **Not Reproduced**: 11
 - **Fixed**: 1
@@ -22,6 +22,7 @@
 
 | Issue | Title | Status | Tags |
 |---|---|---|---|
+| [2026-03-18_ISSUE_bug332_gchandle_downgrade_weak_count_leak.md](./2026-03-18_ISSUE_bug332_gchandle_downgrade_weak_count_leak.md) | GcHandle::downgrade Weak Count Leak - dec_weak Not Called When Slot Swept | Open | Verified |
 | [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md](./2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md) | Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏 | Fixed | Not Reproduced |
