@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::is_live() 缺少 is_allocated 檢查，與 upgrade() 行為不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -171,3 +171,14 @@ pub(crate) fn is_live(&self) -> bool {
 - **Bug122**: `GcBoxWeakRef::is_live()` 缺少 dropping_state 檢查 (已修復)
 - **Bug242**: `GcBoxWeakRef::try_upgrade` 缺少 is_allocated 檢查 (已修復)
 - **Bug320**: 提及 `is_live()` 缺少 is_allocated，但未單獨修復
+
+---
+
+## ✅ 修復記錄 (Fix Record)
+
+**Date:** 2026-03-19
+**Fix:** Added `is_allocated` check to `is_live()` function in `ptr.rs:830-835`, matching the same check in `upgrade()`.
+
+**Changes:**
+- Added `is_allocated` check in `GcBoxWeakRef::is_live()` after other state checks
+- This ensures API consistency with `upgrade()` and prevents returning `true` for swept/reused slots

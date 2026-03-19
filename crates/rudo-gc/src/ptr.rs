@@ -827,6 +827,12 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if gc_box.dropping_state() != 0 {
                 return false;
             }
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return false;
+                }
+            }
         }
 
         true
