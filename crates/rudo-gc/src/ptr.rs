@@ -818,6 +818,9 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
         unsafe {
             let gc_box = &*ptr.as_ptr();
+            if gc_box.is_under_construction() {
+                return false;
+            }
             if gc_box.has_dead_flag() {
                 return false;
             }

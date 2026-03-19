@@ -1,6 +1,6 @@
 # [Bug]: GcBoxWeakRef::is_live() 缺少 is_under_construction 檢查，與 upgrade() 行為不一致
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -182,3 +182,11 @@ pub(crate) fn is_live(&self) -> bool {
 - **Bug342**: `GcBox::try_inc_ref_from_zero` post-CAS 缺少 is_under_construction 檢查
 - **Bug343**: `GcBoxWeakRef::is_live()` 缺少 is_allocated 檢查 (已報告)
 - 此 bug 與 bug343 有關但不同：bug343 關注 is_allocated，此 bug 關注 is_under_construction
+
+---
+
+## Resolution (2026-03-19)
+
+**Outcome:** Fixed.
+
+Added `is_under_construction()` check to `is_live()` function in `ptr.rs:819-821`, matching the same check in `upgrade()` and `try_upgrade()`. This ensures API consistency and prevents `is_live()` from returning `true` for objects that are under construction during `Gc::new_cyclic_weak`.
