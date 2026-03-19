@@ -631,7 +631,14 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                     && !gc_box.is_under_construction(),
                 "AsyncHandle::get: cannot access a dead, dropping, or under construction Gc"
             );
-            gc_box.value()
+            let pre_generation = gc_box.generation();
+            let value = gc_box.value();
+            assert_eq!(
+                pre_generation,
+                gc_box.generation(),
+                "AsyncHandle::get: slot was reused between pre-check and value read (generation mismatch)"
+            );
+            value
         }
     }
 
@@ -694,7 +701,14 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                 && !gc_box.is_under_construction(),
             "AsyncHandle::get_unchecked: cannot access a dead, dropping, or under construction Gc"
         );
-        gc_box.value()
+        let pre_generation = gc_box.generation();
+        let value = gc_box.value();
+        assert_eq!(
+            pre_generation,
+            gc_box.generation(),
+            "AsyncHandle::get_unchecked: slot was reused between pre-check and value read (generation mismatch)"
+        );
+        value
     }
 
     /// Converts this handle to a `Gc<T>`.
@@ -769,9 +783,15 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                     && !gc_box.is_under_construction(),
                 "AsyncHandle::to_gc: cannot convert a dead, dropping, or under construction Gc"
             );
+            let pre_generation = gc_box.generation();
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("AsyncHandle::to_gc: object is being dropped by another thread");
             }
+            assert_eq!(
+                pre_generation,
+                gc_box.generation(),
+                "AsyncHandle::to_gc: slot was reused between pre-check and inc_ref (generation mismatch)"
+            );
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
                 assert!(
