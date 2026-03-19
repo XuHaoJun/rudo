@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::try_resolve_impl Reference Count Leak - inc_ref Not Undone When Slot Swept
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -9,7 +9,7 @@
 | :--- | :--- | :--- |
 | **Likelihood (發生機率)** | High | Concurrent GC with lazy sweep can trigger this race window |
 | **Severity (嚴重程度)** | Critical | Reference count leak leads to memory never being reclaimed |
-| **Reproducibility (復現難度)** | Medium | Requires concurrent lazy sweep to trigger, but deterministic |
+| **Reproducibility (重現難度)** | Medium | Requires concurrent lazy sweep to trigger, but deterministic |
 
 ---
 
@@ -112,3 +112,24 @@ The exploitation path would require:
 2. Allocating a new object in the swept slot
 3. The leaked ref_count would corrupt the new object's reference count
 This is complex but theoretically viable for a memory corruption exploit.
+
+---
+
+## Resolution (2026-03-19)
+
+**Outcome:** Fixed.
+
+**Fix Applied:** Added `GcBox::dec_ref()` call before returning `None` when `is_allocated` returns false after `inc_ref()` in `try_resolve_impl`.
+
+**Changes in `handles/cross_thread.rs:341-346`:**
+```rust
+if !(*header.as_ptr()).is_allocated(idx) {
+    GcBox::dec_ref(self.ptr.as_ptr());  // FIX bug331: Undo the inc_ref
+    return None;
+}
+```
+
+**Verification:**
+- Build: `cargo build --workspace` succeeds
+- Clippy: No warnings
+- Tests: All tests pass
