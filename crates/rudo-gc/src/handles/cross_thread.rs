@@ -588,7 +588,15 @@ impl<T: Trace + 'static> Drop for GcHandle<T> {
             let _ = heap::remove_orphan_root(self.origin_thread, self.handle_id);
         }
         self.handle_id = HandleId::INVALID;
-        // Release the ref count we held. May trigger object drop if this was last ref.
+
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return;
+                }
+            }
+        }
         crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
     }
 }
