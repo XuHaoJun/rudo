@@ -384,15 +384,13 @@ impl<T: Trace + 'static> GcHandle<T> {
                 panic!("GcHandle::downgrade: handle has been unregistered");
             }
             unsafe {
-                // inc_weak before is_allocated check to avoid TOCTOU with lazy sweep (bug241).
-                // If slot was swept between check and inc_weak, we'd increment the wrong object.
                 (*self.ptr.as_ptr()).inc_weak();
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
                 {
                     let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        // Don't call dec_weak - slot may be reused (bug133)
+                        (*self.ptr.as_ptr()).dec_weak();
                         drop(roots);
                         return WeakCrossThreadHandle {
                             weak: GcBoxWeakRef::null(),
@@ -419,14 +417,13 @@ impl<T: Trace + 'static> GcHandle<T> {
                 panic!("GcHandle::downgrade: handle has been unregistered");
             }
             unsafe {
-                // inc_weak before is_allocated check to avoid TOCTOU with lazy sweep (bug241).
                 (*self.ptr.as_ptr()).inc_weak();
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
                 {
                     let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        // Don't call dec_weak - slot may be reused (bug133)
+                        (*self.ptr.as_ptr()).dec_weak();
                         drop(orphan);
                         return WeakCrossThreadHandle {
                             weak: GcBoxWeakRef::null(),
