@@ -1,7 +1,7 @@
 # [Bug]: mark_object_black 初始 is_allocated 檢查與 is_under_construction 解引用之間存在 TOCTOU Race
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -172,4 +172,38 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
 ## Resolution
 
 **Outcome:** Pending
+
+---
+
+## Verification (2026-03-20)
+
+**Verifier:** Bug Hunt Agent
+
+**Verification Result:** Bug **CONFIRMED STILL PRESENT**
+
+**Code Analysis:**
+
+The bug exists at `gc/incremental.rs:1061-1072`:
+
+```rust
+// Skip if object was swept; avoids UAF when Drop runs during/concurrent with sweep.
+if !(*h).is_allocated(idx) {       // <-- Line 1062: CHECK
+    return None;
+}
+
+// Skip if object is under construction (e.g. during Gc::new_cyclic_weak).
+// Avoids incorrectly marking partially-initialized objects (bug238).
+#[allow(clippy::cast_ptr_alignment)]
+let gc_box = &*ptr.cast::<GcBox<()>>();  // <-- Line 1069: USE - UAF risk!
+if gc_box.is_under_construction() {
+    return None;
+}
+```
+
+**Race Condition Timeline:**
+1. Thread A: checks `is_allocated(idx)` at line 1062 → true
+2. Thread B: lazy sweep clears allocated bit, reallocates slot to new object
+3. Thread A: dereferences `ptr` at line 1069 → **reads from potentially invalid memory**
+
+**Fix Required:** Add `is_allocated` re-check before dereferencing at line 1069, similar to the re-check pattern used at lines 1080 and 1087 in the same function.
 

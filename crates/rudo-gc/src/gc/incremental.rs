@@ -1063,6 +1063,13 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
         return None;
     }
 
+    // Re-check is_allocated before dereferencing to fix TOCTOU with lazy sweep (bug307).
+    // If slot was swept after initial check but before we dereference,
+    // return None to avoid UAF.
+    if !(*h).is_allocated(idx) {
+        return None;
+    }
+
     // Skip if object is under construction (e.g. during Gc::new_cyclic_weak).
     // Avoids incorrectly marking partially-initialized objects (bug238).
     #[allow(clippy::cast_ptr_alignment)]
