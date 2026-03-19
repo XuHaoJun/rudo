@@ -2612,12 +2612,23 @@ impl<T: Trace> Clone for Weak<T> {
                     ptr: AtomicNullable::null(),
                 };
             }
+            // Check is_allocated BEFORE inc_weak to avoid TOCTOU with lazy sweep (bug344).
+            // The slot could be swept and reused between flag check and inc_weak,
+            // causing inc_weak to modify the wrong object's weak_count.
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return Self {
+                        ptr: AtomicNullable::null(),
+                    };
+                }
+            }
             (*ptr.as_ptr()).inc_weak();
 
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                // Don't call dec_weak when slot swept - it may be reused (bug133)
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    // Don't call dec_weak - slot may be reused (bug133)
                     return Self {
                         ptr: AtomicNullable::null(),
                     };

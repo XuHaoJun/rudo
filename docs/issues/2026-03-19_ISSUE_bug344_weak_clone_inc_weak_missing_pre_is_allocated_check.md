@@ -1,6 +1,6 @@
 # [Bug]: Weak::clone 缺少 inc_weak 前置 is_allocated 檢查 (TOCTOU)
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
