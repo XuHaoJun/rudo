@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 
 use crate::cell::GcCapture;
 use crate::gc::incremental::mark_new_object_black;
@@ -43,6 +43,9 @@ pub struct GcBox<T: Trace + ?Sized> {
     pub(crate) trace_fn: unsafe fn(*const u8, &mut GcVisitor),
     /// Flag indicating the object is being dropped (prevents `weak::upgrade` race).
     is_dropping: AtomicUsize,
+    /// Per-object generation. Incremented on each allocation to detect slot reuse (bug347).
+    /// This allows verification that the object at a given address hasn't been replaced.
+    generation: AtomicU32,
     /// The user's data.
     value: T,
 }
@@ -111,6 +114,20 @@ impl<T: Trace + ?Sized> GcBox<T> {
     #[inline]
     unsafe fn set_final_dropping(&self) {
         self.is_dropping.store(2, Ordering::Release);
+    }
+
+    /// Get the current generation of this object.
+    /// Generation increments on each allocation to detect slot reuse (bug347).
+    #[inline]
+    pub(crate) fn generation(&self) -> u32 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    /// Increment the generation for slot reuse detection.
+    /// Called during sweep when a slot is reallocated.
+    #[inline]
+    pub(crate) fn increment_generation(&self) {
+        self.generation.fetch_add(1, Ordering::Release);
     }
 
     /// Increment the reference count.
@@ -1142,6 +1159,7 @@ impl<T: Trace> Gc<T> {
                 drop_fn: GcBox::<T>::drop_fn_for,
                 trace_fn: GcBox::<T>::trace_fn_for,
                 is_dropping: AtomicUsize::new(0),
+                generation: AtomicU32::new(1),
                 value,
             });
         }
@@ -1204,6 +1222,7 @@ impl<T: Trace> Gc<T> {
                         drop_fn: GcBox::<()>::drop_fn_for,
                         trace_fn: GcBox::<()>::trace_fn_for,
                         is_dropping: AtomicUsize::new(0),
+                        generation: AtomicU32::new(1),
                         value: (),
                     });
                 }
@@ -1281,6 +1300,7 @@ impl<T: Trace> Gc<T> {
                 drop_fn: GcBox::<T>::drop_fn_for,
                 trace_fn: GcBox::<T>::trace_fn_for,
                 is_dropping: AtomicUsize::new(0),
+                generation: AtomicU32::new(1),
                 value,
             });
         }
@@ -1401,6 +1421,10 @@ impl<T: Trace> Gc<T> {
             std::ptr::write(
                 std::ptr::addr_of_mut!((*gc_box).is_dropping),
                 AtomicUsize::new(0),
+            );
+            std::ptr::write(
+                std::ptr::addr_of_mut!((*gc_box).generation),
+                AtomicU32::new(1),
             );
         }
 

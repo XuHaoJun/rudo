@@ -231,7 +231,20 @@ impl<T: Trace + 'static> GcHandle<T> {
                 );
             }
 
+            // Get generation BEFORE inc_ref to detect slot reuse (bug347).
+            // If the slot is swept and reused between this check and inc_ref,
+            // the generation will be different after inc_ref.
+            let pre_generation = gc_box.generation();
+
             gc_box.inc_ref();
+
+            // Verify generation hasn't changed - if slot was reused, this will panic.
+            // This prevents inc_ref from operating on the wrong object's ref count.
+            assert_eq!(
+                pre_generation,
+                gc_box.generation(),
+                "GcHandle::resolve: slot was reused between pre-check and inc_ref (generation mismatch)"
+            );
 
             // Post-increment safety check (TOCTOU: object may have been dropped between
             // pre-check and inc_ref). Same pattern as Weak::upgrade.
@@ -330,7 +343,19 @@ impl<T: Trace + 'static> GcHandle<T> {
                 }
             }
 
+            // Get generation BEFORE inc_ref to detect slot reuse (bug347).
+            // If the slot is swept and reused between this check and inc_ref,
+            // the generation will be different after inc_ref.
+            let pre_generation = gc_box.generation();
+
             gc_box.inc_ref();
+
+            // Verify generation hasn't changed - if slot was reused, return None.
+            // This prevents inc_ref from operating on the wrong object's ref count.
+            if pre_generation != gc_box.generation() {
+                GcBox::dec_ref(self.ptr.as_ptr());
+                return None;
+            }
 
             // Post-increment safety check (TOCTOU). Same pattern as Weak::try_upgrade.
             if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
