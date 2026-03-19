@@ -219,6 +219,18 @@ impl<T: Trace + 'static> GcHandle<T> {
                 gc_box.dropping_state() == 0,
                 "GcHandle::resolve: object is being dropped"
             );
+
+            // Check is_allocated BEFORE inc_ref to avoid TOCTOU (bug345).
+            // The slot could be swept and reused between flag check and inc_ref,
+            // causing inc_ref to modify the wrong object's ref count.
+            if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "GcHandle::resolve: object slot was swept before inc_ref"
+                );
+            }
+
             gc_box.inc_ref();
 
             // Post-increment safety check (TOCTOU: object may have been dropped between
@@ -307,6 +319,17 @@ impl<T: Trace + 'static> GcHandle<T> {
             {
                 return None;
             }
+
+            // Check is_allocated BEFORE inc_ref to avoid TOCTOU (bug345).
+            // The slot could be swept and reused between flag check and inc_ref,
+            // causing inc_ref to modify the wrong object's ref count.
+            if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return None;
+                }
+            }
+
             gc_box.inc_ref();
 
             // Post-increment safety check (TOCTOU). Same pattern as Weak::try_upgrade.

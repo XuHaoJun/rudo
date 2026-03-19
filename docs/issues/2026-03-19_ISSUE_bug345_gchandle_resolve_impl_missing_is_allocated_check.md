@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::resolve_impl 缺少 is_allocated 檢查導致 TOCTOU
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -103,3 +103,11 @@ gc_box.inc_ref();
 
 **Geohot (Exploit 觀點):**
 如果攻擊者能夠控制 slot 的分配和回收時機，可能利用此 TOCTOU 漏洞來操作錯誤物件的 ref_count，進一步利用記憶體佈局。
+
+---
+
+## Resolution (2026-03-19)
+
+**Outcome:** Fixed.
+
+Added `is_allocated` check BEFORE `inc_ref()` in both `resolve_impl()` and `try_resolve_impl()` functions in `handles/cross_thread.rs`. This matches the pattern used in other similar functions like `Gc::clone`, `Gc::cross_thread_handle`, and `GcHandle::clone`. The pre-check prevents TOCTOU where the slot could be swept and reused between the flag checks and the `inc_ref()` call.
