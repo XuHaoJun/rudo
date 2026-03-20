@@ -849,12 +849,6 @@ unsafe fn scan_page_for_marked_refs(
                             (*header).clear_mark_atomic(i);
                             break;
                         }
-                        // Second check to fix TOCTOU (bug258): slot can be swept between
-                        // first check and push_work. Re-check before pushing.
-                        if !(*header).is_allocated(i) {
-                            (*header).clear_mark_atomic(i);
-                            break;
-                        }
                         // Verify generation hasn't changed (bug336 fix).
                         // If slot was reallocated between try_mark and push_work,
                         // generation will differ and we should skip this object.
