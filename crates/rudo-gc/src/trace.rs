@@ -8,6 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::BuildHasher;
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::ptr::GcBox;
@@ -172,7 +173,9 @@ impl<'a> GcVisitorConcurrent<'a> {
             let page_addr = header.as_ptr() as usize;
 
             if let Some(idx) = super::heap::ptr_to_object_index(raw.cast()) {
-                if self.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
+                if self.kind == VisitorKind::Minor
+                    && (*header.as_ptr()).generation.load(Ordering::Acquire) > 0
+                {
                     return;
                 }
 

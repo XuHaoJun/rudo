@@ -688,7 +688,9 @@ impl PerThreadMarkQueue {
             // Only check is_marked at entry; is_allocated recheck after try_mark is sufficient.
             // Added second is_allocated check before push to fix TOCTOU (bug260).
             if unsafe { !(*header).is_marked(i) } {
-                if kind == VisitorKind::Minor && unsafe { (*header).generation } > 0 {
+                if kind == VisitorKind::Minor
+                    && unsafe { (*header).generation.load(Ordering::Acquire) } > 0
+                {
                     continue;
                 }
 

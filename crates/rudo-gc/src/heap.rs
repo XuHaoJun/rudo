@@ -973,8 +973,9 @@ pub struct PageHeader {
     pub obj_count: u16,
     /// Offset from the start of the page to the first object.
     pub header_size: u16,
-    /// Generation index (for future generational GC).
-    pub generation: u8,
+    /// Generation index for generational GC.
+    /// Uses `AtomicU8` for thread-safe concurrent access during promotion and barrier checks.
+    pub generation: AtomicU8,
     /// Bitflags (`is_large_object`, `is_dirty`, etc.).
     pub flags: AtomicU8,
     /// Thread ID of the owner thread (for work-stealing).
@@ -2386,7 +2387,7 @@ impl LocalHeap {
                 obj_count: obj_count as u16,
                 #[allow(clippy::cast_possible_truncation)]
                 header_size: h_size as u16,
-                generation: 0,
+                generation: AtomicU8::new(0),
                 flags: AtomicU8::new(0),
                 owner_thread: get_thread_id(),
                 #[cfg(feature = "lazy-sweep")]
@@ -2490,7 +2491,7 @@ impl LocalHeap {
                 obj_count: 1,
                 #[allow(clippy::cast_possible_truncation)]
                 header_size: h_size as u16,
-                generation: 0,
+                generation: AtomicU8::new(0),
                 flags: AtomicU8::new(PAGE_FLAG_LARGE),
                 owner_thread: get_thread_id(),
                 #[cfg(feature = "lazy-sweep")]
@@ -2810,7 +2811,7 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
                     // Cache flag to avoid TOCTOU between check and barrier (bug149).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h_ptr).generation == 0 && !has_gen_old {
+                    if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -2839,7 +2840,7 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
                     // Cache flag to avoid TOCTOU between check and barrier (bug149).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
+                    if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (h, index)
@@ -2906,7 +2907,7 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 // Skip barrier only if page is young AND object has no gen_old_flag (bug71).
                 // Cache flag to avoid TOCTOU between check and barrier (bug114).
                 let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                if (*h_ptr).generation == 0 && !has_gen_old {
+                if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                     return;
                 }
                 let owner = (*h_ptr).owner_thread;
@@ -2979,7 +2980,7 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 let gc_box_addr =
                     (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                 let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                if (*h).generation == 0 && !has_gen_old {
+                if (*h).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                     return;
                 }
                 (header, index)
@@ -3036,7 +3037,7 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     // Cache flag to avoid TOCTOU between check and barrier (bug133).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h_ptr).generation == 0 && !has_gen_old {
+                    if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -3065,7 +3066,7 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     // Cache flag to avoid TOCTOU between check and barrier (bug133).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
+                    if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (h, index)
@@ -3128,7 +3129,7 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                     }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h_ptr).generation == 0 && !has_gen_old {
+                    if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -3161,7 +3162,7 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
+                    if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (h, index)

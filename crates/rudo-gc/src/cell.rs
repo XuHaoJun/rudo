@@ -316,7 +316,7 @@ impl<T: ?Sized> GcCell<T> {
 unsafe fn record_page_in_remembered_buffer(page: NonNull<PageHeader>) -> bool {
     crate::heap::with_heap(|heap| {
         let header = page.as_ptr();
-        if (*header).generation > 0 {
+        if (*header).generation.load(Ordering::Acquire) > 0 {
             heap.record_in_remembered_buffer(page);
             true
         } else {
@@ -1236,7 +1236,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h_ptr).generation == 0 && !has_gen_old {
+                    if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     NonNull::new_unchecked(h_ptr)
@@ -1267,7 +1267,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
+                    if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     h
@@ -1309,7 +1309,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                         // (bug202, matches unified_write_barrier).
                         let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                         let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                        if (*header).generation == 0 && !has_gen_old {
+                        if (*header).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                             return;
                         }
                         (*header).set_dirty(0);
@@ -1339,7 +1339,9 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                             let gc_box_addr = (header_page_addr + header_size + index * block_size)
                                 as *const GcBox<()>;
                             let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                            if (*header.as_ptr()).generation == 0 && !has_gen_old {
+                            if (*header.as_ptr()).generation.load(Ordering::Acquire) == 0
+                                && !has_gen_old
+                            {
                                 return;
                             }
                             (*header.as_ptr()).set_dirty(index);
