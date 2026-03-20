@@ -185,7 +185,13 @@ impl<'a> GcVisitorConcurrent<'a> {
                 if (*header.as_ptr()).is_marked(idx) {
                     return;
                 }
-                (*header.as_ptr()).set_mark(idx);
+                if !(*header.as_ptr()).set_mark(idx) {
+                    return;
+                }
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    (*header.as_ptr()).clear_mark_atomic(idx);
+                    return;
+                }
             } else {
                 return;
             }
