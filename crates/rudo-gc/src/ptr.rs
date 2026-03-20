@@ -1759,7 +1759,17 @@ impl<T: Trace> Gc<T> {
                     && !(*gc_box_ptr).is_under_construction(),
                 "Gc::downgrade: cannot downgrade a dead, dropping, or under construction Gc"
             );
+            // Get generation BEFORE inc_weak to detect slot reuse (bug356).
+            // If slot is swept and reused between is_allocated check and inc_weak,
+            // generation will differ and we should panic.
+            let pre_generation = (*gc_box_ptr).generation();
             (*gc_box_ptr).inc_weak();
+
+            // Verify generation hasn't changed - if slot was reused, undo inc_weak.
+            if pre_generation != (*gc_box_ptr).generation() {
+                (*gc_box_ptr).dec_weak();
+                panic!("Gc::downgrade: slot was reused between pre-check and inc_weak (generation mismatch)");
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
