@@ -409,7 +409,21 @@ impl<T: Trace + 'static> GcHandle<T> {
                 panic!("GcHandle::downgrade: handle has been unregistered");
             }
             unsafe {
+                // Get generation BEFORE inc_weak to detect slot reuse (bug351).
+                let pre_generation = (*self.ptr.as_ptr()).generation();
+
                 (*self.ptr.as_ptr()).inc_weak();
+
+                // Verify generation hasn't changed - if slot was reused, undo inc_weak.
+                if pre_generation != (*self.ptr.as_ptr()).generation() {
+                    (*self.ptr.as_ptr()).dec_weak();
+                    drop(roots);
+                    return WeakCrossThreadHandle {
+                        weak: GcBoxWeakRef::null(),
+                        origin_tcb: Weak::clone(&self.origin_tcb),
+                        origin_thread: self.origin_thread,
+                    };
+                }
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
                 {
@@ -442,7 +456,21 @@ impl<T: Trace + 'static> GcHandle<T> {
                 panic!("GcHandle::downgrade: handle has been unregistered");
             }
             unsafe {
+                // Get generation BEFORE inc_weak to detect slot reuse (bug351).
+                let pre_generation = (*self.ptr.as_ptr()).generation();
+
                 (*self.ptr.as_ptr()).inc_weak();
+
+                // Verify generation hasn't changed - if slot was reused, undo inc_weak.
+                if pre_generation != (*self.ptr.as_ptr()).generation() {
+                    (*self.ptr.as_ptr()).dec_weak();
+                    drop(orphan);
+                    return WeakCrossThreadHandle {
+                        weak: GcBoxWeakRef::null(),
+                        origin_tcb: Weak::clone(&self.origin_tcb),
+                        origin_thread: self.origin_thread,
+                    };
+                }
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
                 {
