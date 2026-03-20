@@ -836,6 +836,13 @@ unsafe fn scan_page_for_marked_refs(
                         break;
                     }
                     Ok(true) => {
+                        #[allow(clippy::cast_ptr_alignment)]
+                        #[allow(clippy::unnecessary_cast)]
+                        #[allow(clippy::ptr_as_ptr)]
+                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                        // Read generation after successful mark to detect slot reuse (bug336).
+                        let marked_generation = unsafe { (*gc_box_ptr).generation() };
+
                         // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
                         // If slot was swept after try_mark, clear mark and skip.
                         if !(*header).is_allocated(i) {
@@ -848,11 +855,15 @@ unsafe fn scan_page_for_marked_refs(
                             (*header).clear_mark_atomic(i);
                             break;
                         }
+                        // Verify generation hasn't changed (bug336 fix).
+                        // If slot was reallocated between try_mark and push_work,
+                        // generation will differ and we should skip this object.
+                        let current_generation = unsafe { (*gc_box_ptr).generation() };
+                        if current_generation != marked_generation {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
                         refs_found += 1;
-                        #[allow(clippy::cast_ptr_alignment)]
-                        #[allow(clippy::unnecessary_cast)]
-                        #[allow(clippy::ptr_as_ptr)]
-                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
                         if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
                             state.push_work(gc_box);
                         }
@@ -967,6 +978,13 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
             // set_mark returns true if we successfully marked - use it as try_mark
             // Re-check is_allocated after successful mark to fix TOCTOU with lazy sweep.
             if (*header).set_mark(i) {
+                #[allow(clippy::cast_ptr_alignment)]
+                #[allow(clippy::unnecessary_cast)]
+                #[allow(clippy::ptr_as_ptr)]
+                let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                // Read generation after successful mark to detect slot reuse (bug336).
+                let marked_generation = unsafe { (*gc_box_ptr).generation() };
+
                 if !(*header).is_allocated(i) {
                     (*header).clear_mark_atomic(i);
                     continue;
@@ -977,10 +995,14 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                     (*header).clear_mark_atomic(i);
                     continue;
                 }
-                #[allow(clippy::cast_ptr_alignment)]
-                #[allow(clippy::unnecessary_cast)]
-                #[allow(clippy::ptr_as_ptr)]
-                let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                // Verify generation hasn't changed (bug336 fix).
+                // If slot was reallocated between set_mark and push_work,
+                // generation will differ and we should skip this object.
+                let current_generation = unsafe { (*gc_box_ptr).generation() };
+                if current_generation != marked_generation {
+                    (*header).clear_mark_atomic(i);
+                    continue;
+                }
                 if let Some(gc_box) = NonNull::new(gc_box_ptr) {
                     let ptr = IncrementalMarkState::global();
                     ptr.push_work(gc_box);

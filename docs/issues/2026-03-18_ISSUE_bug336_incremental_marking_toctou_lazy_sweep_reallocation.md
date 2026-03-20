@@ -1,7 +1,7 @@
 # [Bug]: Incremental Marking TOCTOU - Lazy Sweep Reallocation Between Two is_allocated Checks
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -82,9 +82,43 @@ state.push_work(gc_box);
 3. 標記時檢查物件是否在 mark phase 開始之後分配
 4. 如果物件「太新」，即使 slot 目前是 allocated 狀態，也跳過標記
 
-另一種可能的修復：
-- 在 `try_mark` / `set_mark` 成功後，立即進行 slot 狀態的快照
-- 如果 slot 在第一次檢查時不是 allocated，則不放行（不論後續是否重新分配）
+**可行的修復方案 - 使用 Generation 檢查 (2026-03-20 分析)：**
+
+GcBox 已經有 `generation` 字段用於檢測 slot 重用（bug347）。當 slot 被 sweep 並重新分配時，`try_pop_from_page` 會調用 `increment_generation()`。
+
+修復方案是在 `scan_page_for_marked_refs` 和 `scan_page_for_unmarked_refs` 中，在 `set_mark`/`try_mark` 成功後，立即保存 generation 值，然後在 `push_work` 之前驗證 generation 沒有改變：
+
+```rust
+// 在 set_mark/try_mark 成功後，立即讀取 generation
+let marked_generation = unsafe { (*gc_box_ptr).generation() };
+
+// 第一次 is_allocated 檢查
+if !(*header).is_allocated(i) {
+    (*header).clear_mark_atomic(i);
+    continue;
+}
+
+// 第二次 is_allocated 檢查
+if !(*header).is_allocated(i) {
+    (*header).clear_mark_atomic(i);
+    continue;
+}
+
+// 在 push_work 之前，驗證 generation
+let current_generation = unsafe { (*gc_box_ptr).generation() };
+if current_generation != marked_generation {
+    // Slot 被重用 - generation 改變了，不要 push
+    (*header).clear_mark_atomic(i);
+    continue;
+}
+```
+
+**為什麼 generation 檢查有效：**
+- 當 slot 被 sweep 並重新分配時，generation 會增加
+- 如果在 `set_mark` 和 `push_work` 之间 slot 被重用，generation 會不同
+- 這能正確區分「原始物件仍在 slot 中」和「新物件被分配到同一 slot」
+
+**注意：** 需要確保 `dealloc` 不會遞增 generation（目前 `dealloc` 只清除 allocated_bitmap，不會遞增 generation，所以這個修復是有效的）。
 
 ---
 
