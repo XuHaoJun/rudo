@@ -1,7 +1,7 @@
 # [Bug]: mark_new_object_black 缺少 generation check 导致错误的 slot 清理
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

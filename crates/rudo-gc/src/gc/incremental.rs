@@ -1047,10 +1047,13 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
                 return false;
             }
             if !(*header.as_ptr()).is_marked(idx) {
+                let marked_generation = (*gc_box).generation();
                 (*header.as_ptr()).set_mark(idx);
-                // Re-check is_allocated to fix TOCTOU with lazy sweep (bug272).
-                // If slot was swept between initial check and set_mark, roll back.
                 if !(*header.as_ptr()).is_allocated(idx) {
+                    let current_generation = (*gc_box).generation();
+                    if current_generation != marked_generation {
+                        return true;
+                    }
                     (*header.as_ptr()).clear_mark_atomic(idx);
                     return false;
                 }
