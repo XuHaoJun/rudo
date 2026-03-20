@@ -989,12 +989,6 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                     (*header).clear_mark_atomic(i);
                     continue;
                 }
-                if !(*header).is_allocated(i) {
-                    // Second check to fix TOCTOU (bug258): slot can be swept between
-                    // first check and push_work. Re-check before pushing.
-                    (*header).clear_mark_atomic(i);
-                    continue;
-                }
                 // Verify generation hasn't changed (bug336 fix).
                 // If slot was reallocated between set_mark and push_work,
                 // generation will differ and we should skip this object.

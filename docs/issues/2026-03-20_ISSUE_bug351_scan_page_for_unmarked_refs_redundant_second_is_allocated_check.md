@@ -1,6 +1,6 @@
 # [Bug]: scan_page_for_unmarked_refs redundant second is_allocated check (bug258 fix incorrectly applied)
 
-**Status:** Fixed
+**Status:** Open
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -163,37 +163,6 @@ if (*header).set_mark(i) {
 
 **Date:** 2026-03-20
 
-**Fix:** Removed the redundant second `is_allocated` check (lines 976-981).
+**Status:** Issue created but fix NOT applied - code still contains the bug!
 
-The second check was immediately after the first with no intervening operations, making it dead code. The first check at line 972 handles the TOCTOU between `set_mark` and `is_allocated`. The `gc_box_ptr` cast and `if let Some` block don't modify the slot state, so no additional check is needed before `push_work`.
-
-```rust
-// Before:
-if (*header).set_mark(i) {
-    if !(*header).is_allocated(i) {
-        (*header).clear_mark_atomic(i);
-        continue;
-    }
-    // Second check - immediately after first, no protection
-    if !(*header).is_allocated(i) {
-        (*header).clear_mark_atomic(i);
-        continue;
-    }
-    let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-    if let Some(gc_box) = NonNull::new(gc_box_ptr) {
-        ptr.push_work(gc_box);
-    }
-}
-
-// After:
-if (*header).set_mark(i) {
-    if !(*header).is_allocated(i) {
-        (*header).clear_mark_atomic(i);
-        continue;
-    }
-    let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-    if let Some(gc_box) = NonNull::new(gc_box_ptr) {
-        ptr.push_work(gc_box);
-    }
-}
-```
+The issue was marked Fixed but the actual code was never modified. The redundant second `is_allocated` check still exists at lines 992-997.
