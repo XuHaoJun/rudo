@@ -598,7 +598,18 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
                         "GcHandle::clone: object slot was swept"
                     );
                 }
+                // Get generation BEFORE inc_ref to detect slot reuse.
+                // If slot is swept and reused between check and inc_ref,
+                // the generation will be different after inc_ref.
+                let pre_generation = (*self.ptr.as_ptr()).generation();
+
                 (*self.ptr.as_ptr()).inc_ref();
+
+                // Verify generation hasn't changed - if slot was reused, undo inc_ref.
+                if pre_generation != (*self.ptr.as_ptr()).generation() {
+                    crate::ptr::GcBox::undo_inc_ref(self.ptr.as_ptr());
+                    panic!("GcHandle::clone: slot was reused during clone (generation mismatch)");
+                }
             }
             let new_id = roots.allocate_id();
             roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());

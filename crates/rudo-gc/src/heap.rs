@@ -296,7 +296,18 @@ pub fn clone_orphan_root_with_inc_ref(
                 "clone_orphan_root_with_inc_ref: object slot was swept"
             );
         }
+        // Get generation BEFORE inc_ref to detect slot reuse.
+        // If slot is swept and reused between check and inc_ref,
+        // the generation will be different after inc_ref.
+        let pre_generation = (*ptr.as_ptr()).generation();
+
         (*ptr.as_ptr()).inc_ref();
+
+        // Verify generation hasn't changed - if slot was reused, undo inc_ref.
+        if pre_generation != (*ptr.as_ptr()).generation() {
+            GcBox::undo_inc_ref(ptr.as_ptr());
+            panic!("clone_orphan_root_with_inc_ref: slot was reused during clone (generation mismatch)");
+        }
     }
     let new_id = allocate_orphan_handle_id();
     orphan.insert((thread_id, new_id), ptr.as_ptr() as usize);
