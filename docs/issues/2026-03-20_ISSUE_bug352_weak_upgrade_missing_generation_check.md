@@ -1,6 +1,6 @@
 # [Bug]: Weak::upgrade Missing Generation Check - Slot Reuse TOCTOU
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -140,3 +140,20 @@ If an attacker can control GC timing (e.g., via allocation patterns), they could
 2. Prevent its collection even when all real refs are dropped
 3. Eventually lead to UAF when combined with other bugs
 The generation check is the safety net that makes this attack vector impractical.
+
+---
+
+## ✅ 修復記錄 (Fix Record)
+
+- **Date:** 2026-03-20
+- **Fix:** Added generation check to `Weak::upgrade()` and `Weak::try_upgrade()` in `ptr.rs`.
+
+**Changes in `ptr.rs`:**
+1. `Weak::upgrade()` (lines 2248-2310): Added `let pre_generation = gc_box.generation();` before the CAS loop. After successful CAS, added check `if pre_generation != gc_box.generation()` with `undo_inc_ref` and return `None` if generation changed.
+
+2. `Weak::try_upgrade()` (lines 2358-2416): Same fix - added `let pre_generation = gc_box.generation();` before the CAS loop with generation verification after successful CAS.
+
+**Verification:**
+- Build: ✅ `cargo build --workspace` succeeds
+- Clippy: ✅ No warnings
+- Tests: ✅ All tests pass

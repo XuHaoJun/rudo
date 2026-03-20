@@ -2245,6 +2245,8 @@ impl<T: Trace> Weak<T> {
                  passed to Gc::new_cyclic_weak()."
             );
 
+            let pre_generation = gc_box.generation();
+
             loop {
                 if gc_box.has_dead_flag() {
                     return None;
@@ -2273,6 +2275,12 @@ impl<T: Trace> Weak<T> {
                     )
                     .is_ok()
                 {
+                    // Verify generation hasn't changed - if slot was reused, return None.
+                    // This prevents inc_ref from operating on the wrong object's ref count.
+                    if pre_generation != gc_box.generation() {
+                        GcBox::undo_inc_ref(ptr.as_ptr());
+                        return None;
+                    }
                     // Post-CAS safety check: `dec_ref` marks dropping (sets dropping_state=1)
                     // and calls drop_fn_for (which sets DEAD_FLAG then drop_in_place) *without*
                     // decrementing ref_count, so our CAS can succeed while the value is freed.
@@ -2355,6 +2363,8 @@ impl<T: Trace> Weak<T> {
                 return None;
             }
 
+            let pre_generation = gc_box.generation();
+
             loop {
                 if gc_box.has_dead_flag() {
                     return None;
@@ -2379,6 +2389,12 @@ impl<T: Trace> Weak<T> {
                     )
                     .is_ok()
                 {
+                    // Verify generation hasn't changed - if slot was reused, return None.
+                    // This prevents inc_ref from operating on the wrong object's ref count.
+                    if pre_generation != gc_box.generation() {
+                        GcBox::undo_inc_ref(ptr.as_ptr());
+                        return None;
+                    }
                     // Post-CAS safety check: same as Weak::upgrade — re-verify after owning a count
                     if gc_box.dropping_state() != 0
                         || gc_box.has_dead_flag()
