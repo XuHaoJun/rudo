@@ -130,6 +130,40 @@ if gc_box.is_under_construction() {
 
 ---
 
+## Verification (2026-03-20)
+
+**Verifier:** Bug Hunt Agent
+
+**Verification Result:** Bug **CONFIRMED STILL PRESENT**
+
+**Code Analysis:**
+
+The bug exists at `gc/incremental.rs:1018-1027`:
+
+```rust
+if !(*header.as_ptr()).is_allocated(idx) {  // <-- Line 1018: CHECK
+    return false;
+}
+// Skip if object is under construction (e.g. during Gc::new_cyclic_weak).
+// Avoids incorrectly marking partially-initialized objects (bug238).
+#[allow(clippy::cast_ptr_alignment)]
+let gc_box = &*ptr.cast::<GcBox<()>>();  // <-- Line 1024: USE - UAF risk!
+if gc_box.is_under_construction() {
+    return false;
+}
+```
+
+**Race Condition Timeline:**
+1. Thread A: checks `is_allocated(idx)` at line 1018 → true
+2. Thread B: lazy sweep clears allocated bit, reallocates slot to new object
+3. Thread A: dereferences `ptr` at line 1024 → **reads from potentially invalid memory**
+
+**Note:** Unlike `mark_object_black` which uses `try_mark` with re-checks, `mark_new_object_black` uses simple `set_mark` without the same protection pattern.
+
+**Fix Required:** Add `is_allocated` re-check before dereferencing at line 1024, or move the `is_under_construction` check before the `is_allocated` check.
+
+---
+
 ## 🗣️ 內部討論紀錄 (Internal Discussion Record)
 
 **R. Kent Dybvig (GC 架構觀點):**

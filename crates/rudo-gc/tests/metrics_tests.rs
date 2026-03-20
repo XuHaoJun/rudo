@@ -408,9 +408,12 @@ fn test_global_metrics_collection_type_breakdown() {
     }
 
     // Allocate enough to trigger major collection
+    // Disable suspicious sweep detection since Vec<Gc<T>> triggers it
+    set_suspicious_sweep_detection(false);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let _large: Vec<Gc<Vec<u8>>> = (0..5).map(|i| Gc::new(vec![i as u8; 1024])).collect();
     rudo_gc::collect_full();
+    set_suspicious_sweep_detection(true);
 
     let metrics = global_metrics();
 

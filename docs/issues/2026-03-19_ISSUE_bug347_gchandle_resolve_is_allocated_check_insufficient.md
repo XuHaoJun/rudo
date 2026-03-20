@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::resolve_impl is_allocated check insufficient - does not prevent slot reuse TOCTOU
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -109,3 +109,26 @@ Exploit path: (1) Create handle to A, (2) A becomes unreachable, (3) Lazy sweep 
 
 - bug345: Original issue that added `is_allocated` check (but fix was insufficient)
 - bug83: GcHandle resolve/clone TOCTOU race (different issue - handle unregistered)
+
+---
+
+## Fix Applied (2026-03-20)
+
+**Fix:** Added per-object generation tracking to GcBox to detect slot reuse.
+
+**Changes:**
+1. Added `generation: AtomicU32` field to `GcBox` struct (ptr.rs)
+2. Added `generation()` and `increment_generation()` methods to `GcBox`
+3. Initialized `generation: 1` in all GcBox allocation paths
+4. Increment generation on slot reuse in `try_pop_from_page` (heap.rs)
+5. Added generation check before/after `inc_ref()` in `resolve_impl` (cross_thread.rs:234-242)
+6. Added generation check before/after `inc_ref()` in `try_resolve_impl` (cross_thread.rs:354-361)
+7. Updated test_large_struct_interior_pointer to account for new header size (48 bytes)
+
+**Behavior:**
+- When slot is swept and reused, generation increments
+- During resolve, if generation changed between pre-check and inc_ref, panic (resolve_impl) or return None (try_resolve_impl)
+- This prevents inc_ref from operating on wrong object's ref count
+
+**Tests:** All cross_thread_handle tests pass (27 tests)
+
