@@ -156,6 +156,8 @@ impl<T: ?Sized> GcCell<T> {
     where
         T: GcCapture,
     {
+        self.validate_thread_affinity("borrow_mut");
+
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
         // Cache barrier states once to avoid TOCTOU between check and use.
