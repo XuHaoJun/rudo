@@ -1111,11 +1111,20 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
                 return None;
             }
             Ok(true) => {
+                // Read generation after successful mark to detect slot reuse (bug355 fix).
+                let marked_generation = (*gc_box).generation();
                 // We just marked. Re-check is_allocated to fix TOCTOU with lazy sweep.
                 if (*h).is_allocated(idx) {
                     return Some(idx);
                 }
-                // Slot was swept between our check and try_mark. Roll back.
+                // Slot was swept between our check and try_mark.
+                // Verify generation hasn't changed to distinguish swept from swept+reused.
+                let current_generation = (*gc_box).generation();
+                if current_generation != marked_generation {
+                    // Slot was reused - the mark now belongs to the new object, don't clear.
+                    return None;
+                }
+                // Slot was swept but not reused - safe to clear mark.
                 (*h).clear_mark_atomic(idx);
                 return None;
             }
