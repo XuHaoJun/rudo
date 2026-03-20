@@ -971,6 +971,12 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                     (*header).clear_mark_atomic(i);
                     continue;
                 }
+                if !(*header).is_allocated(i) {
+                    // Second check to fix TOCTOU (bug258): slot can be swept between
+                    // first check and push_work. Re-check before pushing.
+                    (*header).clear_mark_atomic(i);
+                    continue;
+                }
                 #[allow(clippy::cast_ptr_alignment)]
                 #[allow(clippy::unnecessary_cast)]
                 #[allow(clippy::ptr_as_ptr)]
