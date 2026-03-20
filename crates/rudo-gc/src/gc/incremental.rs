@@ -967,14 +967,6 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
             // set_mark returns true if we successfully marked - use it as try_mark
             // Re-check is_allocated after successful mark to fix TOCTOU with lazy sweep.
             if (*header).set_mark(i) {
-                // Re-check is_allocated to fix TOCTOU with lazy sweep.
-                // If slot was swept after set_mark, clear mark and skip.
-                if !(*header).is_allocated(i) {
-                    (*header).clear_mark_atomic(i);
-                    continue;
-                }
-                // Second check to fix TOCTOU (bug258): slot can be swept between
-                // first check and push_work. Re-check before pushing.
                 if !(*header).is_allocated(i) {
                     (*header).clear_mark_atomic(i);
                     continue;
