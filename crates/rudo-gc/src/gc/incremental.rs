@@ -991,6 +991,13 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                     (*header).clear_mark_atomic(i);
                     continue;
                 }
+                // Second is_allocated re-check to fix TOCTOU with lazy sweep (bug258).
+                // If slot was swept after first is_allocated check but before push_work,
+                // clear mark and skip to avoid pushing a pointer to a swept slot.
+                if !(*header).is_allocated(i) {
+                    (*header).clear_mark_atomic(i);
+                    continue;
+                }
                 if let Some(gc_box) = NonNull::new(gc_box_ptr) {
                     let ptr = IncrementalMarkState::global();
                     ptr.push_work(gc_box);
