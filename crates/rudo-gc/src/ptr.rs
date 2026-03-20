@@ -767,12 +767,25 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 };
             }
 
+            // Get generation BEFORE inc_weak to detect slot reuse (bug354).
+            let pre_generation = (*ptr.as_ptr()).generation();
+
             (*ptr.as_ptr()).inc_weak();
 
+            // Verify generation hasn't changed - if slot was reused, undo inc_weak.
+            if pre_generation != (*ptr.as_ptr()).generation() {
+                (*ptr.as_ptr()).dec_weak();
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
+
+            // Check is_allocated BEFORE inc_weak to prevent corrupting another
+            // object's weak_count if this slot has been swept (bug354).
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    // Don't call dec_weak - slot may be reused (bug133)
+                    (*ptr.as_ptr()).dec_weak();
                     return Self {
                         ptr: AtomicNullable::null(),
                     };

@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::clone inc_weak called before is_allocated check
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -142,3 +142,18 @@ While this doesn't cause immediate UB (the function eventually returns null), it
 
 **Geohot (Exploit 觀點):**
 The TOCTOU window is relatively small (between validity checks and inc_weak), but in a concurrent GC environment with stress testing, this window can be exploited. Corrupting weak_count could potentially be leveraged for use-after-free if an object is prematurely collected while a legitimate weak reference exists.
+
+---
+
+## Resolution (2026-03-20)
+
+**Outcome:** Fixed.
+
+Applied fix in `ptr.rs:729-798` following the pattern from `GcHandle::downgrade()`:
+
+1. Get `pre_generation` before `inc_weak()` to detect slot reuse
+2. Call `inc_weak()`
+3. Verify generation hasn't changed - if changed, undo with `dec_weak()` and return null
+4. Check `is_allocated` - if slot was swept, undo with `dec_weak()` and return null
+
+This prevents corrupting another object's weak_count when the slot is swept and reused between validity checks and `inc_weak()`.
