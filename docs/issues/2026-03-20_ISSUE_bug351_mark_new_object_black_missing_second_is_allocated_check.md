@@ -1,7 +1,7 @@
 # [Bug]: mark_new_object_black TOCTOU - missing is_allocated check before gc_box dereference
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Resolved
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

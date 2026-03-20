@@ -1018,6 +1018,12 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
             if !(*header.as_ptr()).is_allocated(idx) {
                 return false;
             }
+            // Re-check is_allocated before using gc_box to fix TOCTOU with lazy sweep (bug351).
+            // If slot was swept after initial check but before we dereference,
+            // return false to avoid UAF.
+            if !(*header.as_ptr()).is_allocated(idx) {
+                return false;
+            }
             // Skip if object is under construction (e.g. during Gc::new_cyclic_weak).
             // Avoids incorrectly marking partially-initialized objects (bug238).
             #[allow(clippy::cast_ptr_alignment)]
