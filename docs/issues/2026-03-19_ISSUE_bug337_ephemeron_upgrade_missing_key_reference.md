@@ -1,7 +1,7 @@
 # [Bug]: Ephemeron upgrade 缺少 key_gc 引用保持，導致 Value 可能被錯誤回收
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Reproduced
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -146,3 +146,16 @@ Ephemeron語義要求Value只在Key存活時才能訪問。當前實現存在TOC
 
 但實際利用難度較高，需要精確控制GC時序。
 
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — misunderstanding of Rust drop order.
+
+The current `Ephemeron::upgrade()` implementation is correct. In Rust, the `if let Some(key_gc) = self.key.upgrade()` binding keeps `key_gc` alive until the end of its enclosing block (the closing `}`). `Gc::try_clone(&self.value)` is called inside that block, so the key is held alive during the entire clone operation.
+
+After `Gc::try_clone` succeeds, the returned `Option<Gc<V>>` holds an independent strong reference to the value (via `try_inc_ref_if_nonzero`). Even if `key_gc` is subsequently dropped (and the key eventually collected), the returned `Gc<V>` cannot be collected — it has its own strong ref.
+
+The "具體場景" step 4 ("如果Value只被Key引用，Value也被回收") is incorrect: the returned clone already holds a strong ref to the value before `key_gc` is dropped. The suggested fix is functionally identical to the current code.
+
+All 26 ephemeron tests pass with the current implementation (`cargo test -p rudo-gc --test ephemeron`).

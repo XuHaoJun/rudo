@@ -1,6 +1,6 @@
 # [Bug]: GcMutexGuard 結構體未緩存 barrier 狀態，Drop 時重新讀取導致 TOCTOU
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -112,3 +112,15 @@ fn drop(&mut self) {
 
 **Geohot (Exploit 觀點):**
 攻擊者可以透過觸發 GC 請求來控制 timing，精確地在第二次檢查後啟動 incremental marking，實現 memory corruption。
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed.
+
+`GcMutexGuard` in `sync.rs` (lines 710–715) already has `incremental_active` and
+`generational_active` fields. Both `lock()` (line 594–605) and `try_lock()` (line 635–647)
+cache the barrier state after acquiring the lock and store it in the guard struct. The `Drop`
+implementation (lines 741–763) reads `self.incremental_active` and `self.generational_active`
+— the cached values — rather than re-querying global state. All sync tests pass (47/47).

@@ -1,7 +1,7 @@
 # [Bug]: WeakCrossThreadHandle::try_upgrade panics when origin thread terminates
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -129,3 +129,13 @@ pub fn try_upgrade(&self) -> Option<Gc<T>> {
 
 **Geohot (Exploit 觀點):**
 此 bug 不涉及安全問題，只是 API 使用體驗問題。
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Fixed and verified.
+
+Changed `handles/cross_thread.rs` `WeakCrossThreadHandle::try_upgrade()` to use `self.origin_tcb.upgrade()?` instead of `panic!()` when the origin TCB is gone. The thread-affinity `assert_eq!` for the live-but-wrong-thread case is retained (soundness: `T` may be `!Send`). Doc comment updated to reflect that a terminated origin thread now returns `None`.
+
+Added `test_weak_try_upgrade_returns_none_after_origin_terminated` to `tests/cross_thread_handle.rs`. All 29 tests in that suite pass.

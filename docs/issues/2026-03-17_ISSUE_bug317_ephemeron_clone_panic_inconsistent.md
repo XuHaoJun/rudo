@@ -1,7 +1,7 @@
 # [Bug]: Ephemeron::clone 在 value 死亡/.Dropping/建構中時 panic，與 Weak::clone 行為不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -162,3 +162,15 @@ impl<K: Trace + 'static, V: Trace + 'static> Clone for Ephemeron<K, V> {
 
 - [ ] 已修復
 - [x] 未修復
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — panic path is unreachable.
+
+`Ephemeron<K, V>` holds `value: Gc<V>`, a **strong** reference that keeps the value's ref count ≥ 1 for the lifetime of the Ephemeron. `Gc::clone()` only panics when the object has `has_dead_flag() || dropping_state() != 0 || is_under_construction()`. None of these conditions can hold while the Ephemeron is alive because:
+- Dead flag / dropping state require ref count reaching 0, which can't happen while the Ephemeron holds the strong reference.
+- Under-construction is cleared before any `Gc<V>` is returned to the user.
+
+Added `repro_bug317_clone_after_key_drops` test to `tests/ephemeron.rs` which confirms cloning an Ephemeron after its key dies does not panic. Test passes with the current implementation.

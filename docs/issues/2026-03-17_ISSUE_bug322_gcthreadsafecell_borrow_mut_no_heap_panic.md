@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::borrow_mut panic when called from thread without GC heap
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Reproduced
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -93,3 +93,19 @@ This is a panic (not UB), but it's a usability issue - the API should either wor
 
 **Geohot (Exploit 觀點):**
 Not directly exploitable as a security issue, but could be used for denial of service in multi-threaded applications where worker threads don't have GC heaps initialized.
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — the described panic cannot occur in the current codebase.
+
+**Analysis:**
+
+1. **Panic message does not exist.** The string `"thread local heap not initialized"` (or any equivalent) is absent from the entire codebase. The issue's premise is incorrect.
+
+2. **`with_heap` does not panic on uninitialized threads.** `with_heap` calls `HEAP.with(...)` where `HEAP` is a lazily-initialized `thread_local!`. On first access from any spawned thread, `ThreadLocalHeap::new()` runs automatically, registering the thread and creating an empty heap (`min_addr = usize::MAX`, `max_addr = 0`). No panic occurs.
+
+3. **`unified_write_barrier` returns early for non-GC threads.** At `heap.rs:3032`, the first check is `if ptr_addr < heap.min_addr || ptr_addr >= heap.max_addr { return; }`. For threads with an unallocated heap, `min_addr = usize::MAX`, so `ptr_addr < usize::MAX` is true for any valid pointer — the barrier exits immediately without doing anything. This is correct and safe behavior.
+
+**Verified by:** Static analysis of `heap.rs:3025–3034` (`unified_write_barrier`), `heap.rs:3434–3439` (`with_heap`), `heap.rs:3375–3409` (`ThreadLocalHeap::new`), and `cell.rs:1059–1189` (`GcThreadSafeCell::borrow_mut` / `trigger_write_barrier_with_incremental`). Existing sync tests (47 passing) confirm no regressions.

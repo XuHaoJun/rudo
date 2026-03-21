@@ -1,7 +1,7 @@
 # [Bug]: WeakCrossThreadHandle::is_valid() Missing is_allocated Check - Inconsistent with upgrade()
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Reproduced
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -203,3 +203,22 @@ pub fn is_valid(&self) -> bool {
 - bug313: GcHandle::is_valid() TOCTOU race
 
 當前 bug 是關於 `is_valid()` 缺少 `is_allocated` 檢查，導致與 `upgrade()` 行為不一致。
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — issue premise is incorrect in the current codebase.
+
+The issue claimed `GcBoxWeakRef::is_live()` does not check `is_allocated`. However, the current implementation at `ptr.rs:860–865` **already includes** the `is_allocated` check:
+
+```rust
+if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+    let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+    if !(*header.as_ptr()).is_allocated(idx) {
+        return false;
+    }
+}
+```
+
+`WeakCrossThreadHandle::is_valid()` calls `self.weak.is_live()`, which performs all necessary checks including `is_allocated`. The inconsistency described in the issue does not exist. All 28 cross-thread handle tests pass.

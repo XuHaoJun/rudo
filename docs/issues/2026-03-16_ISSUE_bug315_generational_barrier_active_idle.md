@@ -1,6 +1,6 @@
 # [Bug]: is_generational_barrier_active() returns true during idle state causing unnecessary overhead
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -147,3 +147,15 @@ pub fn is_generational_barrier_active() -> bool {
 - bug12: 函數檢查 `is_incremental_marking_active()` 導致在非 incremental 模式下返回 false
 - bug98: 函數檢查 `state.enabled` 導致在禁用 incremental marking 時返回 false
 - 這兩個 bug 的修復導致函數現在總是返回 true (除 fallback 外)，這過於廣泛
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — current behavior is correct by design.
+
+The generational barrier **must** run during Idle to maintain the dirty-page remembered set for minor collections. Minor GC is not gated on an incremental marking phase; it needs OLD→YOUNG pointer tracking to be continuous. `gc_cell_validate_and_barrier` already has a fast early-exit for young-gen objects with no `gen_old_flag` (heap.rs:2928), so the overhead during Idle is minimal.
+
+Disabling the barrier during `Idle` (as the suggested fix proposes) would cause minor collections to miss OLD→YOUNG references written between GC cycles, silently collecting live young objects — a soundness regression.
+
+The existing code comment documents this intent: "Independent of incremental marking: minor collections always need the barrier. Only disabled during STW fallback."

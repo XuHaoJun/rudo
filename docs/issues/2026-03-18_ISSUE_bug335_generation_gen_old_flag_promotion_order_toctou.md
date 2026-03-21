@@ -1,7 +1,7 @@
 # [Bug]: PageHeader generation 和 gen_old_flag 更新順序導致 TOCTOU 漏洞
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Reproduced
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -121,3 +121,32 @@ if (*h).generation == 0 && !has_gen_old {
 - 製造 use-after-free 場景
 
 但實際利用難度較高，需要精確控制時序。
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — no actionable bug in current code.
+
+**Analysis:**
+
+The issue's primary concern was that `PageHeader.generation` was a non-atomic plain `u8`,
+causing data races during concurrent promotion + barrier execution. In the current codebase,
+`generation` is declared as `AtomicU8` (`heap.rs:989`) with `Ordering::Release` stores
+(`gc.rs:1712`, `gc.rs:2362`) and `Ordering::Acquire` loads in every barrier call site
+(`heap.rs:2832`, `2861`, `2928`, `3001`, `3058`, `3087`). Similarly, `set_gen_old()` uses
+`Release` and `has_gen_old_flag()` uses `Acquire` (`ptr.rs:483–492`).
+
+The remaining TOCTOU window (generation=1 stored, `set_gen_old()` not yet called) does **not**
+produce incorrect barrier behavior. The early-exit condition is:
+
+```rust
+if generation.load(Acquire) == 0 && !has_gen_old { return; }
+```
+
+During that window the barrier sees `generation == 1`, so the `== 0` arm is false and the
+barrier fires correctly — the issue itself acknowledges this: "由於 generation != 0，barrier
+會記錄 dirty page (這是正確的)". The secondary concern ("若 generation 因 Bug122 尚未同步")
+referred to the non-atomic access, which is now fixed.
+
+No code change required.

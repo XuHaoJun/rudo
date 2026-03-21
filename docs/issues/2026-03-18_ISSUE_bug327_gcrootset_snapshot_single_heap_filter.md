@@ -1,6 +1,6 @@
 # [Bug]: GcRootSet::snapshot 單一 heap 過濾導致跨執行緒 roots 丟失
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -137,3 +137,21 @@ pub fn snapshot(&self) -> Vec<usize> {
 
 **Geohot (Exploit 觀點):**
 攻擊者可以刻意建立多執行緒場景，利用這個 bug 觸發 UAF，然後通過越界寫入或類似技術利用被錯誤回收的記憶體進行 exploit。這是一個可靠的記憶體破壞向量。
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — misidentified bug.
+
+The `snapshot(heap)` per-heap filtering does not cause roots to be missed. Code inspection of all GC paths confirms:
+
+1. **Multi-threaded path** (`perform_multi_threaded_collect` / `perform_multi_threaded_collect_full`): `mark_major_roots_multi` is called in a loop over **all** active TCBs (via `get_all_thread_control_blocks()`). Each iteration calls `GcRootSet::global().snapshot(heap)` for that heap — so every tokio root belonging to every active heap is correctly covered.
+
+2. **Single-threaded path** (`active_count > 1`): Only the current thread's heap is marked **and** swept. Tokio roots from other active heaps are not marked, but those heaps are not swept either — no object is incorrectly reclaimed.
+
+3. **Orphan fallback**: `find_gc_box_from_ptr` (heap.rs) already falls back to `find_gc_box_from_orphan` when the address is outside the current heap's range. This correctly handles roots pointing to terminated threads' orphaned pages.
+
+The caller-side double-filtering (once inside `snapshot`, once again by the caller loop) is redundant but not harmful.
+
+No code change required.

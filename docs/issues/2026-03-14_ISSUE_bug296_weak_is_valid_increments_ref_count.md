@@ -1,6 +1,6 @@
 # [Bug]: WeakCrossThreadHandle::is_valid() 錯誤地遞增 ref_count，與 GcHandle::is_valid() 行為不一致
 
-**Status:** Resolved
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -176,4 +176,4 @@ pub fn is_valid(&self) -> bool {
 - `GcHandle::is_valid()` (cross_thread.rs:100-114): 不遞增 ref_count，只檢查 root list
 - `WeakCrossThreadHandle::is_valid()` (cross_thread.rs:552-557): 遞增 ref_count（透過 upgrade）
 
-**Status: Open** - 需要修復。
+**Status: Fixed** - Bug fixed by using `is_live()` instead of `upgrade().is_some()`. Verified with test `test_weak_is_valid_does_not_increment_ref_count`.

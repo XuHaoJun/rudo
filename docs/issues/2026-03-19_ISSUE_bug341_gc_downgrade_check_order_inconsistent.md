@@ -1,7 +1,7 @@
 # [Bug]: Gc::downgrade 檢查順序不一致 - is_allocated 在 flag checks 之前
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -171,3 +171,17 @@ pub fn downgrade(gc: &Self) -> Weak<T> {
 **Geohot (Exploit 攻擊觀點):**
 在並發環境中，如果攻擊者能夠精確控制時序，可能利用這個 TOCTOU 來觸發不一致的行為。
 
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Fixed.
+
+Reordered checks in `Gc::downgrade()` (`ptr.rs:1746-1781`) to match `Gc::clone()`:
+1. Flag checks (`has_dead_flag`, `dropping_state`, `is_under_construction`) — first
+2. `is_allocated` check — second
+3. `inc_weak` with generation guard (bug356)
+4. Post-`inc_weak` `is_allocated` check
+
+The two separate `unsafe` blocks were merged into one. All tests pass.

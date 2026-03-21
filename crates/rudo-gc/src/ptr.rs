@@ -329,7 +329,9 @@ impl<T: Trace + ?Sized> GcBox<T> {
                     // our pre-CAS checks and the CAS success.
                     let weak_count_raw = self.weak_count.load(Ordering::Acquire);
                     let flags = weak_count_raw & Self::FLAGS_MASK;
-                    if (flags & Self::DEAD_FLAG) != 0 || self.dropping_state() != 0 {
+                    if (flags & (Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG)) != 0
+                        || self.dropping_state() != 0
+                    {
                         // Rollback: undo our increment. Use fetch_sub directly because
                         // dec_ref returns early without decrementing when DEAD_FLAG is set.
                         self.ref_count.fetch_sub(1, Ordering::Release);
@@ -1744,6 +1746,13 @@ impl<T: Trace> Gc<T> {
         assert!(!ptr.is_null(), "Gc::downgrade: cannot downgrade a dead Gc");
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
+            // Check flags before is_allocated - match Gc::clone order (bug341).
+            assert!(
+                !(*gc_box_ptr).has_dead_flag()
+                    && (*gc_box_ptr).dropping_state() == 0
+                    && !(*gc_box_ptr).is_under_construction(),
+                "Gc::downgrade: cannot downgrade a dead, dropping, or under construction Gc"
+            );
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
                 assert!(
@@ -1751,14 +1760,6 @@ impl<T: Trace> Gc<T> {
                     "Gc::downgrade: slot has been swept and reused"
                 );
             }
-        }
-        unsafe {
-            assert!(
-                !(*gc_box_ptr).has_dead_flag()
-                    && (*gc_box_ptr).dropping_state() == 0
-                    && !(*gc_box_ptr).is_under_construction(),
-                "Gc::downgrade: cannot downgrade a dead, dropping, or under construction Gc"
-            );
             // Get generation BEFORE inc_weak to detect slot reuse (bug356).
             // If slot is swept and reused between is_allocated check and inc_weak,
             // generation will differ and we should panic.

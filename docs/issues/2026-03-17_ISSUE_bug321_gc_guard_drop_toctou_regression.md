@@ -1,6 +1,6 @@
 # [Bug]: Write Guard Drop TOCTOU - Barrier States Still Re-checked (Regression of bug316)
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -121,3 +121,15 @@ fn drop(&mut self) {
 
 **Geohot (Exploit 觀點):**
 攻擊者可以透過觸發 GC 請求來控制 timing，精確地在第二次檢查後啟動 incremental marking，實現 memory corruption。
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed.
+
+Both `GcThreadSafeRefMut` (`cell.rs:1386-1391`) and `GcRwLockWriteGuard` (`sync.rs:433-438`) already store
+`incremental_active` and `generational_active` as struct fields. Their `Drop` implementations at
+`cell.rs:1407-1432` and `sync.rs:464-489` read `self.incremental_active` / `self.generational_active`
+(the values cached at guard-acquisition time) — they do not call `is_incremental_marking_active()` or
+`is_generational_barrier_active()` at drop time. No TOCTOU window exists in the current code.
+
+All lib unit tests pass (`cargo test -p rudo-gc --lib -- --test-threads=1`): 94 passed, 0 failed.

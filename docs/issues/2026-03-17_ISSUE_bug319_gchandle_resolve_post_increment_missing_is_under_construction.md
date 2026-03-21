@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::resolve/try_resolve Post-Increment Check 缺少 is_under_construction 檢查
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -131,3 +131,11 @@ if gc_box.dropping_state() != 0
 **Geohot (Exploit 觀點):**
 - 由於物件在建構中時不太可能有 handle，此問題的实际攻击面很小
 - 但如果未來 GC 的内部 invariants 改变，这可能导致问题
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Fixed.
+
+Added `|| gc_box.is_under_construction()` to the post-increment safety checks in both `resolve_impl()` (line 257) and `try_resolve_impl()` (line 374) in `crates/rudo-gc/src/handles/cross_thread.rs`. The checks now match the full three-condition pattern used in `Weak::try_upgrade()`. All 28 cross-thread handle tests pass.

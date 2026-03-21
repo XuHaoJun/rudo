@@ -1,7 +1,7 @@
 # [Bug]: Gc::downgrade / GcBox::as_weak / Gc::cross_thread_handle Missing Post-Increment Dead/Dropping Check (TOCTOU)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Reproduced
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -191,3 +191,19 @@ if (*ptr.as_ptr()).dropping_state() != 0
 - 嘗試精確時序控制來觸發 race condition
 - 導致內存洩漏（通過錯誤的 weak_count）
 - 在極端情況下可能導致 double-free 或 use-after-free（如果配合其他漏洞）
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — race condition cannot occur by invariant.
+
+All three functions (`Gc::downgrade`, `Gc::as_weak`, `Gc::cross_thread_handle`) are called on `&self` where `self` is a live `Gc<T>`. This means:
+
+1. The caller's `Gc<T>` keeps `ref_count >= 1` for the duration of the call.
+2. `dropping_state` is only set by `dec_ref` via `try_mark_dropping()`, which only fires when `ref_count` transitions 1→0. This cannot happen while the caller holds the strong reference.
+3. `DEAD_FLAG` is set either by `drop_fn_for` (triggered from `dec_ref` at ref_count=0) or by the GC sweep in `gc/gc.rs`. The GC sweep only marks **unmarked** (unreachable) objects — any object with a live strong `Gc<T>` is reachable and will be marked, so the sweep never touches it.
+
+Therefore, the window between pre-check and `inc_weak`/`inc_ref` cannot be interrupted by a concurrent state transition to dead/dropping. The scenario described in the issue is structurally impossible.
+
+No code changes required.

@@ -3,20 +3,20 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 324
-- **Open**: 29
-- **Invalid**: 27
-- **Resolved**: 2
+- **Fixed**: 334
+- **Open**: 11
+- **Invalid**: 38
+- **Resolved**: 1
 - **Unknown**: 2
 - **Verified**: 23
 
 ### By Tags
-- **Verified**: 355
+- **Verified**: 360
 - **Not Verified**: 22
-- **Not Reproduced**: 11
+- **Not Reproduced**: 18
 - **Fixed**: 1
 - **Unknown**: 2
-- **Unverified**: 16
+- **Unverified**: 6
 
 ## All Issues
 
@@ -356,7 +356,7 @@
 | [2026-03-14_ISSUE_bug293_gcmutex_try_lock_barrier_state_caching.md](./2026-03-14_ISSUE_bug293_gcmutex_try_lock_barrier_state_caching.md) | GcMutex::try_lock caches barrier states AFTER lock acquisition, inconsistent with lock() | Fixed | Verified |
 | [2026-03-14_ISSUE_bug294_worker_mark_loop_toctou_is_allocated_set_mark.md](./2026-03-14_ISSUE_bug294_worker_mark_loop_toctou_is_allocated_set_mark.md) | worker_mark_loop TOCTOU - is_allocated check and set_mark have race window with lazy sweep | Fixed | Verified |
 | [2026-03-14_ISSUE_bug295_gc_gc_multiple_mark_functions_toctou.md](./2026-03-14_ISSUE_bug295_gc_gc_multiple_mark_functions_toctou.md) | Multiple mark functions in gc/gc.rs have TOCTOU between is_allocated check and set_mark | Fixed | Verified |
-| [2026-03-14_ISSUE_bug296_weak_is_valid_increments_ref_count.md](./2026-03-14_ISSUE_bug296_weak_is_valid_increments_ref_count.md) | WeakCrossThreadHandle::is_valid() 錯誤地遞增 ref_count，與 GcHandle::is_valid() 行為不一致 | Resolved | Verified |
+| [2026-03-14_ISSUE_bug296_weak_is_valid_increments_ref_count.md](./2026-03-14_ISSUE_bug296_weak_is_valid_increments_ref_count.md) | WeakCrossThreadHandle::is_valid() 錯誤地遞增 ref_count，與 GcHandle::is_valid() 行為不一致 | Fixed | Verified |
 | [2026-03-14_ISSUE_bug297_mark_object_minor_toctou_is_allocated_set_mark.md](./2026-03-14_ISSUE_bug297_mark_object_minor_toctou_is_allocated_set_mark.md) | mark_object_minor TOCTOU between is_allocated and set_mark | Fixed | Verified |
 | [2026-03-14_ISSUE_bug298_gc_cell_validate_and_barrier_large_object_has_gen_old_flag_toctou.md](./2026-03-14_ISSUE_bug298_gc_cell_validate_and_barrier_large_object_has_gen_old_flag_toctou.md) | gc_cell_validate_and_barrier 大型物件路徑 has_gen_old_flag 讀取在 is_allocated 檢查之前 - TOCTOU | Invalid | Unverified |
 | [2026-03-14_ISSUE_bug299_weak_may_be_valid_missing_origin_thread_check.md](./2026-03-14_ISSUE_bug299_weak_may_be_valid_missing_origin_thread_check.md) | WeakCrossThreadHandle::may_be_valid() Missing Origin Thread Check - Inconsistent with is_valid() | Fixed | Verified |
@@ -376,42 +376,42 @@
 | [2026-03-16_ISSUE_bug311_mark_new_object_black_gc_box_deref_toctou.md](./2026-03-16_ISSUE_bug311_mark_new_object_black_gc_box_deref_toctou.md) | mark_new_object_black TOCTOU - gc_box dereference before is_allocated re-check | Fixed | Not Verified |
 | [2026-03-16_ISSUE_bug312_gccell_borrow_mut_gen_only_missing_generational_barrier.md](./2026-03-16_ISSUE_bug312_gccell_borrow_mut_gen_only_missing_generational_barrier.md) | GcCell::borrow_mut_gen_only 缺少世代寫屏障 - 導致 OLD→YOUNG 引用遺漏 | Fixed | Verified |
 | [2026-03-16_ISSUE_bug313_gchandle_is_valid_orphan_tcb_race.md](./2026-03-16_ISSUE_bug313_gchandle_is_valid_orphan_tcb_race.md) | GcHandle::is_valid() TOCTOU - Orphan Lock Release 到 TCB Check 之間的 Race Condition | Fixed | Verified |
-| [2026-03-18_ISSUE_bug313_validate_thread_affinity_heap_bounds.md](./2026-03-18_ISSUE_bug313_validate_thread_affinity_heap_bounds.md) | validate_thread_affinity 使用 `>` 進行 heap bounds 檢查，與 `is_in_range` 不一致 | Open | Verified |
+| [2026-03-18_ISSUE_bug313_validate_thread_affinity_heap_bounds.md](./2026-03-18_ISSUE_bug313_validate_thread_affinity_heap_bounds.md) | validate_thread_affinity 使用 `>` 進行 heap bounds 檢查，與 `is_in_range` 不一致 | Invalid | Verified |
 | [2026-03-16_ISSUE_bug314_gcthreadsafecell_borrow_mut_gen_only_missing_generational_barrier.md](./2026-03-16_ISSUE_bug314_gcthreadsafecell_borrow_mut_gen_only_missing_generational_barrier.md) | GcThreadSafeCell::borrow_mut_gen_only 缺少世代寫屏障 - 導致 OLD→YOUNG 引用遺漏 | Fixed | Verified |
-| [2026-03-16_ISSUE_bug315_generational_barrier_active_idle.md](./2026-03-16_ISSUE_bug315_generational_barrier_active_idle.md) | is_generational_barrier_active() returns true during idle state causing unnecessary overhead | Open | Not Verified |
+| [2026-03-16_ISSUE_bug315_generational_barrier_active_idle.md](./2026-03-16_ISSUE_bug315_generational_barrier_active_idle.md) | is_generational_barrier_active() returns true during idle state causing unnecessary overhead | Invalid | Not Verified |
 | [2026-03-16_ISSUE_bug316_write_guard_drop_toctou_cached_barrier_not_used.md](./2026-03-16_ISSUE_bug316_write_guard_drop_toctou_cached_barrier_not_used.md) | Write Guard Drop TOCTOU - Barrier States Re-checked Instead of Using Cached Values | Verified | Verified |
-| [2026-03-17_ISSUE_bug317_ephemeron_clone_panic_inconsistent.md](./2026-03-17_ISSUE_bug317_ephemeron_clone_panic_inconsistent.md) | Ephemeron::clone 在 value 死亡/.Dropping/建構中時 panic，與 Weak::clone 行為不一致 | Open | Unverified |
+| [2026-03-17_ISSUE_bug317_ephemeron_clone_panic_inconsistent.md](./2026-03-17_ISSUE_bug317_ephemeron_clone_panic_inconsistent.md) | Ephemeron::clone 在 value 死亡/.Dropping/建構中時 panic，與 Weak::clone 行為不一致 | Invalid | Not Verified |
 | [2026-03-17_ISSUE_bug318_sweep_weak_count_acquire_toctou.md](./2026-03-17_ISSUE_bug318_sweep_weak_count_acquire_toctou.md) | Sweep TOCTOU - weak_count_acquire 與 has_dead_flag 讀取之間的 Race Condition | Fixed | Verified |
-| [2026-03-17_ISSUE_bug319_gchandle_resolve_post_increment_missing_is_under_construction.md](./2026-03-17_ISSUE_bug319_gchandle_resolve_post_increment_missing_is_under_construction.md) | GcHandle::resolve/try_resolve Post-Increment Check 缺少 is_under_construction 檢查 | Open | Verified |
-| [2026-03-17_ISSUE_bug320_weakcrossthreadhandle_is_valid_missing_is_allocated_check.md](./2026-03-17_ISSUE_bug320_weakcrossthreadhandle_is_valid_missing_is_allocated_check.md) | WeakCrossThreadHandle::is_valid() Missing is_allocated Check - Inconsistent with upgrade() | Open | Unverified |
-| [2026-03-17_ISSUE_bug321_gc_guard_drop_toctou_regression.md](./2026-03-17_ISSUE_bug321_gc_guard_drop_toctou_regression.md) | Write Guard Drop TOCTOU - Barrier States Still Re-checked (Regression of bug316) | Open | Verified |
-| [2026-03-17_ISSUE_bug322_gcthreadsafecell_borrow_mut_no_heap_panic.md](./2026-03-17_ISSUE_bug322_gcthreadsafecell_borrow_mut_no_heap_panic.md) | GcThreadSafeCell::borrow_mut panic when called from thread without GC heap | Open | Unverified |
-| [2026-03-17_ISSUE_bug323_gcmutexguard_missing_cached_barrier_state.md](./2026-03-17_ISSUE_bug323_gcmutexguard_missing_cached_barrier_state.md) | GcMutexGuard 結構體未緩存 barrier 狀態，Drop 時重新讀取導致 TOCTOU | Open | Verified |
-| [2026-03-17_ISSUE_bug324_weakcrossthreadhandle_is_valid_missing_orphan_support.md](./2026-03-17_ISSUE_bug324_weakcrossthreadhandle_is_valid_missing_orphan_support.md) | WeakCrossThreadHandle::is_valid 不支持 orphan handle，與 GcHandle::is_valid 行為不一致 | Open | Unverified |
+| [2026-03-17_ISSUE_bug319_gchandle_resolve_post_increment_missing_is_under_construction.md](./2026-03-17_ISSUE_bug319_gchandle_resolve_post_increment_missing_is_under_construction.md) | GcHandle::resolve/try_resolve Post-Increment Check 缺少 is_under_construction 檢查 | Fixed | Verified |
+| [2026-03-17_ISSUE_bug320_weakcrossthreadhandle_is_valid_missing_is_allocated_check.md](./2026-03-17_ISSUE_bug320_weakcrossthreadhandle_is_valid_missing_is_allocated_check.md) | WeakCrossThreadHandle::is_valid() Missing is_allocated Check - Inconsistent with upgrade() | Invalid | Not Reproduced |
+| [2026-03-17_ISSUE_bug321_gc_guard_drop_toctou_regression.md](./2026-03-17_ISSUE_bug321_gc_guard_drop_toctou_regression.md) | Write Guard Drop TOCTOU - Barrier States Still Re-checked (Regression of bug316) | Fixed | Verified |
+| [2026-03-17_ISSUE_bug322_gcthreadsafecell_borrow_mut_no_heap_panic.md](./2026-03-17_ISSUE_bug322_gcthreadsafecell_borrow_mut_no_heap_panic.md) | GcThreadSafeCell::borrow_mut panic when called from thread without GC heap | Invalid | Not Reproduced |
+| [2026-03-17_ISSUE_bug323_gcmutexguard_missing_cached_barrier_state.md](./2026-03-17_ISSUE_bug323_gcmutexguard_missing_cached_barrier_state.md) | GcMutexGuard 結構體未緩存 barrier 狀態，Drop 時重新讀取導致 TOCTOU | Fixed | Verified |
+| [2026-03-17_ISSUE_bug324_weakcrossthreadhandle_is_valid_missing_orphan_support.md](./2026-03-17_ISSUE_bug324_weakcrossthreadhandle_is_valid_missing_orphan_support.md) | WeakCrossThreadHandle::is_valid 不支持 orphan handle，與 GcHandle::is_valid 行為不一致 | Invalid | Not Reproduced |
 | [2026-03-17_ISSUE_bug325_orphan_root_migration_race.md](./2026-03-17_ISSUE_bug325_orphan_root_migration_race.md) | Orphan Root Migration Race - handle appears unregistered during migration window | Fixed | Verified |
-| [2026-03-17_ISSUE_bug326_weakcrossthreadhandle_is_valid_missing_orphan_support.md](./2026-03-17_ISSUE_bug326_weakcrossthreadhandle_is_valid_missing_orphan_support.md) | WeakCrossThreadHandle::is_valid 不支持 orphan handle，與 GcHandle::is_valid 行為不一致 | Open | Unverified |
-| [2026-03-18_ISSUE_bug327_gcrootset_snapshot_single_heap_filter.md](./2026-03-18_ISSUE_bug327_gcrootset_snapshot_single_heap_filter.md) | GcRootSet::snapshot 單一 heap 過濾導致跨執行緒 roots 丟失 | Open | Not Verified |
+| [2026-03-17_ISSUE_bug326_weakcrossthreadhandle_is_valid_missing_orphan_support.md](./2026-03-17_ISSUE_bug326_weakcrossthreadhandle_is_valid_missing_orphan_support.md) | WeakCrossThreadHandle::is_valid 不支持 orphan handle，與 GcHandle::is_valid 行為不一致 | Invalid | Not Reproduced |
+| [2026-03-18_ISSUE_bug327_gcrootset_snapshot_single_heap_filter.md](./2026-03-18_ISSUE_bug327_gcrootset_snapshot_single_heap_filter.md) | GcRootSet::snapshot 單一 heap 過濾導致跨執行緒 roots 丟失 | Invalid | Not Verified |
 | [2026-03-18_ISSUE_bug328_lazy_sweep_all_dead_missing_concurrent_alloc_check.md](./2026-03-18_ISSUE_bug328_lazy_sweep_all_dead_missing_concurrent_alloc_check.md) | Lazy Sweep 未設置 all_dead = false 導致並發配置時頁面狀態錯誤 | Verified | Verified |
 | [2026-03-18_ISSUE_bug329_lazy_sweep_concurrent_alloc_all_dead.md](./2026-03-18_ISSUE_bug329_lazy_sweep_concurrent_alloc_all_dead.md) | Lazy Sweep 未設置 all_dead = false 導致並發配置時頁面狀態錯誤 | Verified | Verified |
 | [2026-03-18_ISSUE_bug330_push_cross_thread_satb_return_value_not_checked.md](./2026-03-18_ISSUE_bug330_push_cross_thread_satb_return_value_not_checked.md) | GcThreadSafeCell::borrow_mut 與 record_satb_old_values_with_state 未檢查 push_cross_thread_satb 返回值 | Verified | Verified |
 | [2026-03-18_ISSUE_bug331_gchandle_try_resolve_impl_ref_count_leak.md](./2026-03-18_ISSUE_bug331_gchandle_try_resolve_impl_ref_count_leak.md) | GcHandle::try_resolve_impl Reference Count Leak - inc_ref Not Undone When Slot Swept | Fixed | Verified |
 | [2026-03-18_ISSUE_bug332_gchandle_downgrade_weak_count_leak.md](./2026-03-18_ISSUE_bug332_gchandle_downgrade_weak_count_leak.md) | GcHandle::downgrade Weak Count Leak - dec_weak Not Called When Slot Swept | Fixed | Verified |
-| [2026-03-18_ISSUE_bug333_gc_downgrade_as_weak_cross_thread_handle_toctou.md](./2026-03-18_ISSUE_bug333_gc_downgrade_as_weak_cross_thread_handle_toctou.md) | Gc::downgrade / GcBox::as_weak / Gc::cross_thread_handle Missing Post-Increment Dead/Dropping Check (TOCTOU) | Open | Unverified |
+| [2026-03-18_ISSUE_bug333_gc_downgrade_as_weak_cross_thread_handle_toctou.md](./2026-03-18_ISSUE_bug333_gc_downgrade_as_weak_cross_thread_handle_toctou.md) | Gc::downgrade / GcBox::as_weak / Gc::cross_thread_handle Missing Post-Increment Dead/Dropping Check (TOCTOU) | Invalid | Not Reproduced |
 | [2026-03-18_ISSUE_bug334_gcmutexguard_missing_barrier_state_cache.md](./2026-03-18_ISSUE_bug334_gcmutexguard_missing_barrier_state_cache.md) | GcMutexGuard 缺少 barrier state 快取，與 GcRwLockWriteGuard 不一致 | Fixed | Verified |
-| [2026-03-18_ISSUE_bug335_generation_gen_old_flag_promotion_order_toctou.md](./2026-03-18_ISSUE_bug335_generation_gen_old_flag_promotion_order_toctou.md) | PageHeader generation 和 gen_old_flag 更新順序導致 TOCTOU 漏洞 | Open | Unverified |
+| [2026-03-18_ISSUE_bug335_generation_gen_old_flag_promotion_order_toctou.md](./2026-03-18_ISSUE_bug335_generation_gen_old_flag_promotion_order_toctou.md) | PageHeader generation 和 gen_old_flag 更新順序導致 TOCTOU 漏洞 | Invalid | Not Reproduced |
 | [2026-03-18_ISSUE_bug336_incremental_marking_toctou_lazy_sweep_reallocation.md](./2026-03-18_ISSUE_bug336_incremental_marking_toctou_lazy_sweep_reallocation.md) | Incremental Marking TOCTOU - Lazy Sweep Reallocation Between Two is_allocated Checks | Fixed | Verified |
-| [2026-03-19_ISSUE_bug337_ephemeron_upgrade_missing_key_reference.md](./2026-03-19_ISSUE_bug337_ephemeron_upgrade_missing_key_reference.md) | Ephemeron upgrade 缺少 key_gc 引用保持，導致 Value 可能被錯誤回收 | Open | Unverified |
-| [2026-03-19_ISSUE_bug338_weak_cross_thread_handle_try_upgrade_panic_on_origin_terminated.md](./2026-03-19_ISSUE_bug338_weak_cross_thread_handle_try_upgrade_panic_on_origin_terminated.md) | WeakCrossThreadHandle::try_upgrade panics when origin thread terminates | Open | Not Verified |
+| [2026-03-19_ISSUE_bug337_ephemeron_upgrade_missing_key_reference.md](./2026-03-19_ISSUE_bug337_ephemeron_upgrade_missing_key_reference.md) | Ephemeron upgrade 缺少 key_gc 引用保持，導致 Value 可能被錯誤回收 | Invalid | Not Reproduced |
+| [2026-03-19_ISSUE_bug338_weak_cross_thread_handle_try_upgrade_panic_on_origin_terminated.md](./2026-03-19_ISSUE_bug338_weak_cross_thread_handle_try_upgrade_panic_on_origin_terminated.md) | WeakCrossThreadHandle::try_upgrade panics when origin thread terminates | Fixed | Verified |
 | [2026-03-19_ISSUE_bug339_gc_cross_thread_handle_missing_pre_increment_is_allocated_check.md](./2026-03-19_ISSUE_bug339_gc_cross_thread_handle_missing_pre_increment_is_allocated_check.md) | Gc::cross_thread_handle Missing Pre-Incrment is_allocated Check (TOCTOU) | Fixed | Verified |
-| [2026-03-19_ISSUE_bug340_handle_to_gc_missing_pre_increment_is_allocated_check.md](./2026-03-19_ISSUE_bug340_handle_to_gc_missing_pre_increment_is_allocated_check.md) | Handle::to_gc Missing Pre-Incrment is_allocated Check (TOCTOU) | Open | Verified |
-| [2026-03-19_ISSUE_bug341_gc_downgrade_check_order_inconsistent.md](./2026-03-19_ISSUE_bug341_gc_downgrade_check_order_inconsistent.md) | Gc::downgrade 檢查順序不一致 - is_allocated 在 flag checks 之前 | Open | Unverified |
-| [2026-03-19_ISSUE_bug342_gcbox_try_inc_ref_from_zero_post_cas_missing_is_under_construction_check.md](./2026-03-19_ISSUE_bug342_gcbox_try_inc_ref_from_zero_post_cas_missing_is_under_construction_check.md) | GcBox::try_inc_ref_from_zero post-CAS 驗證缺少 is_under_construction 檢查 | Open | Verified |
+| [2026-03-19_ISSUE_bug340_handle_to_gc_missing_pre_increment_is_allocated_check.md](./2026-03-19_ISSUE_bug340_handle_to_gc_missing_pre_increment_is_allocated_check.md) | Handle::to_gc Missing Pre-Incrment is_allocated Check (TOCTOU) | Fixed | Verified |
+| [2026-03-19_ISSUE_bug341_gc_downgrade_check_order_inconsistent.md](./2026-03-19_ISSUE_bug341_gc_downgrade_check_order_inconsistent.md) | Gc::downgrade 檢查順序不一致 - is_allocated 在 flag checks 之前 | Fixed | Verified |
+| [2026-03-19_ISSUE_bug342_gcbox_try_inc_ref_from_zero_post_cas_missing_is_under_construction_check.md](./2026-03-19_ISSUE_bug342_gcbox_try_inc_ref_from_zero_post_cas_missing_is_under_construction_check.md) | GcBox::try_inc_ref_from_zero post-CAS 驗證缺少 is_under_construction 檢查 | Fixed | Verified |
 | [2026-03-19_ISSUE_bug343_gcboxweakref_is_live_missing_is_allocated_check.md](./2026-03-19_ISSUE_bug343_gcboxweakref_is_live_missing_is_allocated_check.md) | GcBoxWeakRef::is_live() 缺少 is_allocated 檢查，與 upgrade() 行為不一致 | Fixed | Verified |
 | [2026-03-19_ISSUE_bug344_weak_clone_inc_weak_missing_pre_is_allocated_check.md](./2026-03-19_ISSUE_bug344_weak_clone_inc_weak_missing_pre_is_allocated_check.md) | Weak::clone 缺少 inc_weak 前置 is_allocated 檢查 (TOCTOU) | Fixed | Verified |
 | [2026-03-19_ISSUE_bug345_gchandle_resolve_impl_missing_is_allocated_check.md](./2026-03-19_ISSUE_bug345_gchandle_resolve_impl_missing_is_allocated_check.md) | GcHandle::resolve_impl 缺少 is_allocated 檢查導致 TOCTOU | Fixed | Verified |
 | [2026-03-19_ISSUE_bug346_gcboxweakref_is_live_missing_is_under_construction_check.md](./2026-03-19_ISSUE_bug346_gcboxweakref_is_live_missing_is_under_construction_check.md) | GcBoxWeakRef::is_live() 缺少 is_under_construction 檢查，與 upgrade() 行為不一致 | Fixed | Verified |
 | [2026-03-19_ISSUE_bug347_gchandle_resolve_is_allocated_check_insufficient.md](./2026-03-19_ISSUE_bug347_gchandle_resolve_is_allocated_check_insufficient.md) | GcHandle::resolve_impl is_allocated check insufficient - does not prevent slot reuse TOCTOU | Fixed | Verified |
-| [2026-03-19_ISSUE_bug348_gchandle_try_resolve_impl_missing_post_increment_is_allocated_check.md](./2026-03-19_ISSUE_bug348_gchandle_try_resolve_impl_missing_post_increment_is_allocated_check.md) | GcHandle::try_resolve_impl 缺少 post-increment is_allocated check | Open | Unverified |
+| [2026-03-19_ISSUE_bug348_gchandle_try_resolve_impl_missing_post_increment_is_allocated_check.md](./2026-03-19_ISSUE_bug348_gchandle_try_resolve_impl_missing_post_increment_is_allocated_check.md) | GcHandle::try_resolve_impl 缺少 post-increment is_allocated check | Fixed | Verified |
 | [2026-03-19_ISSUE_bug349_gchandle_drop_dec_ref_slot_reuse.md](./2026-03-19_ISSUE_bug349_gchandle_drop_dec_ref_slot_reuse.md) | GcHandle::drop dec_ref Operating on Potentially Reused Slot | Open | Unverified |
 | [2026-03-20_ISSUE_bug350_handle_to_gc_missing_generation_check.md](./2026-03-20_ISSUE_bug350_handle_to_gc_missing_generation_check.md) | Handle::to_gc() 與 Handle::get() 缺少 Generation 檢查導致潛在 Slot Reuse UAF | Fixed | Verified |
 | [2026-03-20_ISSUE_bug350_mark_object_black_second_is_allocated_check_incorrectly_placed.md](./2026-03-20_ISSUE_bug350_mark_object_black_second_is_allocated_check_incorrectly_placed.md) | mark_object_black second is_allocated check incorrectly placed (bug307 fix incorrectly applied) | Fixed | Verified |
@@ -429,3 +429,5 @@
 | [2026-03-21_ISSUE_bug359_pageheader_generation_data_race.md](./2026-03-21_ISSUE_bug359_pageheader_generation_data_race.md) | PageHeader.generation 是 plain u8 但被並發讀寫 - Data Race (UB) | Open | Verified |
 | [2026-03-21_ISSUE_bug360_mark_and_push_to_worker_queue_missing_generation_check.md](./2026-03-21_ISSUE_bug360_mark_and_push_to_worker_queue_missing_generation_check.md) | mark_and_push_to_worker_queue missing generation check after try_mark | Open | Verified |
 | [2026-03-21_ISSUE_bug361_clear_registers_rbx_not_cleared.md](./2026-03-21_ISSUE_bug361_clear_registers_rbx_not_cleared.md) | clear_registers 未清除 RBX 導致虛假Roots | Open | Verified |
+| [2026-03-21_ISSUE_bug362_gcvisitorconcurrent_route_reference_missing_generation_check.md](./2026-03-21_ISSUE_bug362_gcvisitorconcurrent_route_reference_missing_generation_check.md) | GcVisitorConcurrent::route_reference missing generation check after set_mark | Open | Verified |
+| [2026-03-21_ISSUE_bug363_scan_page_for_unmarked_refs_missing_generation_check.md](./2026-03-21_ISSUE_bug363_scan_page_for_unmarked_refs_missing_generation_check.md) | scan_page_for_unmarked_refs clears mark without generation check when is_allocated is false | Fixed | Verified |

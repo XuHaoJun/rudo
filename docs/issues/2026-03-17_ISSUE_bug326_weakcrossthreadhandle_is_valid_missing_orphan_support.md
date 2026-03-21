@@ -1,7 +1,7 @@
 # [Bug]: WeakCrossThreadHandle::is_valid 不支持 orphan handle，與 GcHandle::is_valid 行為不一致
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Reproduced
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -145,3 +145,13 @@ Weak reference 的有效性不應該依賴於 origin 執行緒的存活狀態。
 
 **Geohot (Exploit 觀點):**
 這不會導致安全問題，但會造成可用性問題。攻擊者無法利用這個問題，但可能導致使用者對 weak ref 有效性的錯誤判斷。
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — duplicate of bug #324. Same root-cause misanalysis.
+
+`WeakCrossThreadHandle::is_valid()` correctly returns `false` when the origin thread has terminated because neither `resolve()` nor `try_resolve()` can succeed in that state. The comparison to `GcHandle::is_valid()` is incorrect: `GcHandle` is a strong root with orphan-table migration; `WeakCrossThreadHandle` is a weak ref with no such path. See bug #324 resolution for full details.
+
+No code change required.

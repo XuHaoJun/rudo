@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::try_resolve_impl 缺少 post-increment is_allocated check
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -161,6 +161,20 @@ if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const 
 
 **Geohot (Exploit 觀點):**
 Exploit 路徑：(1) 創建指向 A 的 handle，(2) A 變成不可達，(3) Lazy sweep 回收 slot，(4) B 被分配在相同 slot，(5) `inc_ref` 腐蝕 B 的 ref_count，(6) 如果 B 是安全敏感的，通過腐敗的 ref_count 操作可能導致 UAF。
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed.
+
+The fix is present in `crates/rudo-gc/src/handles/cross_thread.rs` in `try_resolve_impl` (lines 339–389). The current implementation includes:
+
+1. **Pre-increment `is_allocated` check** (lines 352–357) — returns `None` if slot is not allocated.
+2. **Generation snapshot + post-increment generation comparison** (lines 362–371) — `dec_ref` + returns `None` if generation changed (stronger than the requested `is_allocated` check, catches slot reuse directly).
+3. **Post-increment `is_allocated` check** (lines 379–385) — exactly what this issue requested: `dec_ref` + returns `None` if slot no longer allocated.
+
+The `test_try_resolve_wrong_thread` test in `tests/cross_thread_handle.rs` passes. The issue is resolved.
 
 ---
 

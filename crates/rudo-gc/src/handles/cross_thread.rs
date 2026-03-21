@@ -254,7 +254,10 @@ impl<T: Trace + 'static> GcHandle<T> {
 
             // Post-increment safety check (TOCTOU: object may have been dropped between
             // pre-check and inc_ref). Same pattern as Weak::upgrade.
-            if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+            if gc_box.dropping_state() != 0
+                || gc_box.has_dead_flag()
+                || gc_box.is_under_construction()
+            {
                 GcBox::dec_ref(self.ptr.as_ptr());
                 panic!("GcHandle::resolve: object was dropped after inc_ref (TOCTOU race)");
             }
@@ -371,7 +374,10 @@ impl<T: Trace + 'static> GcHandle<T> {
             }
 
             // Post-increment safety check (TOCTOU). Same pattern as Weak::try_upgrade.
-            if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+            if gc_box.dropping_state() != 0
+                || gc_box.has_dead_flag()
+                || gc_box.is_under_construction()
+            {
                 GcBox::dec_ref(self.ptr.as_ptr());
                 return None;
             }
@@ -814,6 +820,7 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     /// - The weak ref is null
     /// - The object has been collected
     /// - The memory location is obviously invalid (misaligned or too low address)
+    /// - The origin thread has terminated
     ///
     /// # Safety
     ///
@@ -821,19 +828,14 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     ///
     /// # Panics
     ///
-    /// Panics if called from a thread other than the origin thread (including
-    /// when it has terminated). Prefer [`try_resolve()`] when origin may be dead.
+    /// Panics if called from a live thread other than the origin thread.
     #[track_caller]
     pub fn try_upgrade(&self) -> Option<Gc<T>> {
         // Check TCB liveness BEFORE the ThreadId comparison to prevent ThreadId
         // reuse from bypassing origin-thread affinity after the thread terminates.
-        if self.origin_tcb.upgrade().is_none() {
-            panic!(
-                "WeakCrossThreadHandle::try_upgrade: origin thread has terminated (origin={:?}). \
-                 Use try_resolve() instead.",
-                self.origin_thread
-            );
-        }
+        // Returns None (rather than panicking) if origin thread has terminated,
+        // consistent with try_resolve().
+        self.origin_tcb.upgrade()?;
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,

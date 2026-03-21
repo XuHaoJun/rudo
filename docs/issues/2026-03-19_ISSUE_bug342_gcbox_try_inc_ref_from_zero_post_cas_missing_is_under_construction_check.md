@@ -1,6 +1,6 @@
 # [Bug]: GcBox::try_inc_ref_from_zero post-CAS 驗證缺少 is_under_construction 檢查
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -101,3 +101,23 @@ if (flags & (Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG)) != 0
 
 **Geohot (Exploit 觀點):**
 極端的時序攻擊可能利用這個窗口。雖然實際利用困難，但這是潛在的攻击面。
+
+## Resolution (2026-03-21)
+
+**Outcome:** Fixed.
+
+In `ptr.rs`, the post-CAS verification in `try_inc_ref_from_zero` (the check introduced by bug287) only tested `DEAD_FLAG` and `dropping_state()`, missing `UNDER_CONSTRUCTION_FLAG`. Since `flags` already holds all flags from `weak_count & FLAGS_MASK`, the fix was to change:
+
+```rust
+if (flags & Self::DEAD_FLAG) != 0 || self.dropping_state() != 0 {
+```
+
+to:
+
+```rust
+if (flags & (Self::DEAD_FLAG | Self::UNDER_CONSTRUCTION_FLAG)) != 0
+    || self.dropping_state() != 0
+{
+```
+
+This closes the TOCTOU window where another thread could set `UNDER_CONSTRUCTION_FLAG` between the pre-CAS check and the CAS success, and makes post-CAS validation consistent with pre-CAS validation. Full test suite passes.
