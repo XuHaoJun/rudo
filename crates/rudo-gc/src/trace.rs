@@ -185,10 +185,17 @@ impl<'a> GcVisitorConcurrent<'a> {
                 if (*header.as_ptr()).is_marked(idx) {
                     return;
                 }
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = raw.cast::<super::ptr::GcBox<()>>();
+                let marked_generation = (*gc_box_ptr).generation();
                 if !(*header.as_ptr()).set_mark(idx) {
                     return;
                 }
                 if !(*header.as_ptr()).is_allocated(idx) {
+                    let current_generation = (*gc_box_ptr).generation();
+                    if current_generation != marked_generation {
+                        return;
+                    }
                     (*header.as_ptr()).clear_mark_atomic(idx);
                     return;
                 }
