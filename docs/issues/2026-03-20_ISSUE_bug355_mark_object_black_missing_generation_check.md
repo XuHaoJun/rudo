@@ -1,7 +1,7 @@
 # [Bug]: mark_object_black missing generation check on slot reuse
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -116,3 +116,10 @@ While this doesn't cause immediate UB (the memory is still valid), it can lead t
 
 **Geohot (Exploit 觀點):**
 In a concurrent scenario where an attacker can influence allocation patterns and GC timing, this could potentially be exploited to cause a targeted object to be collected while still referenced, leading to a dangling pointer scenario.
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed.
+
+The generation check is present in `crates/rudo-gc/src/gc/incremental.rs` at lines 1135–1150 in `mark_object_black`. The fix reads `marked_generation` immediately after `try_mark` succeeds, then compares it to `current_generation` after `is_allocated` returns false — exactly matching the suggested fix pattern. The comment `(bug355 fix)` in the code confirms this was intentionally added. All 94 lib tests pass with no regressions.

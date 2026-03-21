@@ -1,6 +1,6 @@
 # [Bug]: scan_page_for_marked_refs redundant second is_allocated check (bug258 fix now redundant)
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 Threat Model Assessment
@@ -140,3 +140,11 @@ No actual attack surface. This erroneous check doesn't lead to any exploitable v
 **Date:** 2026-03-20
 
 **Issue created but fix NOT applied** - code still contains the redundant second `is_allocated` check at lines 854-857!
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed by code inspection.
+
+The current `scan_page_for_marked_refs` in `crates/rudo-gc/src/gc/incremental.rs` (lines 846–868) contains only one `is_allocated` check (after `try_mark`), immediately followed by the generation check (bug336 fix). The redundant second consecutive `is_allocated` check described in this issue is no longer present. No code change required.

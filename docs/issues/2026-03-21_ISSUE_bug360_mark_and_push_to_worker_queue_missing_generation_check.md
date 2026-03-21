@@ -1,6 +1,6 @@
 # [Bug]: mark_and_push_to_worker_queue missing generation check after try_mark
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -133,3 +133,17 @@ In a concurrent scenario, an attacker could influence allocation patterns and GC
 - Confirmed: `scan_page_for_unmarked_refs` has generation check (lines 979-993)
 - Confirmed: `mark_and_push_to_worker_queue` is MISSING generation check
 - Pattern is identical to bug355 but in different function
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed by code inspection.
+
+`mark_and_push_to_worker_queue` in `crates/rudo-gc/src/gc/gc.rs` (lines 1235–1244) already contains the generation check:
+1. Reads `marked_generation` after successful `try_mark`
+2. On `is_allocated` returning false, reads `current_generation`
+3. If generations differ (slot reused), returns without clearing the mark
+4. If generations match (slot only swept), calls `clear_mark_atomic`
+
+This matches the bug336/bug355/bug360 pattern. No code change required.

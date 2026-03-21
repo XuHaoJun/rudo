@@ -1,7 +1,7 @@
 # [Bug]: IncrementalMarkState unsafe impl Sync enables UB when parallel marking is used
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Not Reproduced
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -118,3 +118,11 @@ This is a textbook unsafe code soundness issue. The `unsafe impl Sync` claims sa
 
 **Geohot (Exploit 觀點):**
 If an attacker can enable parallel marking and cause concurrent access to the worklist, they could trigger the undefined behavior. The UnsafeCell accessed through shared references from multiple threads creates potential for memory corruption. Even if the current code only calls these methods from single-threaded contexts, a future refactor or bug in the parallel marking code could enable the exploit path.
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — the concurrent access scenario described does not exist.
+
+Investigation of `marker.rs` confirms that `ParallelMarkCoordinator` (the parallel marking system) does not use `IncrementalMarkState` at all; it has its own separate work queues (`PerThreadMarkQueue`). The `IncrementalMarkState.worklist` is accessed exclusively from the GC thread during incremental mark slices — never from parallel worker threads. The `unsafe impl Sync` invariant (single-threaded worklist access) is upheld by the current architecture. No code change needed.

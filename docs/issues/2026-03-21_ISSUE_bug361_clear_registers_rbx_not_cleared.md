@@ -1,6 +1,6 @@
 # [Bug]: clear_registers 未清除 RBX 導致虛假Roots
 
-**Status:** Fixed
+**Status:** Invalid
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -108,3 +108,19 @@ std::arch::asm!(
 
 **Geohot (Exploit 觀點):**
 如果攻擊者能夠控制 RBX 的內容，結合conservative scan的行為，可能會利用虛假roots來防止特定記憶體區域被回收。這是一種記憶體腐敗攻擊的潛在向量。雖然難以利用，但理論上可行。
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid.
+
+Attempted to apply the fix (`xor rbx, rbx` + `out("rbx") _`) and received a compile-time error:
+
+```
+error: cannot use register `bx`: rbx is used internally by LLVM and cannot be used as an operand for inline asm
+```
+
+LLVM reserves RBX for its own internal use on x86_64. User code (including Rust) **cannot** allocate a GC pointer into RBX because LLVM will never assign a user variable to that register. The original comment "RBX is often reserved by LLVM, so valid pointer unlikely to be there if reserved" is correct — and stronger than stated: LLVM **never** uses RBX for user data.
+
+`spill_registers_and_scan` reads RBX conservatively (as a precaution), but the value there will never be a user-level GC pointer. Skipping RBX in `clear_registers` is correct by design. No code change applied.

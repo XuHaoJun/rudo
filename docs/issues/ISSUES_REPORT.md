@@ -3,20 +3,19 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 334
-- **Open**: 11
-- **Invalid**: 38
+- **Fixed**: 343
+- **Invalid**: 40
 - **Resolved**: 1
 - **Unknown**: 2
 - **Verified**: 23
 
 ### By Tags
-- **Verified**: 360
+- **Verified**: 363
 - **Not Verified**: 22
-- **Not Reproduced**: 18
+- **Not Reproduced**: 19
 - **Fixed**: 1
 - **Unknown**: 2
-- **Unverified**: 6
+- **Unverified**: 2
 
 ## All Issues
 
@@ -412,22 +411,22 @@
 | [2026-03-19_ISSUE_bug346_gcboxweakref_is_live_missing_is_under_construction_check.md](./2026-03-19_ISSUE_bug346_gcboxweakref_is_live_missing_is_under_construction_check.md) | GcBoxWeakRef::is_live() 缺少 is_under_construction 檢查，與 upgrade() 行為不一致 | Fixed | Verified |
 | [2026-03-19_ISSUE_bug347_gchandle_resolve_is_allocated_check_insufficient.md](./2026-03-19_ISSUE_bug347_gchandle_resolve_is_allocated_check_insufficient.md) | GcHandle::resolve_impl is_allocated check insufficient - does not prevent slot reuse TOCTOU | Fixed | Verified |
 | [2026-03-19_ISSUE_bug348_gchandle_try_resolve_impl_missing_post_increment_is_allocated_check.md](./2026-03-19_ISSUE_bug348_gchandle_try_resolve_impl_missing_post_increment_is_allocated_check.md) | GcHandle::try_resolve_impl 缺少 post-increment is_allocated check | Fixed | Verified |
-| [2026-03-19_ISSUE_bug349_gchandle_drop_dec_ref_slot_reuse.md](./2026-03-19_ISSUE_bug349_gchandle_drop_dec_ref_slot_reuse.md) | GcHandle::drop dec_ref Operating on Potentially Reused Slot | Open | Unverified |
+| [2026-03-19_ISSUE_bug349_gchandle_drop_dec_ref_slot_reuse.md](./2026-03-19_ISSUE_bug349_gchandle_drop_dec_ref_slot_reuse.md) | GcHandle::drop dec_ref Operating on Potentially Reused Slot | Fixed | Verified |
 | [2026-03-20_ISSUE_bug350_handle_to_gc_missing_generation_check.md](./2026-03-20_ISSUE_bug350_handle_to_gc_missing_generation_check.md) | Handle::to_gc() 與 Handle::get() 缺少 Generation 檢查導致潛在 Slot Reuse UAF | Fixed | Verified |
 | [2026-03-20_ISSUE_bug350_mark_object_black_second_is_allocated_check_incorrectly_placed.md](./2026-03-20_ISSUE_bug350_mark_object_black_second_is_allocated_check_incorrectly_placed.md) | mark_object_black second is_allocated check incorrectly placed (bug307 fix incorrectly applied) | Fixed | Verified |
 | [2026-03-20_ISSUE_bug351_gchandle_downgrade_missing_generation_check.md](./2026-03-20_ISSUE_bug351_gchandle_downgrade_missing_generation_check.md) | GcHandle::downgrade Missing Generation Tracking - Slot Reuse TOCTOU | Fixed | Verified |
 | [2026-03-20_ISSUE_bug351_mark_new_object_black_missing_second_is_allocated_check.md](./2026-03-20_ISSUE_bug351_mark_new_object_black_missing_second_is_allocated_check.md) | mark_new_object_black TOCTOU - missing is_allocated check before gc_box dereference | Resolved | Verified |
-| [2026-03-20_ISSUE_bug351_scan_page_for_unmarked_refs_redundant_second_is_allocated_check.md](./2026-03-20_ISSUE_bug351_scan_page_for_unmarked_refs_redundant_second_is_allocated_check.md) | scan_page_for_unmarked_refs redundant second is_allocated check (bug258 fix incorrectly applied) | Open | Verified |
+| [2026-03-20_ISSUE_bug351_scan_page_for_unmarked_refs_redundant_second_is_allocated_check.md](./2026-03-20_ISSUE_bug351_scan_page_for_unmarked_refs_redundant_second_is_allocated_check.md) | scan_page_for_unmarked_refs redundant second is_allocated check (bug258 fix incorrectly applied) | Fixed | Verified |
 | [2026-03-20_ISSUE_bug352_weak_upgrade_missing_generation_check.md](./2026-03-20_ISSUE_bug352_weak_upgrade_missing_generation_check.md) | Weak::upgrade Missing Generation Check - Slot Reuse TOCTOU | Fixed | Verified |
-| [2026-03-20_ISSUE_bug353_gccell_borrow_mut_missing_validate_thread_affinity.md](./2026-03-20_ISSUE_bug353_gccell_borrow_mut_missing_validate_thread_affinity.md) | GcCell::borrow_mut() missing validate_thread_affinity causes cryptic panic | Open | Verified |
+| [2026-03-20_ISSUE_bug353_gccell_borrow_mut_missing_validate_thread_affinity.md](./2026-03-20_ISSUE_bug353_gccell_borrow_mut_missing_validate_thread_affinity.md) | GcCell::borrow_mut() missing validate_thread_affinity causes cryptic panic | Fixed | Verified |
 | [2026-03-20_ISSUE_bug354_gcboxweakref_clone_inc_weak_before_is_allocated.md](./2026-03-20_ISSUE_bug354_gcboxweakref_clone_inc_weak_before_is_allocated.md) | GcBoxWeakRef::clone inc_weak called before is_allocated check | Fixed | Verified |
-| [2026-03-20_ISSUE_bug355_mark_object_black_missing_generation_check.md](./2026-03-20_ISSUE_bug355_mark_object_black_missing_generation_check.md) | mark_object_black missing generation check on slot reuse | Open | Unverified |
-| [2026-03-20_ISSUE_bug356_incremental_mark_state_unsafe_sync.md](./2026-03-20_ISSUE_bug356_incremental_mark_state_unsafe_sync.md) | IncrementalMarkState unsafe impl Sync enables UB when parallel marking is used | Open | Unverified |
-| [2026-03-21_ISSUE_bug356_gc_downgrade_missing_generation_check.md](./2026-03-21_ISSUE_bug356_gc_downgrade_missing_generation_check.md) | Gc::downgrade Missing Generation Check Before inc_weak (TOCTOU) | Open | Unverified |
-| [2026-03-20_ISSUE_bug357_scan_page_for_marked_refs_redundant_second_is_allocated_check.md](./2026-03-20_ISSUE_bug357_scan_page_for_marked_refs_redundant_second_is_allocated_check.md) | scan_page_for_marked_refs redundant second is_allocated check (bug258 fix now redundant) | Open | Verified |
+| [2026-03-20_ISSUE_bug355_mark_object_black_missing_generation_check.md](./2026-03-20_ISSUE_bug355_mark_object_black_missing_generation_check.md) | mark_object_black missing generation check on slot reuse | Fixed | Verified |
+| [2026-03-20_ISSUE_bug356_incremental_mark_state_unsafe_sync.md](./2026-03-20_ISSUE_bug356_incremental_mark_state_unsafe_sync.md) | IncrementalMarkState unsafe impl Sync enables UB when parallel marking is used | Invalid | Not Reproduced |
+| [2026-03-21_ISSUE_bug356_gc_downgrade_missing_generation_check.md](./2026-03-21_ISSUE_bug356_gc_downgrade_missing_generation_check.md) | Gc::downgrade Missing Generation Check Before inc_weak (TOCTOU) | Fixed | Verified |
+| [2026-03-20_ISSUE_bug357_scan_page_for_marked_refs_redundant_second_is_allocated_check.md](./2026-03-20_ISSUE_bug357_scan_page_for_marked_refs_redundant_second_is_allocated_check.md) | scan_page_for_marked_refs redundant second is_allocated check (bug258 fix now redundant) | Fixed | Verified |
 | [2026-03-21_ISSUE_bug358_mark_new_object_black_missing_generation_check.md](./2026-03-21_ISSUE_bug358_mark_new_object_black_missing_generation_check.md) | mark_new_object_black 缺少 generation check 导致错误的 slot 清理 | Fixed | Verified |
-| [2026-03-21_ISSUE_bug359_pageheader_generation_data_race.md](./2026-03-21_ISSUE_bug359_pageheader_generation_data_race.md) | PageHeader.generation 是 plain u8 但被並發讀寫 - Data Race (UB) | Open | Verified |
-| [2026-03-21_ISSUE_bug360_mark_and_push_to_worker_queue_missing_generation_check.md](./2026-03-21_ISSUE_bug360_mark_and_push_to_worker_queue_missing_generation_check.md) | mark_and_push_to_worker_queue missing generation check after try_mark | Open | Verified |
-| [2026-03-21_ISSUE_bug361_clear_registers_rbx_not_cleared.md](./2026-03-21_ISSUE_bug361_clear_registers_rbx_not_cleared.md) | clear_registers 未清除 RBX 導致虛假Roots | Open | Verified |
-| [2026-03-21_ISSUE_bug362_gcvisitorconcurrent_route_reference_missing_generation_check.md](./2026-03-21_ISSUE_bug362_gcvisitorconcurrent_route_reference_missing_generation_check.md) | GcVisitorConcurrent::route_reference missing generation check after set_mark | Open | Verified |
+| [2026-03-21_ISSUE_bug359_pageheader_generation_data_race.md](./2026-03-21_ISSUE_bug359_pageheader_generation_data_race.md) | PageHeader.generation 是 plain u8 但被並發讀寫 - Data Race (UB) | Fixed | Verified |
+| [2026-03-21_ISSUE_bug360_mark_and_push_to_worker_queue_missing_generation_check.md](./2026-03-21_ISSUE_bug360_mark_and_push_to_worker_queue_missing_generation_check.md) | mark_and_push_to_worker_queue missing generation check after try_mark | Fixed | Verified |
+| [2026-03-21_ISSUE_bug361_clear_registers_rbx_not_cleared.md](./2026-03-21_ISSUE_bug361_clear_registers_rbx_not_cleared.md) | clear_registers 未清除 RBX 導致虛假Roots | Invalid | Verified |
+| [2026-03-21_ISSUE_bug362_gcvisitorconcurrent_route_reference_missing_generation_check.md](./2026-03-21_ISSUE_bug362_gcvisitorconcurrent_route_reference_missing_generation_check.md) | GcVisitorConcurrent::route_reference missing generation check after set_mark | Fixed | Verified |
 | [2026-03-21_ISSUE_bug363_scan_page_for_unmarked_refs_missing_generation_check.md](./2026-03-21_ISSUE_bug363_scan_page_for_unmarked_refs_missing_generation_check.md) | scan_page_for_unmarked_refs clears mark without generation check when is_allocated is false | Fixed | Verified |

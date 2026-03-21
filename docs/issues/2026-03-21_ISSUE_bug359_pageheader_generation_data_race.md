@@ -1,6 +1,6 @@
 # [Bug]: PageHeader.generation 是 plain u8 但被並發讀寫 - Data Race (UB)
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -143,3 +143,11 @@ pub generation: AtomicU8,
 - `unified_write_barrier` (heap.rs:3039, 3068): 多處非原子讀取
 
 **Status: Open** - 需要修復。
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed by code inspection.
+
+`PageHeader.generation` in `crates/rudo-gc/src/heap.rs:989` is already declared as `AtomicU8`. All reads use `.load(Ordering::Acquire)` and all writes use `.store(1, Ordering::Release)` throughout `gc/gc.rs`, `heap.rs`, `cell.rs`, `trace.rs`, and `gc/marker.rs`. No plain `u8` reads or writes remain. No code change required.

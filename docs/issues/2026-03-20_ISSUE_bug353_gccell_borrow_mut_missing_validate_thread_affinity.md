@@ -1,6 +1,6 @@
 # [Bug]: GcCell::borrow_mut() missing validate_thread_affinity causes cryptic panic
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -133,3 +133,10 @@ This is a usability bug - the panic message doesn't help developers understand w
 
 **Geohot (Exploit 觀點):**
 Not a security issue, but the cryptic panic could mask other issues during debugging.
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed.
+
+`GcCell::borrow_mut()` in `cell.rs:159` already calls `self.validate_thread_affinity("borrow_mut")` as the first statement, before any barrier work. The fix matches the suggested remediation exactly. Lib tests (`borrow_mut`) pass (3/3). No code changes needed.

@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::drop dec_ref Operating on Potentially Reused Slot
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -145,3 +145,14 @@ Exploit path: (1) Create handle to A, (2) Origin thread terminates, (3) Handle b
 
 - bug347: GcHandle::resolve_impl is_allocated check insufficient (same root cause)
 - bug206: Missing post-increment is_allocated checks (related but different functions)
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed.
+
+The `is_allocated` check is present in the current `GcHandle::drop` implementation at
+`crates/rudo-gc/src/handles/cross_thread.rs:675–682`. Before calling `dec_ref`, the code calls
+`ptr_to_object_index` + `ptr_to_page_header` and returns early if `!is_allocated(idx)`. This
+matches the suggested fix exactly. Existing tests in `tests/bug4_tcb_leak.rs` pass (3/3).

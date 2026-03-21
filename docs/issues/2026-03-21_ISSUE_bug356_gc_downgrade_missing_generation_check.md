@@ -1,7 +1,7 @@
 # [Bug]: Gc::downgrade Missing Generation Check Before inc_weak (TOCTOU)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -142,3 +142,11 @@ bug351 修復了 `GcHandle::downgrade()` 的相同問題，但忘記同時修復
 - bug351: GcHandle::downgrade missing generation check before inc_weak (Fixed)
 - bug289: Gc::clone missing is_allocated check BEFORE inc_ref (Fixed)
 - bug257: Gc::as_weak missing is_allocated check before inc_weak (Fixed)
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed.
+
+The fix is present in `ptr.rs:1763-1773`. Before calling `inc_weak()`, the code captures `pre_generation = (*gc_box_ptr).generation()`, then after `inc_weak()` verifies the generation hasn't changed. If it has (slot reused by sweep), `dec_weak()` is called and the function panics. The comment at line 1763 explicitly references bug356. No code change needed.

@@ -1,6 +1,6 @@
 # [Bug]: scan_page_for_unmarked_refs redundant second is_allocated check (bug258 fix incorrectly applied)
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -166,3 +166,13 @@ if (*header).set_mark(i) {
 **Status:** Issue created but fix NOT applied - code still contains the bug!
 
 The issue was marked Fixed but the actual code was never modified. The redundant second `is_allocated` check still exists at lines 992-997.
+
+## Resolution (2026-03-21)
+
+**Outcome:** Fixed via commit sequence.
+
+- `4cb3261` ("fix(incremental): remove dead code - redundant second is_allocated check in scan_page_for_unmarked_refs") removed the redundant consecutive duplicate.
+- `d2a2ebb` ("fix(incremental): add second is_allocated re-check in scan_page_for_unmarked_refs") then added the check back in the *correct* position — just before `push_work` (Option 2 from the suggested fix).
+- `11965b0` further added generation checks between the two `is_allocated` checks.
+
+Current code at `gc/incremental.rs` has two `is_allocated` checks with substantial generation-check logic between them; the second is correctly placed immediately before `ptr.push_work(gc_box)`. The original "redundant consecutive" pattern no longer exists.
