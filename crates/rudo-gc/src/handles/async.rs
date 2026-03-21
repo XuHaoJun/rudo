@@ -632,12 +632,12 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                 "AsyncHandle::get: cannot access a dead, dropping, or under construction Gc"
             );
             let pre_generation = gc_box.generation();
-            let value = gc_box.value();
             assert_eq!(
                 pre_generation,
                 gc_box.generation(),
-                "AsyncHandle::get: slot was reused between pre-check and value read (generation mismatch)"
+                "AsyncHandle::get: slot was reused before value read (generation mismatch)"
             );
+            let value = gc_box.value();
             value
         }
     }
@@ -702,12 +702,12 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             "AsyncHandle::get_unchecked: cannot access a dead, dropping, or under construction Gc"
         );
         let pre_generation = gc_box.generation();
-        let value = gc_box.value();
         assert_eq!(
             pre_generation,
             gc_box.generation(),
-            "AsyncHandle::get_unchecked: slot was reused between pre-check and value read (generation mismatch)"
+            "AsyncHandle::get_unchecked: slot was reused before value read (generation mismatch)"
         );
+        let value = gc_box.value();
         value
     }
 
