@@ -166,23 +166,26 @@ where
 {
     // For x86_64, we spill the callee-saved registers to an array on the stack.
     // Miri does not support inline assembly, so we skip this.
+    // NOTE: RBX is NOT spilled because LLVM uses it internally and it cannot be used
+    // as an output operand in inline asm. This is consistent with clear_registers()
+    // which also cannot clear RBX. If a value in RBX is a GC pointer, it won't be
+    // scanned here but also won't be cleared - the conservative scan of stack memory
+    // will still find any GC pointers that were stored on the stack.
     #[cfg(all(target_arch = "x86_64", not(miri)))]
-    let mut regs = [0usize; 6];
+    let mut regs = [0usize; 5];
     #[cfg(all(target_arch = "x86_64", not(miri)))]
     unsafe {
         std::arch::asm!(
-            "mov {0}, rbx",
-            "mov {1}, rbp",
-            "mov {2}, r12",
-            "mov {3}, r13",
-            "mov {4}, r14",
-            "mov {5}, r15",
+            "mov {0}, rbp",
+            "mov {1}, r12",
+            "mov {2}, r13",
+            "mov {3}, r14",
+            "mov {4}, r15",
             out(reg) regs[0],
             out(reg) regs[1],
             out(reg) regs[2],
             out(reg) regs[3],
             out(reg) regs[4],
-            out(reg) regs[5],
         );
     }
     #[cfg(all(target_arch = "x86_64", not(miri)))]
@@ -264,17 +267,11 @@ where
 pub unsafe fn clear_registers() {
     #[cfg(all(target_arch = "x86_64", not(miri)))]
     unsafe {
-        // Clear callee-saved registers: R12-R15
-        // RBX is often reserved by LLVM, so valid pointer unlikely to be there if reserved.
         std::arch::asm!(
-            // "xor rbx, rbx",
-            // "xor rbp, rbp", // Don't clear RBP, it might be frame pointer!
             "xor r12, r12",
             "xor r13, r13",
             "xor r14, r14",
             "xor r15, r15",
-            // out("rbx") _,
-            // out("rbp") _,
             out("r12") _,
             out("r13") _,
             out("r14") _,

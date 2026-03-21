@@ -17,7 +17,7 @@
 
 ## Affected Component & Environment
 
-- **Component:** `PerThreadMarkQueue::scan_page_before_push` in `gc/marker.rs`
+- **Component:** `PerThreadMarkQueue::process_owned_page` (parallel mark scan) in `gc/marker.rs`
 - **OS / Architecture:** All
 - **Rust Version:** 1.75+
 - **rudo-gc Version:** Current
@@ -38,7 +38,7 @@
 
 ## Root Cause Analysis
 
-在 `gc/marker.rs:700-715`:
+在 `gc/marker.rs`（`try_mark` 成功分支，約 `process_owned_page` 內）:
 
 ```rust
 match (*header).try_mark(i) {
@@ -111,3 +111,13 @@ match (*header).try_mark(i) {
 
 - [x] Fixed
 - [ ] Not Fixed
+
+---
+
+## Resolution (2026-03-21)
+
+**Verified in code:** `PerThreadMarkQueue::process_owned_page` already performs a second `is_allocated(i)` immediately before `self.push(...)` after the first post-`try_mark` recheck (see `crates/rudo-gc/src/gc/marker.rs`, comment `bug260`). Matches the bug258-style TOCTOU fix in incremental marking.
+
+**Tests:** `cargo test -p rudo-gc --test parallel_gc -- --test-threads=1` — all passed.
+
+No further code change required; issue tracker was out of date (component was formerly described as `scan_page_before_push`, which no longer exists as a symbol).

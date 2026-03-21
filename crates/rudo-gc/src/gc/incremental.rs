@@ -824,8 +824,7 @@ unsafe fn scan_page_for_marked_refs(
 
     for i in 0..obj_count {
         // Only check is_marked at entry; is_allocated recheck after try_mark is sufficient.
-        // Redundant entry is_allocated check removed (bug258): provides no additional TOCTOU
-        // protection — lazy sweep can flip is_allocated between any check and push_work.
+        // Added second is_allocated check before push_work to fix TOCTOU (bug258).
         if !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
             // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep
@@ -837,17 +836,34 @@ unsafe fn scan_page_for_marked_refs(
                         break;
                     }
                     Ok(true) => {
+                        #[allow(clippy::cast_ptr_alignment)]
+                        #[allow(clippy::unnecessary_cast)]
+                        #[allow(clippy::ptr_as_ptr)]
+                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
+                        // Read generation after successful mark to detect slot reuse (bug336).
+                        let marked_generation = unsafe { (*gc_box_ptr).generation() };
+
                         // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
                         // If slot was swept after try_mark, clear mark and skip.
                         if !(*header).is_allocated(i) {
                             (*header).clear_mark_atomic(i);
                             break;
                         }
+                        // Verify generation hasn't changed (bug336 fix).
+                        // If slot was reallocated between try_mark and push_work,
+                        // generation will differ and we should skip this object.
+                        let current_generation = unsafe { (*gc_box_ptr).generation() };
+                        if current_generation != marked_generation {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
+                        // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
+                        // mark_object_black / mark_new_object_black (bug238, bug309).
+                        if unsafe { (*gc_box_ptr).is_under_construction() } {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
                         refs_found += 1;
-                        #[allow(clippy::cast_ptr_alignment)]
-                        #[allow(clippy::unnecessary_cast)]
-                        #[allow(clippy::ptr_as_ptr)]
-                        let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
                         if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
                             state.push_work(gc_box);
                         }
@@ -954,24 +970,53 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
     let obj_count = (*header).obj_count as usize;
 
     for i in 0..obj_count {
-        // Only check is_marked at entry; is_allocated recheck after set_mark is sufficient.
-        // Redundant entry is_allocated check removed (bug258): provides no additional TOCTOU
-        // protection — lazy sweep can flip is_allocated between any check and push_work.
+        // Entry: is_marked only. After set_mark: is_allocated + generation checks, then a
+        // second is_allocated immediately before push_work (bug258 lazy-sweep TOCTOU; bug336 reuse).
         if !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
             // set_mark returns true if we successfully marked - use it as try_mark
             // Re-check is_allocated after successful mark to fix TOCTOU with lazy sweep.
             if (*header).set_mark(i) {
-                // Re-check is_allocated to fix TOCTOU with lazy sweep.
-                // If slot was swept after set_mark, clear mark and skip.
-                if !(*header).is_allocated(i) {
-                    (*header).clear_mark_atomic(i);
-                    continue;
-                }
                 #[allow(clippy::cast_ptr_alignment)]
                 #[allow(clippy::unnecessary_cast)]
                 #[allow(clippy::ptr_as_ptr)]
                 let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                // Read generation after successful mark to detect slot reuse (bug336).
+                let marked_generation = unsafe { (*gc_box_ptr).generation() };
+
+                if !(*header).is_allocated(i) {
+                    // Slot was swept after set_mark. Check generation to distinguish
+                    // swept from swept+reused (bug363 fix).
+                    let current_generation = unsafe { (*gc_box_ptr).generation() };
+                    if current_generation == marked_generation {
+                        // Slot was swept but not reused - safe to clear mark.
+                        (*header).clear_mark_atomic(i);
+                        continue;
+                    }
+                    // Slot was reused - the mark now belongs to the new object, don't clear.
+                    // Continue to push_work to trace the new object.
+                }
+                // Verify generation hasn't changed (bug336 fix).
+                // If slot was reallocated between set_mark and push_work,
+                // generation will differ and we should skip this object.
+                let current_generation = unsafe { (*gc_box_ptr).generation() };
+                if current_generation != marked_generation {
+                    (*header).clear_mark_atomic(i);
+                    continue;
+                }
+                // Second is_allocated re-check to fix TOCTOU with lazy sweep (bug258).
+                // If slot was swept after first is_allocated check but before push_work,
+                // clear mark and skip to avoid pushing a pointer to a swept slot.
+                if !(*header).is_allocated(i) {
+                    (*header).clear_mark_atomic(i);
+                    continue;
+                }
+                // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
+                // mark_object_black / mark_new_object_black (bug238, bug309).
+                if unsafe { (*gc_box_ptr).is_under_construction() } {
+                    (*header).clear_mark_atomic(i);
+                    continue;
+                }
                 if let Some(gc_box) = NonNull::new(gc_box_ptr) {
                     let ptr = IncrementalMarkState::global();
                     ptr.push_work(gc_box);
@@ -1007,6 +1052,10 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
             if !(*header.as_ptr()).is_allocated(idx) {
                 return false;
             }
+            // Re-check is_allocated immediately before gc_box deref (bug311 lazy sweep TOCTOU).
+            if !(*header.as_ptr()).is_allocated(idx) {
+                return false;
+            }
             // Skip if object is under construction (e.g. during Gc::new_cyclic_weak).
             // Avoids incorrectly marking partially-initialized objects (bug238).
             #[allow(clippy::cast_ptr_alignment)]
@@ -1015,10 +1064,13 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
                 return false;
             }
             if !(*header.as_ptr()).is_marked(idx) {
+                let marked_generation = (*gc_box).generation();
                 (*header.as_ptr()).set_mark(idx);
-                // Re-check is_allocated to fix TOCTOU with lazy sweep (bug272).
-                // If slot was swept between initial check and set_mark, roll back.
                 if !(*header.as_ptr()).is_allocated(idx) {
+                    let current_generation = (*gc_box).generation();
+                    if current_generation != marked_generation {
+                        return true;
+                    }
                     (*header.as_ptr()).clear_mark_atomic(idx);
                     return false;
                 }
@@ -1056,6 +1108,14 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
     // Avoids incorrectly marking partially-initialized objects (bug238).
     #[allow(clippy::cast_ptr_alignment)]
     let gc_box = &*ptr.cast::<GcBox<()>>();
+
+    // Re-check is_allocated before using gc_box to fix TOCTOU with lazy sweep (bug307, bug350).
+    // If slot was swept after initial check but before we dereference,
+    // return None to avoid UAF.
+    if !(*h).is_allocated(idx) {
+        return None;
+    }
+
     if gc_box.is_under_construction() {
         return None;
     }
@@ -1072,11 +1132,20 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
                 return None;
             }
             Ok(true) => {
+                // Read generation after successful mark to detect slot reuse (bug355 fix).
+                let marked_generation = (*gc_box).generation();
                 // We just marked. Re-check is_allocated to fix TOCTOU with lazy sweep.
                 if (*h).is_allocated(idx) {
                     return Some(idx);
                 }
-                // Slot was swept between our check and try_mark. Roll back.
+                // Slot was swept between our check and try_mark.
+                // Verify generation hasn't changed to distinguish swept from swept+reused.
+                let current_generation = (*gc_box).generation();
+                if current_generation != marked_generation {
+                    // Slot was reused - the mark now belongs to the new object, don't clear.
+                    return None;
+                }
+                // Slot was swept but not reused - safe to clear mark.
                 (*h).clear_mark_atomic(idx);
                 return None;
             }

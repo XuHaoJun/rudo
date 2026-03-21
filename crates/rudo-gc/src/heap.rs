@@ -169,6 +169,10 @@ static ORPHAN_HANDLE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Migrate cross-thread roots from a terminating thread's TCB to the orphan table.
 /// Called from `ThreadLocalHeap::drop` before unregistering, so the TCB can be dropped.
+///
+/// FIX bug325: Hold both locks simultaneously to prevent race window where `resolve()`
+/// finds handle in neither TCB roots nor orphan table.
+#[allow(clippy::significant_drop_tightening)]
 pub fn migrate_roots_to_orphan(tcb: &ThreadControlBlock, thread_id: ThreadId) {
     let mut roots = tcb
         .cross_thread_roots
@@ -182,8 +186,9 @@ pub fn migrate_roots_to_orphan(tcb: &ThreadControlBlock, thread_id: ThreadId) {
         .drain()
         .map(|(k, v)| (k, v.as_ptr() as usize))
         .collect();
-    drop(roots);
 
+    // Acquire orphan lock BEFORE releasing TCB roots lock to prevent race (bug325).
+    // This ensures handle is either in TCB roots or orphan table at all times.
     let mut orphan = orphaned_cross_thread_roots().lock();
     for (handle_id, ptr) in drained {
         orphan.insert((thread_id, handle_id), ptr);
@@ -291,7 +296,18 @@ pub fn clone_orphan_root_with_inc_ref(
                 "clone_orphan_root_with_inc_ref: object slot was swept"
             );
         }
+        // Get generation BEFORE inc_ref to detect slot reuse.
+        // If slot is swept and reused between check and inc_ref,
+        // the generation will be different after inc_ref.
+        let pre_generation = (*ptr.as_ptr()).generation();
+
         (*ptr.as_ptr()).inc_ref();
+
+        // Verify generation hasn't changed - if slot was reused, undo inc_ref.
+        if pre_generation != (*ptr.as_ptr()).generation() {
+            GcBox::undo_inc_ref(ptr.as_ptr());
+            panic!("clone_orphan_root_with_inc_ref: slot was reused during clone (generation mismatch)");
+        }
     }
     let new_id = allocate_orphan_handle_id();
     orphan.insert((thread_id, new_id), ptr.as_ptr() as usize);
@@ -968,8 +984,9 @@ pub struct PageHeader {
     pub obj_count: u16,
     /// Offset from the start of the page to the first object.
     pub header_size: u16,
-    /// Generation index (for future generational GC).
-    pub generation: u8,
+    /// Generation index for generational GC.
+    /// Uses `AtomicU8` for thread-safe concurrent access during promotion and barrier checks.
+    pub generation: AtomicU8,
     /// Bitflags (`is_large_object`, `is_dirty`, etc.).
     pub flags: AtomicU8,
     /// Thread ID of the owner thread (for work-stealing).
@@ -2288,6 +2305,7 @@ impl LocalHeap {
         // Clear DEAD_FLAG, GEN_OLD_FLAG, and UNDER_CONSTRUCTION_FLAG so reused slot is not
         // incorrectly marked. (UNDER_CONSTRUCTION_FLAG can be set by Gc::new_cyclic_weak.)
         // Also clear dirty bit to prevent minor GC from scanning new objects as dirty (bug122).
+        // Increment generation to detect slot reuse (bug347).
         // SAFETY: obj_ptr points to a valid GcBox slot (was in free list).
         #[allow(clippy::cast_ptr_alignment)]
         unsafe {
@@ -2295,6 +2313,7 @@ impl LocalHeap {
             (*gc_box_ptr).clear_dead();
             (*gc_box_ptr).clear_gen_old();
             (*gc_box_ptr).clear_under_construction();
+            (*gc_box_ptr).increment_generation();
             (*header).clear_dirty(idx as usize);
         }
 
@@ -2379,7 +2398,7 @@ impl LocalHeap {
                 obj_count: obj_count as u16,
                 #[allow(clippy::cast_possible_truncation)]
                 header_size: h_size as u16,
-                generation: 0,
+                generation: AtomicU8::new(0),
                 flags: AtomicU8::new(0),
                 owner_thread: get_thread_id(),
                 #[cfg(feature = "lazy-sweep")]
@@ -2483,7 +2502,7 @@ impl LocalHeap {
                 obj_count: 1,
                 #[allow(clippy::cast_possible_truncation)]
                 header_size: h_size as u16,
-                generation: 0,
+                generation: AtomicU8::new(0),
                 flags: AtomicU8::new(PAGE_FLAG_LARGE),
                 owner_thread: get_thread_id(),
                 #[cfg(feature = "lazy-sweep")]
@@ -2796,14 +2815,21 @@ pub fn simple_write_barrier(ptr: *const u8) {
                         return;
                     }
                     let h_ptr = head_addr as *mut PageHeader;
-                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+
+                    // Validate MAGIC to ensure the large_object_map entry is valid (bug190, bug308).
+                    if (*h_ptr).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+
                     // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug286).
                     if !(*h_ptr).is_allocated(0) {
                         return;
                     }
+
+                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     // Cache flag to avoid TOCTOU between check and barrier (bug149).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h_ptr).generation == 0 && !has_gen_old {
+                    if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -2832,7 +2858,7 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
                     // Cache flag to avoid TOCTOU between check and barrier (bug149).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
+                    if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (h, index)
@@ -2899,7 +2925,7 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 // Skip barrier only if page is young AND object has no gen_old_flag (bug71).
                 // Cache flag to avoid TOCTOU between check and barrier (bug114).
                 let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                if (*h_ptr).generation == 0 && !has_gen_old {
+                if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                     return;
                 }
                 let owner = (*h_ptr).owner_thread;
@@ -2972,7 +2998,7 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 let gc_box_addr =
                     (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                 let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                if (*h).generation == 0 && !has_gen_old {
+                if (*h).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                     return;
                 }
                 (header, index)
@@ -3029,7 +3055,7 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     // Cache flag to avoid TOCTOU between check and barrier (bug133).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h_ptr).generation == 0 && !has_gen_old {
+                    if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -3058,7 +3084,7 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     // Cache flag to avoid TOCTOU between check and barrier (bug133).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
+                    if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (h, index)
@@ -3121,7 +3147,7 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                     }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h_ptr).generation == 0 && !has_gen_old {
+                    if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -3154,7 +3180,7 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
+                    if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (h, index)

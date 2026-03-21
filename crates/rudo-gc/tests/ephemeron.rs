@@ -765,3 +765,36 @@ fn test_ephemeron_with_weak_combo() {
 
     clear_roots!();
 }
+
+#[test]
+#[allow(clippy::redundant_clone)] // clone() is the behavior under test (must not panic)
+fn repro_bug317_clone_after_key_drops() {
+    // Bug #317: Ephemeron::clone() calls Gc::clone() which panics if value is
+    // dead/dropping. Confirm no panic when cloning after key dies.
+    use std::cell::Cell;
+
+    clear_roots!();
+
+    let key_dropped = Rc::new(Cell::new(false));
+    let value_dropped = Rc::new(Cell::new(false));
+
+    let ephemeron: Ephemeron<DropTracker, DropTracker>;
+    {
+        let key = Gc::new(DropTracker::new(key_dropped));
+        root!(key);
+        let value = Gc::new(DropTracker::new(value_dropped));
+        ephemeron = Ephemeron::new(&key, value);
+    } // key_gc drops here
+
+    clear_roots!();
+    collect_full();
+
+    // Key is now dead; value is still alive via Ephemeron's strong Gc<V>
+    assert!(!ephemeron.is_key_alive());
+
+    // This must NOT panic
+    let cloned = ephemeron.clone();
+    assert!(!cloned.is_key_alive());
+
+    clear_roots!();
+}

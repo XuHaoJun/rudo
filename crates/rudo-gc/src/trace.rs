@@ -8,6 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::BuildHasher;
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::ptr::GcBox;
@@ -172,7 +173,9 @@ impl<'a> GcVisitorConcurrent<'a> {
             let page_addr = header.as_ptr() as usize;
 
             if let Some(idx) = super::heap::ptr_to_object_index(raw.cast()) {
-                if self.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
+                if self.kind == VisitorKind::Minor
+                    && (*header.as_ptr()).generation.load(Ordering::Acquire) > 0
+                {
                     return;
                 }
 
@@ -182,7 +185,20 @@ impl<'a> GcVisitorConcurrent<'a> {
                 if (*header.as_ptr()).is_marked(idx) {
                     return;
                 }
-                (*header.as_ptr()).set_mark(idx);
+                #[allow(clippy::cast_ptr_alignment)]
+                let gc_box_ptr = raw.cast::<super::ptr::GcBox<()>>();
+                let marked_generation = (*gc_box_ptr).generation();
+                if !(*header.as_ptr()).set_mark(idx) {
+                    return;
+                }
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    let current_generation = (*gc_box_ptr).generation();
+                    if current_generation != marked_generation {
+                        return;
+                    }
+                    (*header.as_ptr()).clear_mark_atomic(idx);
+                    return;
+                }
             } else {
                 return;
             }

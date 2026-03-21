@@ -29,7 +29,7 @@ fn create_test_page() -> NonNull<PageHeader> {
             block_size: 4096,
             obj_count: 0,
             header_size: 64,
-            generation: 0,
+            generation: AtomicU8::new(0),
             flags: AtomicU8::new(0),
             owner_thread: 0,
             #[cfg(feature = "lazy-sweep")]

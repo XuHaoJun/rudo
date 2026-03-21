@@ -156,13 +156,16 @@ impl<T: ?Sized> GcCell<T> {
     where
         T: GcCapture,
     {
+        self.validate_thread_affinity("borrow_mut");
+
         let ptr = std::ptr::from_ref(self).cast::<u8>();
 
         // Cache barrier states once to avoid TOCTOU between check and use.
         // (bug110: triple is_incremental_marking_active call caused inconsistent barrier state)
         // FIX bug301: mark_object_black should only be called during incremental marking, not generational barrier.
-        // Note: generational barrier is always triggered via gc_cell_validate_and_barrier (marks page as dirty).
+        // FIX bug302: Check is_generational_barrier_active() before triggering barrier, matching GcThreadSafeCell.
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
         if incremental_active {
             unsafe {
@@ -185,7 +188,10 @@ impl<T: ?Sized> GcCell<T> {
             }
         }
 
-        crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut", incremental_active);
+        // FIX bug302: Check is_generational_barrier_active() before triggering barrier, matching GcThreadSafeCell.
+        if generational_active || incremental_active {
+            crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut", incremental_active);
+        }
 
         let result = self.inner.borrow_mut();
 
@@ -249,6 +255,10 @@ impl<T: ?Sized> GcCell<T> {
     #[inline]
     pub fn borrow_mut_gen_only(&self) -> RefMut<'_, T> {
         self.validate_thread_affinity("borrow_mut_gen_only");
+
+        let ptr = std::ptr::from_ref(self).cast::<u8>();
+        crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut_gen_only", false);
+
         self.inner.borrow_mut()
     }
 
@@ -260,7 +270,7 @@ impl<T: ?Sized> GcCell<T> {
         let heap_end = crate::heap::heap_end();
         let ptr_addr = cell_ptr as usize;
 
-        if ptr_addr < heap_start || ptr_addr > heap_end {
+        if ptr_addr < heap_start || ptr_addr >= heap_end {
             return;
         }
 
@@ -306,7 +316,7 @@ impl<T: ?Sized> GcCell<T> {
 unsafe fn record_page_in_remembered_buffer(page: NonNull<PageHeader>) -> bool {
     crate::heap::with_heap(|heap| {
         let header = page.as_ptr();
-        if (*header).generation > 0 {
+        if (*header).generation.load(Ordering::Acquire) > 0 {
             heap.record_in_remembered_buffer(page);
             true
         } else {
@@ -1109,6 +1119,8 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         GcThreadSafeRefMut {
             inner: guard,
             _marker: std::marker::PhantomData,
+            incremental_active,
+            generational_active,
         }
     }
 
@@ -1155,6 +1167,9 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     /// containing GC pointers. Use with caution.
     #[inline]
     pub fn borrow_mut_gen_only(&self) -> parking_lot::MutexGuard<'_, T> {
+        let incremental_active = false;
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
         self.inner.lock()
     }
 
@@ -1221,7 +1236,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h_ptr).generation == 0 && !has_gen_old {
+                    if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     NonNull::new_unchecked(h_ptr)
@@ -1252,7 +1267,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h.as_ptr()).generation == 0 && !has_gen_old {
+                    if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     h
@@ -1294,7 +1309,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                         // (bug202, matches unified_write_barrier).
                         let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                         let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                        if (*header).generation == 0 && !has_gen_old {
+                        if (*header).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                             return;
                         }
                         (*header).set_dirty(0);
@@ -1324,7 +1339,9 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                             let gc_box_addr = (header_page_addr + header_size + index * block_size)
                                 as *const GcBox<()>;
                             let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                            if (*header.as_ptr()).generation == 0 && !has_gen_old {
+                            if (*header.as_ptr()).generation.load(Ordering::Acquire) == 0
+                                && !has_gen_old
+                            {
                                 return;
                             }
                             (*header.as_ptr()).set_dirty(index);
@@ -1369,6 +1386,8 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 pub struct GcThreadSafeRefMut<'a, T: GcCapture + ?Sized> {
     inner: parking_lot::MutexGuard<'a, T>,
     _marker: std::marker::PhantomData<&'a mut T>,
+    incremental_active: bool,
+    generational_active: bool,
 }
 
 impl<T: GcCapture + ?Sized> std::ops::Deref for GcThreadSafeRefMut<'_, T> {
@@ -1387,8 +1406,8 @@ impl<T: GcCapture + ?Sized> std::ops::DerefMut for GcThreadSafeRefMut<'_, T> {
 
 impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
     fn drop(&mut self) {
-        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
-        let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        let incremental_active = self.incremental_active;
+        let generational_active = self.generational_active;
 
         let mut ptrs = Vec::with_capacity(32);
         (*self.inner).capture_gc_ptrs_into(&mut ptrs);

@@ -321,7 +321,14 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
                     && !gc_box.is_under_construction(),
                 "Handle::get: cannot access a dead, dropping, or under construction Gc"
             );
-            gc_box.value()
+            let pre_generation = gc_box.generation();
+            let value = gc_box.value();
+            assert_eq!(
+                pre_generation,
+                gc_box.generation(),
+                "Handle::get: slot was reused between pre-check and value read (generation mismatch)"
+            );
+            value
         }
     }
 
@@ -377,9 +384,15 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
                     && !gc_box.is_under_construction(),
                 "Handle::to_gc: cannot convert a dead, dropping, or under construction Gc"
             );
+            let pre_generation = gc_box.generation();
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("Handle::to_gc: object is being dropped by another thread");
             }
+            assert_eq!(
+                pre_generation,
+                gc_box.generation(),
+                "Handle::to_gc: slot was reused between pre-check and inc_ref (generation mismatch)"
+            );
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
                 assert!(

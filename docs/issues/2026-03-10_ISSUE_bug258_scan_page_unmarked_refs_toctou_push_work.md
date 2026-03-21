@@ -170,4 +170,16 @@ if (*header).set_mark(i) {
 - 該函數在成功標記後會再次檢查 is_allocated
 - 但 scan_page_for_unmarked_refs 沒有這樣做
 
-**Status: Open** - 等待修復。
+**Status:** Superseded by resolution below (was Open pending fix).
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed in `crates/rudo-gc/src/gc/incremental.rs` (`scan_page_for_unmarked_refs`).
+
+After a successful `set_mark(i)`, the code now:
+
+1. Re-checks `is_allocated(i)` (TOCTOU with lazy sweep after mark).
+2. Verifies `GcBox` generation is unchanged (slot reuse between checks and `push_work`, bug336).
+3. Performs a **second** `is_allocated(i)` check immediately before `push_work`, closing the race window described in this issue (bug258).
+
+No further code change required; issue closed as verified by code inspection.

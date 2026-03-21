@@ -274,6 +274,26 @@ fn test_weak_is_valid_after_gc() {
     assert!(!weak.is_valid());
 }
 
+/// Test that `WeakCrossThreadHandle::is_valid()` does not increment `ref_count` (bug296).
+#[test]
+fn test_weak_is_valid_does_not_increment_ref_count() {
+    use std::num::NonZeroUsize;
+
+    let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+    let weak = gc.weak_cross_thread_handle();
+
+    assert_eq!(Gc::ref_count(&gc), NonZeroUsize::new(1).unwrap());
+
+    let is_valid = weak.is_valid();
+    assert!(is_valid, "weak should be valid");
+
+    assert_eq!(
+        Gc::ref_count(&gc),
+        NonZeroUsize::new(1).unwrap(),
+        "is_valid() should not increment ref_count"
+    );
+}
+
 /// Test weak handle `is_valid()` returns false when origin thread has terminated (bug189).
 #[test]
 fn test_weak_is_valid_after_origin_thread_terminated() {
@@ -599,5 +619,29 @@ fn test_weak_cross_thread_handle_increments_weak_count() {
     assert_eq!(
         after_drop, before,
         "weak_cross_thread_handle should decrement weak count on drop"
+    );
+}
+
+/// Test `WeakCrossThreadHandle::try_upgrade` returns `None` when origin thread has terminated (bug338).
+#[test]
+fn test_weak_try_upgrade_returns_none_after_origin_terminated() {
+    let (sender, receiver) = mpsc::channel();
+
+    let origin = thread::spawn(move || {
+        let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+        let weak = gc.weak_cross_thread_handle();
+        sender.send(weak).unwrap();
+        // Thread exits here; origin_tcb will be dropped.
+    });
+
+    let weak = receiver.recv().unwrap();
+    origin.join().unwrap();
+
+    // try_upgrade() must return None when origin thread has terminated,
+    // consistent with try_resolve() returning None.
+    let result = weak.try_upgrade();
+    assert!(
+        result.is_none(),
+        "try_upgrade() should return None when origin thread has terminated"
     );
 }

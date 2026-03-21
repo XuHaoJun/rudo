@@ -101,17 +101,17 @@ impl<T: Trace + 'static> GcHandle<T> {
         if self.handle_id == HandleId::INVALID {
             return false;
         }
-        // Check orphan first: when origin exits, roots migrate before TCB drops. There is a
-        // window where upgrade() returns Some but roots.strong is empty (already migrated).
-        let orphan = heap::lock_orphan_roots();
-        if orphan.contains_key(&(self.origin_thread, self.handle_id)) {
-            return true;
-        }
-        drop(orphan);
-        self.origin_tcb.upgrade().is_some_and(|tcb| {
+        // TCB-first + orphan fallback (bug313): checking orphan then releasing the lock
+        // allowed a race with `migrate_roots_to_orphan` — another thread could see an empty
+        // TCB root map while the entry already lives only in the orphan table.
+        if let Some(tcb) = self.origin_tcb.upgrade() {
             let roots = tcb.cross_thread_roots.lock().unwrap();
-            roots.strong.contains_key(&self.handle_id)
-        })
+            if roots.strong.contains_key(&self.handle_id) {
+                return true;
+            }
+        }
+        let orphan = heap::lock_orphan_roots();
+        orphan.contains_key(&(self.origin_thread, self.handle_id))
     }
 
     /// Explicitly unregisters this handle from the root set.
@@ -193,7 +193,13 @@ impl<T: Trace + 'static> GcHandle<T> {
             },
             |tcb| {
                 let roots = tcb.cross_thread_roots.lock().unwrap();
-                if !roots.strong.contains_key(&self.handle_id) {
+                if roots.strong.contains_key(&self.handle_id) {
+                    return self.resolve_impl();
+                }
+                // Migration window (bug313): roots drained, entry only in orphan table.
+                drop(roots);
+                let orphan = heap::lock_orphan_roots();
+                if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
                     panic!("GcHandle::resolve: handle has been unregistered");
                 }
                 self.resolve_impl()
@@ -219,11 +225,39 @@ impl<T: Trace + 'static> GcHandle<T> {
                 gc_box.dropping_state() == 0,
                 "GcHandle::resolve: object is being dropped"
             );
+
+            // Check is_allocated BEFORE inc_ref to avoid TOCTOU (bug345).
+            // The slot could be swept and reused between flag check and inc_ref,
+            // causing inc_ref to modify the wrong object's ref count.
+            if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "GcHandle::resolve: object slot was swept before inc_ref"
+                );
+            }
+
+            // Get generation BEFORE inc_ref to detect slot reuse (bug347).
+            // If the slot is swept and reused between this check and inc_ref,
+            // the generation will be different after inc_ref.
+            let pre_generation = gc_box.generation();
+
             gc_box.inc_ref();
+
+            // Verify generation hasn't changed - if slot was reused, this will panic.
+            // This prevents inc_ref from operating on the wrong object's ref count.
+            assert_eq!(
+                pre_generation,
+                gc_box.generation(),
+                "GcHandle::resolve: slot was reused between pre-check and inc_ref (generation mismatch)"
+            );
 
             // Post-increment safety check (TOCTOU: object may have been dropped between
             // pre-check and inc_ref). Same pattern as Weak::upgrade.
-            if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+            if gc_box.dropping_state() != 0
+                || gc_box.has_dead_flag()
+                || gc_box.is_under_construction()
+            {
                 GcBox::dec_ref(self.ptr.as_ptr());
                 panic!("GcHandle::resolve: object was dropped after inc_ref (TOCTOU race)");
             }
@@ -287,7 +321,14 @@ impl<T: Trace + 'static> GcHandle<T> {
             },
             |tcb| {
                 let roots = tcb.cross_thread_roots.lock().unwrap();
-                if !roots.strong.contains_key(&self.handle_id) {
+                if roots.strong.contains_key(&self.handle_id) {
+                    return self.try_resolve_impl();
+                }
+                // Same migration window as `is_valid` (bug313): roots may be empty while the
+                // entry already moved under the orphan lock.
+                drop(roots);
+                let orphan = heap::lock_orphan_roots();
+                if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
                     return None;
                 }
                 self.try_resolve_impl()
@@ -307,10 +348,36 @@ impl<T: Trace + 'static> GcHandle<T> {
             {
                 return None;
             }
+
+            // Check is_allocated BEFORE inc_ref to avoid TOCTOU (bug345).
+            // The slot could be swept and reused between flag check and inc_ref,
+            // causing inc_ref to modify the wrong object's ref count.
+            if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return None;
+                }
+            }
+
+            // Get generation BEFORE inc_ref to detect slot reuse (bug347).
+            // If the slot is swept and reused between this check and inc_ref,
+            // the generation will be different after inc_ref.
+            let pre_generation = gc_box.generation();
+
             gc_box.inc_ref();
 
+            // Verify generation hasn't changed - if slot was reused, return None.
+            // This prevents inc_ref from operating on the wrong object's ref count.
+            if pre_generation != gc_box.generation() {
+                GcBox::dec_ref(self.ptr.as_ptr());
+                return None;
+            }
+
             // Post-increment safety check (TOCTOU). Same pattern as Weak::try_upgrade.
-            if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+            if gc_box.dropping_state() != 0
+                || gc_box.has_dead_flag()
+                || gc_box.is_under_construction()
+            {
                 GcBox::dec_ref(self.ptr.as_ptr());
                 return None;
             }
@@ -318,7 +385,7 @@ impl<T: Trace + 'static> GcHandle<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    // Don't call dec_ref - slot may be reused (bug133)
+                    GcBox::dec_ref(self.ptr.as_ptr());
                     return None;
                 }
             }
@@ -361,15 +428,27 @@ impl<T: Trace + 'static> GcHandle<T> {
                 panic!("GcHandle::downgrade: handle has been unregistered");
             }
             unsafe {
-                // inc_weak before is_allocated check to avoid TOCTOU with lazy sweep (bug241).
-                // If slot was swept between check and inc_weak, we'd increment the wrong object.
+                // Get generation BEFORE inc_weak to detect slot reuse (bug351).
+                let pre_generation = (*self.ptr.as_ptr()).generation();
+
                 (*self.ptr.as_ptr()).inc_weak();
+
+                // Verify generation hasn't changed - if slot was reused, undo inc_weak.
+                if pre_generation != (*self.ptr.as_ptr()).generation() {
+                    (*self.ptr.as_ptr()).dec_weak();
+                    drop(roots);
+                    return WeakCrossThreadHandle {
+                        weak: GcBoxWeakRef::null(),
+                        origin_tcb: Weak::clone(&self.origin_tcb),
+                        origin_thread: self.origin_thread,
+                    };
+                }
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
                 {
                     let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        // Don't call dec_weak - slot may be reused (bug133)
+                        (*self.ptr.as_ptr()).dec_weak();
                         drop(roots);
                         return WeakCrossThreadHandle {
                             weak: GcBoxWeakRef::null(),
@@ -396,14 +475,27 @@ impl<T: Trace + 'static> GcHandle<T> {
                 panic!("GcHandle::downgrade: handle has been unregistered");
             }
             unsafe {
-                // inc_weak before is_allocated check to avoid TOCTOU with lazy sweep (bug241).
+                // Get generation BEFORE inc_weak to detect slot reuse (bug351).
+                let pre_generation = (*self.ptr.as_ptr()).generation();
+
                 (*self.ptr.as_ptr()).inc_weak();
+
+                // Verify generation hasn't changed - if slot was reused, undo inc_weak.
+                if pre_generation != (*self.ptr.as_ptr()).generation() {
+                    (*self.ptr.as_ptr()).dec_weak();
+                    drop(orphan);
+                    return WeakCrossThreadHandle {
+                        weak: GcBoxWeakRef::null(),
+                        origin_tcb: Weak::clone(&self.origin_tcb),
+                        origin_thread: self.origin_thread,
+                    };
+                }
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
                 {
                     let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        // Don't call dec_weak - slot may be reused (bug133)
+                        (*self.ptr.as_ptr()).dec_weak();
                         drop(orphan);
                         return WeakCrossThreadHandle {
                             weak: GcBoxWeakRef::null(),
@@ -525,7 +617,18 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
                         "GcHandle::clone: object slot was swept"
                     );
                 }
+                // Get generation BEFORE inc_ref to detect slot reuse.
+                // If slot is swept and reused between check and inc_ref,
+                // the generation will be different after inc_ref.
+                let pre_generation = (*self.ptr.as_ptr()).generation();
+
                 (*self.ptr.as_ptr()).inc_ref();
+
+                // Verify generation hasn't changed - if slot was reused, undo inc_ref.
+                if pre_generation != (*self.ptr.as_ptr()).generation() {
+                    crate::ptr::GcBox::undo_inc_ref(self.ptr.as_ptr());
+                    panic!("GcHandle::clone: slot was reused during clone (generation mismatch)");
+                }
             }
             let new_id = roots.allocate_id();
             roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());
@@ -568,7 +671,15 @@ impl<T: Trace + 'static> Drop for GcHandle<T> {
             let _ = heap::remove_orphan_root(self.origin_thread, self.handle_id);
         }
         self.handle_id = HandleId::INVALID;
-        // Release the ref count we held. May trigger object drop if this was last ref.
+
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return;
+                }
+            }
+        }
         crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
     }
 }
@@ -709,6 +820,7 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     /// - The weak ref is null
     /// - The object has been collected
     /// - The memory location is obviously invalid (misaligned or too low address)
+    /// - The origin thread has terminated
     ///
     /// # Safety
     ///
@@ -716,19 +828,14 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     ///
     /// # Panics
     ///
-    /// Panics if called from a thread other than the origin thread (including
-    /// when it has terminated). Prefer [`try_resolve()`] when origin may be dead.
+    /// Panics if called from a live thread other than the origin thread.
     #[track_caller]
     pub fn try_upgrade(&self) -> Option<Gc<T>> {
         // Check TCB liveness BEFORE the ThreadId comparison to prevent ThreadId
         // reuse from bypassing origin-thread affinity after the thread terminates.
-        if self.origin_tcb.upgrade().is_none() {
-            panic!(
-                "WeakCrossThreadHandle::try_upgrade: origin thread has terminated (origin={:?}). \
-                 Use try_resolve() instead.",
-                self.origin_thread
-            );
-        }
+        // Returns None (rather than panicking) if origin thread has terminated,
+        // consistent with try_resolve().
+        self.origin_tcb.upgrade()?;
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,

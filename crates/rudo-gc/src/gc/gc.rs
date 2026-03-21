@@ -1233,11 +1233,16 @@ unsafe fn mark_and_push_to_worker_queue(
                             break; // Already marked by another thread, slot valid
                         }
                         Ok(true) => {
+                            let marked_generation = (*gc_box.as_ptr()).generation();
                             if !(*header.as_ptr()).is_allocated(idx) {
+                                let current_generation = (*gc_box.as_ptr()).generation();
+                                if current_generation != marked_generation {
+                                    return;
+                                }
                                 (*header.as_ptr()).clear_mark_atomic(idx);
                                 return;
                             }
-                            break; // We marked, slot still valid
+                            break;
                         }
                         Err(()) => {} // CAS failed, retry
                     }
@@ -1530,7 +1535,7 @@ fn mark_major_roots_parallel(
         .all_pages()
         .filter_map(|p| unsafe {
             let header = p.as_ptr();
-            if (*header).generation == 1 {
+            if (*header).generation.load(Ordering::Acquire) == 1 {
                 Some(header.cast_const())
             } else {
                 None
@@ -1690,7 +1695,7 @@ fn promote_young_pages(heap: &mut LocalHeap) {
     for page_ptr in heap.all_pages() {
         unsafe {
             let header = page_ptr.as_ptr();
-            if (*header).generation == 0 {
+            if (*header).generation.load(Ordering::Acquire) == 0 {
                 // Determine if page has survivors
                 let mut has_survivors = false;
                 let mut survivors_count = 0;
@@ -1704,7 +1709,7 @@ fn promote_young_pages(heap: &mut LocalHeap) {
                 }
 
                 if has_survivors {
-                    (*header).generation = 1; // Promote!
+                    (*header).generation.store(1, Ordering::Release); // Promote!
 
                     let block_size = (*header).block_size as usize;
                     let header_size = crate::heap::PageHeader::header_size(block_size);
@@ -2108,7 +2113,7 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
             }
         }
 
-        if (*header.as_ptr()).generation > 0 {
+        if (*header.as_ptr()).generation.load(Ordering::Acquire) > 0 {
             return;
         }
 
@@ -2166,7 +2171,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                 continue;
             }
 
-            if only_young && (*header).generation > 0 {
+            if only_young && (*header).generation.load(Ordering::Acquire) > 0 {
                 continue;
             }
 
@@ -2186,7 +2191,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                     // Suspicious sweep detection: young object being swept during major GC
                     #[cfg(feature = "debug-suspicious-sweep")]
                     {
-                        let is_suspicious = (*header).generation == 0
+                        let is_suspicious = (*header).generation.load(Ordering::Acquire) == 0
                             && !only_young
                             && crate::gc::is_suspicious_sweep(obj_ptr);
                         assert!(
@@ -2205,11 +2210,11 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                    let weak_count = (*gc_box_ptr).weak_count_acquire();
+                    let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
                     if weak_count > 0 {
                         // Has weak refs - drop value but keep allocation
-                        if !(*gc_box_ptr).has_dead_flag() {
+                        if !dead_flag {
                             ((*gc_box_ptr).drop_fn)(obj_ptr);
                             (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                             (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
@@ -2275,7 +2280,7 @@ fn sweep_phase2_reclaim(
                 continue;
             }
 
-            if only_young && (*header).generation > 0 {
+            if only_young && (*header).generation.load(Ordering::Acquire) > 0 {
                 continue;
             }
 
@@ -2296,9 +2301,9 @@ fn sweep_phase2_reclaim(
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                    let weak_count = (*gc_box_ptr).weak_count_acquire();
+                    let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
-                    if weak_count == 0 && (*gc_box_ptr).has_dead_flag() {
+                    if weak_count == 0 && dead_flag {
                         // No weak refs, already dropped and dead - reclaim
                         // CRITICAL FIX: Write free list head BEFORE clearing allocated bit
                         // to prevent new allocations from reusing this slot with corrupted metadata
@@ -2354,7 +2359,7 @@ fn promote_all_pages(heap: &LocalHeap) {
     for page_ptr in heap.all_pages() {
         unsafe {
             let header = page_ptr.as_ptr();
-            (*header).generation = 1;
+            (*header).generation.store(1, Ordering::Release);
 
             let block_size = (*header).block_size as usize;
             let header_size = crate::heap::PageHeader::header_size(block_size);
@@ -2435,7 +2440,9 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
     }
 
     if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
-        if visitor.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
+        if visitor.kind == VisitorKind::Minor
+            && (*header.as_ptr()).generation.load(Ordering::Acquire) > 0
+        {
             return;
         }
 
@@ -2483,7 +2490,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
         unsafe {
             let header = page_ptr.as_ptr();
 
-            if only_young && (*header).generation > 0 {
+            if only_young && (*header).generation.load(Ordering::Acquire) > 0 {
                 continue;
             }
 
@@ -2494,10 +2501,10 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-                let weak_count = (*gc_box_ptr).weak_count_acquire();
+                let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
                 if weak_count > 0 {
-                    if !(*gc_box_ptr).has_dead_flag() {
+                    if !dead_flag {
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
                         (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                         (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
@@ -2597,10 +2604,10 @@ unsafe fn lazy_sweep_page(
             #[allow(clippy::cast_ptr_alignment)]
             let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-            let weak_count = (*gc_box_ptr).weak_count_acquire();
+            let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
             if weak_count > 0 {
-                if !(*gc_box_ptr).has_dead_flag() {
+                if !dead_flag {
                     ((*gc_box_ptr).drop_fn)(obj_ptr);
                     (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                     (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
@@ -2723,10 +2730,10 @@ unsafe fn lazy_sweep_page_all_dead(
             #[allow(clippy::cast_ptr_alignment)]
             let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
 
-            let weak_count = (*gc_box_ptr).weak_count_acquire();
+            let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
             if weak_count > 0 {
-                if !(*gc_box_ptr).has_dead_flag() {
+                if !dead_flag {
                     ((*gc_box_ptr).drop_fn)(obj_ptr);
                     (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                     (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
@@ -3069,7 +3076,9 @@ impl Visitor for GcVisitor {
                     (*header.as_ptr()).set_mark(idx);
                     self.objects_marked += 1;
 
-                    if self.kind == VisitorKind::Minor && (*header.as_ptr()).generation > 0 {
+                    if self.kind == VisitorKind::Minor
+                        && (*header.as_ptr()).generation.load(Ordering::Acquire) > 0
+                    {
                         return;
                     }
                 } else {
@@ -3185,7 +3194,7 @@ mod tests {
             unsafe {
                 let page = crate::heap::ptr_to_page_header(ptr.cast());
                 assert_eq!(
-                    (*page.as_ptr()).generation,
+                    (*page.as_ptr()).generation.load(Ordering::Acquire),
                     1,
                     "Survivors should be promoted to Old Gen"
                 );
@@ -3217,7 +3226,7 @@ mod tests {
             let ptr = crate::Gc::as_ptr(&old_cell);
             unsafe {
                 let page = crate::heap::ptr_to_page_header(ptr.cast());
-                assert_eq!((*page.as_ptr()).generation, 1);
+                assert_eq!((*page.as_ptr()).generation.load(Ordering::Acquire), 1);
             }
         }
 
