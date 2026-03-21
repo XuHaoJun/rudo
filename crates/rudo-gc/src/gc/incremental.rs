@@ -798,6 +798,10 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
         return;
     }
 
+    if (*gc_box.as_ptr()).is_under_construction() {
+        return;
+    }
+
     let block_size = (*header.as_ptr()).block_size as usize;
     let header_size = crate::heap::PageHeader::header_size(block_size);
     let data_ptr = ptr.add(header_size);

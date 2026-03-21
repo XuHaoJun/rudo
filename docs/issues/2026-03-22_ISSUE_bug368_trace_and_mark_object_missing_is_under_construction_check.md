@@ -1,7 +1,7 @@
 # [Bug]: trace_and_mark_object missing is_under_construction check
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -124,3 +124,16 @@ Tracing uninitialized memory is undefined behavior in Rust. Even if the fields h
 
 **Geohot (Exploit 觀點):**
 If an attacker can trigger a safepoint during a victim's `Gc::new_cyclic_weak` allocation, they could cause the GC to trace uninitialized memory. This could potentially be exploited to leak sensitive data from uninitialized heap memory, or cause a crash if the uninitialized data contains invalid pointers.
+
+---
+
+## 驗證記錄
+
+**驗證日期:** 2026-03-22
+
+**驗證方法:**
+- Code review comparing `trace_and_mark_object` (incremental.rs:785-812) with other similar functions
+- Confirmed: `scan_page_for_marked_refs` (line 862), `scan_page_for_unmarked_refs` (line 1016), `mark_new_object_black` (line 1063), `mark_object_black` (line 1119) all have `is_under_construction` check
+- Confirmed: `trace_and_mark_object` was MISSING this check
+- Applied fix by adding the check at line 801 (after `is_allocated` check, before `trace_fn` call)
+- All tests pass with the fix
