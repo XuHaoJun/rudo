@@ -3004,6 +3004,11 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 (header, index)
             };
 
+            // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug364).
+            if !(*h.as_ptr()).is_allocated(index) {
+                return;
+            }
+
             (*h.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(h);
 
@@ -3131,7 +3136,7 @@ pub fn incremental_write_barrier(ptr: *const u8) {
         unsafe {
             // Tail pages of multi-page large objects have no PageHeader; ptr_to_page_header
             // would yield garbage. Check large_object_map first (see find_gc_box_from_ptr).
-            let (header, _index) =
+            let (header, index) =
                 if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
                     if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + h_size + size {
                         return;
@@ -3185,6 +3190,11 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                     }
                     (h, index)
                 };
+
+            // Skip if slot was swept; avoids corrupting remembered set with reused slot (bug364).
+            if !(*header.as_ptr()).is_allocated(index) {
+                return;
+            }
 
             heap.record_in_remembered_buffer(header);
         }
