@@ -823,8 +823,8 @@ impl<T: Trace + 'static> Clone for AsyncHandle<T> {
 
 impl<T: Trace + 'static> Copy for AsyncHandle<T> {}
 
-unsafe impl<T: Trace + 'static> Send for AsyncHandle<T> {}
-unsafe impl<T: Trace + 'static> Sync for AsyncHandle<T> {}
+unsafe impl<T: Trace + Send + 'static> Send for AsyncHandle<T> {}
+unsafe impl<T: Trace + Sync + 'static> Sync for AsyncHandle<T> {}
 
 /// Spawns an async task with automatic GC root tracking.
 ///
