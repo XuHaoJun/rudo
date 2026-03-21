@@ -1,7 +1,7 @@
 # [Bug]: clear_registers 未清除 RBX 導致虛假Roots
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
