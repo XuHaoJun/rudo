@@ -985,8 +985,16 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                 let marked_generation = unsafe { (*gc_box_ptr).generation() };
 
                 if !(*header).is_allocated(i) {
-                    (*header).clear_mark_atomic(i);
-                    continue;
+                    // Slot was swept after set_mark. Check generation to distinguish
+                    // swept from swept+reused (bug363 fix).
+                    let current_generation = unsafe { (*gc_box_ptr).generation() };
+                    if current_generation == marked_generation {
+                        // Slot was swept but not reused - safe to clear mark.
+                        (*header).clear_mark_atomic(i);
+                        continue;
+                    }
+                    // Slot was reused - the mark now belongs to the new object, don't clear.
+                    // Continue to push_work to trace the new object.
                 }
                 // Verify generation hasn't changed (bug336 fix).
                 // If slot was reallocated between set_mark and push_work,
