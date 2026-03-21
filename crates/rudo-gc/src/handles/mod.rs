@@ -322,12 +322,12 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
                 "Handle::get: cannot access a dead, dropping, or under construction Gc"
             );
             let pre_generation = gc_box.generation();
-            let value = gc_box.value();
             assert_eq!(
                 pre_generation,
                 gc_box.generation(),
-                "Handle::get: slot was reused between pre-check and value read (generation mismatch)"
+                "Handle::get: slot was reused before value read (generation mismatch)"
             );
+            let value = gc_box.value();
             value
         }
     }
