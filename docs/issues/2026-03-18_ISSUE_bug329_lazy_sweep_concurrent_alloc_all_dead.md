@@ -100,8 +100,8 @@ if (*header).is_allocated(i) {
 
 ## ✅ 修復記錄 (Fix Record)
 
-- **Date:** 
-- **Fix:**
+- **Date:** 2026-03-21
+- **Fix:** Added `all_dead = false;` before `break;` at `gc.rs:2670` when concurrent allocation is detected in `lazy_sweep_page`
 
 ---
 

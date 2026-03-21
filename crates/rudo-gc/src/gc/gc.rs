@@ -2667,6 +2667,7 @@ unsafe fn lazy_sweep_page(
                                 } else {
                                     current_free = next_head;
                                 }
+                                all_dead = false;
                                 break; // Slot was concurrently allocated; skip to next slot
                             }
                             did_reclaim = true;
