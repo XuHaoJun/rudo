@@ -1974,7 +1974,14 @@ impl<T: Trace + 'static> Gc<T> {
                     && !gc_box.is_under_construction(),
                 "Gc::weak_cross_thread_handle: cannot create handle for dead, dropping, or under construction Gc"
             );
+            let pre_generation = gc_box.generation();
             gc_box.inc_weak();
+            if pre_generation != gc_box.generation() {
+                gc_box.dec_weak();
+                panic!(
+                    "Gc::weak_cross_thread_handle: slot was reused between pre-check and inc_weak"
+                );
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
