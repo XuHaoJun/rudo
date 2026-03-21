@@ -857,6 +857,12 @@ unsafe fn scan_page_for_marked_refs(
                             (*header).clear_mark_atomic(i);
                             break;
                         }
+                        // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
+                        // mark_object_black / mark_new_object_black (bug238, bug309).
+                        if unsafe { (*gc_box_ptr).is_under_construction() } {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
                         refs_found += 1;
                         if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
                             state.push_work(gc_box);
@@ -964,9 +970,8 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
     let obj_count = (*header).obj_count as usize;
 
     for i in 0..obj_count {
-        // Only check is_marked at entry; is_allocated recheck after set_mark is sufficient.
-        // Redundant entry is_allocated check removed (bug258): provides no additional TOCTOU
-        // protection — lazy sweep can flip is_allocated between any check and push_work.
+        // Entry: is_marked only. After set_mark: is_allocated + generation checks, then a
+        // second is_allocated immediately before push_work (bug258 lazy-sweep TOCTOU; bug336 reuse).
         if !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
             // set_mark returns true if we successfully marked - use it as try_mark
@@ -995,6 +1000,12 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                 // If slot was swept after first is_allocated check but before push_work,
                 // clear mark and skip to avoid pushing a pointer to a swept slot.
                 if !(*header).is_allocated(i) {
+                    (*header).clear_mark_atomic(i);
+                    continue;
+                }
+                // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
+                // mark_object_black / mark_new_object_black (bug238, bug309).
+                if unsafe { (*gc_box_ptr).is_under_construction() } {
                     (*header).clear_mark_atomic(i);
                     continue;
                 }
@@ -1033,9 +1044,7 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
             if !(*header.as_ptr()).is_allocated(idx) {
                 return false;
             }
-            // Re-check is_allocated before using gc_box to fix TOCTOU with lazy sweep (bug351).
-            // If slot was swept after initial check but before we dereference,
-            // return false to avoid UAF.
+            // Re-check is_allocated immediately before gc_box deref (bug311 lazy sweep TOCTOU).
             if !(*header.as_ptr()).is_allocated(idx) {
                 return false;
             }

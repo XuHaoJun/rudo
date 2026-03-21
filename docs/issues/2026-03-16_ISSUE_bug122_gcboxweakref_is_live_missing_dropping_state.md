@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::is_live() 缺少 dropping_state 檢查導致不一致行為
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -147,3 +147,13 @@ pub(crate) fn is_live(&self) -> bool {
 - **Bug58**: `Weak::is_alive()` 缺少 dropping_state 檢查 (已修復，公開 API)
 - **Bug42**: `Weak::try_upgrade()` 缺少 dropping_state 檢查 (已修復)
 - **Bug52**: `Weak::strong_count()` 缺少 dropping_state 檢查 (已修復)
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed in current tree; issue file was stale.
+
+`GcBoxWeakRef::is_live()` in `crates/rudo-gc/src/ptr.rs` now matches `try_upgrade()` / `upgrade()` semantics: after `is_under_construction()` and `has_dead_flag()` checks it returns `false` when `dropping_state() != 0`, and also requires `is_allocated` when the slot index is known (lines ~851–865).
+
+No source change was required.

@@ -1,7 +1,7 @@
 # [Bug]: mark_new_object_black TOCTOU - gc_box dereference before is_allocated re-check
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -180,3 +180,11 @@ if gc_box.is_under_construction() {
 - 如果未來實現並發 sweep，這裡可能成為 UAF 的源頭
 - 攻擊者可能嘗試在 slot 重用時干擾標記狀態
 - 雖然目前難以利用，但這是潛在的攻擊面
+
+---
+
+## Resolution (2026-03-21)
+
+**Fix:** In `mark_new_object_black`, the second `is_allocated` check was moved to immediately before the `GcBox` dereference (after the bug238 comments). Two back-to-back checks after the first `is_allocated` did not shorten the race window relative to the dereference; lazy sweep could still run after that pair and before `&*ptr.cast::<GcBox<()>>()`.
+
+**Verification:** `./test.sh` passed. No dedicated stress test for this TOCTOU; tagged **Not Verified** for the concurrent scenario.

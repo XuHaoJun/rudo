@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::clone() 缺少 generation 檢查可能導致 slot reuse 問題
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -134,3 +134,14 @@ unsafe {
 
 **Geohot (Exploit 攻擊觀點):**
 如果攻擊者可以控制 GC 時機，可能可以觸發這個 race 導致記憶體洩漏，進而造成記憶體耗盡攻擊。但需要精確控制時序，難度較高。
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed in current tree.
+
+- **TCB path:** `GcHandle::clone()` in `handles/cross_thread.rs` records `pre_generation` before `inc_ref()`, compares after `inc_ref()`, and calls `GcBox::undo_inc_ref` + panics on mismatch (same pattern as `downgrade()` / bug351).
+- **Orphan path:** `heap::clone_orphan_root_with_inc_ref()` in `heap.rs` applies the same generation check around `inc_ref()`.
+
+**Verification:** `cargo test -p rudo-gc --test cross_thread_handle --test cross_thread_weak_clone -- --test-threads=1` — all passed.

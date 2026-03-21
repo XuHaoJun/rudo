@@ -1,7 +1,7 @@
 # [Bug]: mark_object_black Ok(false) 路徑缺少 slot 有效性驗證 - TOCTOU 潛在問題
 
-**Status:** Open
-**Tags:** NeedsReview
+**Status:** Fixed
+**Tags:** Verified
 
 ## 威脅模型評估 (Threat Model Assessment)
 
@@ -170,3 +170,18 @@ Ok(false) => {
 1. 確認 `mark_object_black` 在 `Ok(false)` 路徑中缺少 `is_allocated` 檢查
 2. 驗證 `mark_new_object_black` 有雙重檢查保護
 3. 確認這確實是一個需要在 `Ok(false)` 路徑中添加 `is_allocated` 檢查的 bug
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Already fixed on current `main` — no code change required for this issue.
+
+`mark_object_black` now:
+
+1. Re-checks `is_allocated(idx)` immediately before forming `gc_box` (bug307 / bug350).
+2. In the `try_mark` → `Ok(false)` branch, re-validates `is_allocated(idx)` and returns `None` if the slot was swept; it does **not** read `gc_box` on that path (see `crates/rudo-gc/src/gc/incremental.rs`).
+
+The `Ok(true)` path includes the additional generation check (bug355) for rollback vs reused-slot cases; `Ok(false)` only needs the allocation bit recheck because it does not roll back a mark it did not set.
+
+**Verification:** Static review of `incremental.rs::mark_object_black`; behavior matches the suggested fix in this issue.

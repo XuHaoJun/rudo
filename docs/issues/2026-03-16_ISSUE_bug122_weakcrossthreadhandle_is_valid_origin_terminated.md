@@ -1,7 +1,7 @@
 # [Bug]: WeakCrossThreadHandle::is_valid() 在 Origin Thread 終止後返回 false，但 Weak Reference 本身可能仍然有效
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -201,3 +201,19 @@ pub fn is_valid(&self) -> bool {
 1. 這是 bug 還是設計決策？
 2. 如果是 bug，修復方案是什麼？
 3. 是否需要記錄這個行為差異？
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — reported inconsistency does not match current code or API contract.
+
+**Verification:**
+
+1. **`WeakCrossThreadHandle::is_valid()`** (`handles/cross_thread.rs`) is documented as returning `true` only when **`resolve()` / `try_resolve()`** could succeed; it intentionally requires a live origin TCB and `weak.is_live()`.
+
+2. **`try_resolve()`** begins with `self.origin_tcb.upgrade()?`, so when the origin thread has terminated it always returns `None` — the PoC claim that ThreadId reuse could make `try_resolve()` succeed is **outdated**; TCB liveness is checked before any `ThreadId` comparison (same pattern as `resolve` / `try_upgrade`).
+
+3. **`GcHandle`** uses the orphan table and `handle_id`; **`WeakCrossThreadHandle`** holds only `GcBoxWeakRef` + origin metadata and does not participate in orphan registration. Parity with `GcHandle::is_valid()` is therefore not applicable — different root/registration model.
+
+No code change: behavior matches documented semantics and matches `try_resolve()`.

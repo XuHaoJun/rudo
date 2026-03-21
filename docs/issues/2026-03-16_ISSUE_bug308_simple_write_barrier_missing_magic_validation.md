@@ -1,7 +1,7 @@
 # [Bug]: simple_write_barrier 缺少 MAGIC_GC_PAGE 驗證導致潛在 UB
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -114,3 +114,11 @@ if (*h_ptr).magic != MAGIC_GC_PAGE {
 **Geohot (Exploit 觀點):**
 - 如果有辦法在 large_object_map 中注入無效条目，這可能是一個攻擊面
 - 攻擊難度較高，但存在理論上的可能性
+
+---
+
+## Resolution (2026-03-21)
+
+**Fixed:** In `crates/rudo-gc/src/heap.rs`, `simple_write_barrier`’s large-object branch now validates `(*h_ptr).magic == MAGIC_GC_PAGE` before any further `PageHeader` / `GcBox` reads, matching `gc_cell_validate_and_barrier`, `unified_write_barrier`, and `incremental_write_barrier` (bug190 pattern).
+
+**Verification:** `./clippy.sh` and `./test.sh` passed. `simple_write_barrier` remains `#[allow(dead_code)]`; change is defensive consistency only.

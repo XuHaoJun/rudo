@@ -1,6 +1,6 @@
 # [Bug]: scan_page_for_marked_refs 缺少 is_under_construction 檢查導致錯誤標記 partial GC 物件
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -141,3 +141,13 @@ if (*gc_box_ptr).is_under_construction() {
 **Geohot (Exploit 觀點):**
 - 難以利用：需要精確控制執行時序
 - 主要影響是長期運行的服務可能出現記憶體洩漏
+
+---
+
+## Resolution (2026-03-21)
+
+**Root cause verified:** `scan_page_for_marked_refs` and `scan_page_for_unmarked_refs` could mark a slot and push work without `GcBox::is_under_construction()`, unlike `mark_new_object_black` / `mark_object_black` (bug238).
+
+**Fix:** After `is_allocated` / generation validation and immediately before `push_work`, both scanners now call `is_under_construction()`; if true, they `clear_mark_atomic` and skip (same semantics as not treating the object as live for this cycle).
+
+**Verification:** `./clippy.sh` and `./test.sh` pass. No separate deterministic multi-thread repro added (timing-heavy); behavior matches the existing barrier/mark paths.

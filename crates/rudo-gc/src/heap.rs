@@ -2815,11 +2815,18 @@ pub fn simple_write_barrier(ptr: *const u8) {
                         return;
                     }
                     let h_ptr = head_addr as *mut PageHeader;
-                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+
+                    // Validate MAGIC to ensure the large_object_map entry is valid (bug190, bug308).
+                    if (*h_ptr).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+
                     // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug286).
                     if !(*h_ptr).is_allocated(0) {
                         return;
                     }
+
+                    let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     // Cache flag to avoid TOCTOU between check and barrier (bug149).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {

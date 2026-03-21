@@ -1,6 +1,6 @@
 # [Bug]: Incremental Marking Race Window - Write Barrier Not Guaranteed Active Before Mutators Resume
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -114,3 +114,21 @@ resume_all_mutators();
 
 **Geohot (Exploit 觀點):**
 雖然這是一個內存泄漏問題，但在極端情況下，如果攻擊者能夠控制 GC 時機，可能會利用這個窗口來實現某些攻擊場景（例如，故意觸發特定的 GC 時序來導致對象過早回收）。
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Invalid — no separate “activate barrier” step exists beyond publishing phase.
+
+**Rationale:**
+
+1. `set_phase(MarkPhase::Marking)` uses `AtomicUsize::store(..., Ordering::SeqCst)` (`incremental.rs`). Mutators consult `phase()` which loads with `SeqCst`. There is no additional hardware or global flag that must be turned on after phase transition; “barrier active” for incremental SATB is exactly `phase == Marking` (see `is_write_barrier_active()`).
+
+2. `execute_snapshot` runs only from `collect_major_incremental`, which is entered only when `IncrementalMarkState::is_enabled()` is true (`gc.rs`). At snapshot start, `reset_fallback()` clears `fallback_requested`. No code path in `execute_snapshot` sets fallback before `set_phase(Marking)`. So `write_barrier_needed()` (enabled ∧ ¬fallback ∧ Marking) holds at the `debug_assert` in normal operation.
+
+3. Ordering: the GC thread performs the `SeqCst` phase store before `resume_all_mutators()`. Woken mutators’ first `phase()` / `is_incremental_marking_active()` load synchronizes with that store; this is not a release-build-only hole left by `debug_assert!`.
+
+**Note:** Concurrent `set_config` disabling incremental while another thread is inside `execute_snapshot` could make `write_barrier_needed()` false while phase is still `Marking`; that would be a distinct API/contract issue, not the “resume before barrier” window described here.
+
+**Verification:** `cargo test -p rudo-gc test_execute_snapshot --all-features -- --test-threads=1` (passes).

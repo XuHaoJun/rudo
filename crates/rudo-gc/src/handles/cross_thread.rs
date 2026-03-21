@@ -101,17 +101,17 @@ impl<T: Trace + 'static> GcHandle<T> {
         if self.handle_id == HandleId::INVALID {
             return false;
         }
-        // Check orphan first: when origin exits, roots migrate before TCB drops. There is a
-        // window where upgrade() returns Some but roots.strong is empty (already migrated).
-        let orphan = heap::lock_orphan_roots();
-        if orphan.contains_key(&(self.origin_thread, self.handle_id)) {
-            return true;
-        }
-        drop(orphan);
-        self.origin_tcb.upgrade().is_some_and(|tcb| {
+        // TCB-first + orphan fallback (bug313): checking orphan then releasing the lock
+        // allowed a race with `migrate_roots_to_orphan` — another thread could see an empty
+        // TCB root map while the entry already lives only in the orphan table.
+        if let Some(tcb) = self.origin_tcb.upgrade() {
             let roots = tcb.cross_thread_roots.lock().unwrap();
-            roots.strong.contains_key(&self.handle_id)
-        })
+            if roots.strong.contains_key(&self.handle_id) {
+                return true;
+            }
+        }
+        let orphan = heap::lock_orphan_roots();
+        orphan.contains_key(&(self.origin_thread, self.handle_id))
     }
 
     /// Explicitly unregisters this handle from the root set.
@@ -193,7 +193,13 @@ impl<T: Trace + 'static> GcHandle<T> {
             },
             |tcb| {
                 let roots = tcb.cross_thread_roots.lock().unwrap();
-                if !roots.strong.contains_key(&self.handle_id) {
+                if roots.strong.contains_key(&self.handle_id) {
+                    return self.resolve_impl();
+                }
+                // Migration window (bug313): roots drained, entry only in orphan table.
+                drop(roots);
+                let orphan = heap::lock_orphan_roots();
+                if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
                     panic!("GcHandle::resolve: handle has been unregistered");
                 }
                 self.resolve_impl()
@@ -312,7 +318,14 @@ impl<T: Trace + 'static> GcHandle<T> {
             },
             |tcb| {
                 let roots = tcb.cross_thread_roots.lock().unwrap();
-                if !roots.strong.contains_key(&self.handle_id) {
+                if roots.strong.contains_key(&self.handle_id) {
+                    return self.try_resolve_impl();
+                }
+                // Same migration window as `is_valid` (bug313): roots may be empty while the
+                // entry already moved under the orphan lock.
+                drop(roots);
+                let orphan = heap::lock_orphan_roots();
+                if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
                     return None;
                 }
                 self.try_resolve_impl()

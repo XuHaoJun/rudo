@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::is_valid() TOCTOU - Orphan Lock Release 到 TCB Check 之間的 Race Condition
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -169,4 +169,15 @@ pub fn is_valid(&self) -> bool {
 此 bug 與 bug128（GcHandle::is_valid() 未驗證 Root 存在性）相關但不同：
 - bug128: 修復了原本完全不檢查 root list 的問題
 - bug313: 當前 bug 是關於在檢查過程中 orphan lock 釋放後的 race window
+
+---
+
+## Resolution (2026-03-21)
+
+**Outcome:** Fixed in `handles/cross_thread.rs`.
+
+- **`GcHandle::is_valid`:** Use TCB roots first; if the handle is not in `roots.strong`, fall back to the orphan table under `lock_orphan_roots()`. This removes the window where another thread could run `migrate_roots_to_orphan` after we released the orphan lock but before we consulted TCB roots, and it covers the case where `origin_tcb.upgrade()` still succeeds while roots are already drained (entry only in orphans).
+- **`GcHandle::resolve` / `try_resolve`:** The same “TCB alive but roots empty” window could panic or return `None` incorrectly; added the same orphan fallback after observing an empty `roots.strong` map.
+
+Verified: `./clippy.sh`, `./test.sh` (all features, `--test-threads=1`).
 
