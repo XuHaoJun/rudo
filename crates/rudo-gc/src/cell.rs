@@ -1090,7 +1090,15 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                 } else {
                     // No GC heap on this thread, use cross-thread buffer
                     for gc_ptr in gc_ptrs {
-                        crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr);
+                        // FIX bug330: Check return value and request fallback if buffer overflowed.
+                        // Note: push_cross_thread_satb also requests fallback internally, but
+                        // checking here ensures we don't silently drop pointers.
+                        if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
+                            crate::gc::incremental::IncrementalMarkState::global()
+                                .request_fallback(
+                                    crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                                );
+                        }
                     }
                 }
             }
