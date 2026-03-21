@@ -1836,12 +1836,18 @@ impl<T: Trace> Gc<T> {
                     ptr: AtomicNullable::null(),
                 };
             }
+            let pre_generation = gc_box.generation();
             (*ptr.as_ptr()).inc_weak();
+            if pre_generation != (*ptr.as_ptr()).generation() {
+                (*ptr.as_ptr()).dec_weak();
+                return GcBoxWeakRef {
+                    ptr: AtomicNullable::null(),
+                };
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    // Don't call dec_weak - slot may be reused (bug133)
                     return GcBoxWeakRef {
                         ptr: AtomicNullable::null(),
                     };
