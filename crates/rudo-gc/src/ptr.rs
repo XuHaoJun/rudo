@@ -452,8 +452,9 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Mark the value as dropped.
+    /// Uses `Release` ordering to synchronize with `Acquire` loads (e.g. `has_dead_flag`).
     pub(crate) fn set_dead(&self) {
-        self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Relaxed);
+        self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Release);
     }
 
     /// Check if this `GcBox` is dead or unrooted (collectible).
