@@ -1,6 +1,6 @@
 # [Bug]: scan_page_for_unmarked_refs uses unsafe set_mark instead of atomic try_mark
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

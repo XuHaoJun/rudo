@@ -974,56 +974,56 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
     let obj_count = (*header).obj_count as usize;
 
     for i in 0..obj_count {
-        // Entry: is_marked only. After set_mark: is_allocated + generation checks, then a
+        // Entry: is_marked only. After try_mark: is_allocated + generation checks, then a
         // second is_allocated immediately before push_work (bug258 lazy-sweep TOCTOU; bug336 reuse).
         if !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
-            // set_mark returns true if we successfully marked - use it as try_mark
-            // Re-check is_allocated after successful mark to fix TOCTOU with lazy sweep.
-            if (*header).set_mark(i) {
-                #[allow(clippy::cast_ptr_alignment)]
-                #[allow(clippy::unnecessary_cast)]
-                #[allow(clippy::ptr_as_ptr)]
-                let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-                // Read generation after successful mark to detect slot reuse (bug336).
-                let marked_generation = unsafe { (*gc_box_ptr).generation() };
-
-                if !(*header).is_allocated(i) {
-                    // Slot was swept after set_mark. Check generation to distinguish
-                    // swept from swept+reused (bug363 fix).
-                    let current_generation = unsafe { (*gc_box_ptr).generation() };
-                    if current_generation == marked_generation {
-                        // Slot was swept but not reused - safe to clear mark.
-                        (*header).clear_mark_atomic(i);
-                        continue;
+            // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug370)
+            loop {
+                match (*header).try_mark(i) {
+                    Ok(false) => {
+                        // Already marked by another thread; move to next slot.
+                        // No recheck needed: we didn't mark, so nothing to roll back.
+                        break;
                     }
-                    // Slot was reused - the mark now belongs to the new object, don't clear.
-                    // Continue to push_work to trace the new object.
-                }
-                // Verify generation hasn't changed (bug336 fix).
-                // If slot was reallocated between set_mark and push_work,
-                // generation will differ and we should skip this object.
-                let current_generation = unsafe { (*gc_box_ptr).generation() };
-                if current_generation != marked_generation {
-                    (*header).clear_mark_atomic(i);
-                    continue;
-                }
-                // Second is_allocated re-check to fix TOCTOU with lazy sweep (bug258).
-                // If slot was swept after first is_allocated check but before push_work,
-                // clear mark and skip to avoid pushing a pointer to a swept slot.
-                if !(*header).is_allocated(i) {
-                    (*header).clear_mark_atomic(i);
-                    continue;
-                }
-                // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
-                // mark_object_black / mark_new_object_black (bug238, bug309).
-                if unsafe { (*gc_box_ptr).is_under_construction() } {
-                    (*header).clear_mark_atomic(i);
-                    continue;
-                }
-                if let Some(gc_box) = NonNull::new(gc_box_ptr) {
-                    let ptr = IncrementalMarkState::global();
-                    ptr.push_work(gc_box);
+                    Ok(true) => {
+                        #[allow(clippy::cast_ptr_alignment)]
+                        #[allow(clippy::unnecessary_cast)]
+                        #[allow(clippy::ptr_as_ptr)]
+                        let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                        // Read generation after successful mark to detect slot reuse (bug336).
+                        let marked_generation = unsafe { (*gc_box_ptr).generation() };
+
+                        // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
+                        // If slot was swept after try_mark, clear mark and skip.
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
+                        // Verify generation hasn't changed (bug336 fix).
+                        // If slot was reallocated between try_mark and push_work,
+                        // generation will differ and we should skip this object.
+                        let current_generation = unsafe { (*gc_box_ptr).generation() };
+                        if current_generation != marked_generation {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
+                        // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
+                        // mark_object_black / mark_new_object_black (bug238, bug309).
+                        if unsafe { (*gc_box_ptr).is_under_construction() } {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
+                        if let Some(gc_box) = NonNull::new(gc_box_ptr) {
+                            let ptr = IncrementalMarkState::global();
+                            ptr.push_work(gc_box);
+                        }
+                        break;
+                    }
+                    Err(()) => {
+                        // CAS failed - another thread modified this word.
+                        // Retry the CAS to get a consistent view.
+                    }
                 }
             }
         }
