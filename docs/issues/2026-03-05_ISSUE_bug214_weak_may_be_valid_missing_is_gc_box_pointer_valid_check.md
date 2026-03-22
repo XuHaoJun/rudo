@@ -1,6 +1,6 @@
 # [Bug]: Weak::may_be_valid() 缺少 is_gc_box_pointer_valid 檢查
 
-**Status:** Verified
+**Status:** Open
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

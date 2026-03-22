@@ -2484,7 +2484,15 @@ impl<T: Trace> Weak<T> {
         let addr = ptr.as_ptr() as usize;
 
         let alignment = std::mem::align_of::<GcBox<T>>();
-        addr >= 4096 && addr % alignment == 0
+        if addr < MIN_VALID_HEAP_ADDRESS || addr % alignment != 0 {
+            return false;
+        }
+
+        if !is_gc_box_pointer_valid(addr) {
+            return false;
+        }
+
+        true
     }
 
     /// Check if the referenced value is still alive.
