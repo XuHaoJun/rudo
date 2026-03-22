@@ -864,7 +864,6 @@ unsafe fn scan_page_for_marked_refs(
                         // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
                         // mark_object_black / mark_new_object_black (bug238, bug309).
                         if unsafe { (*gc_box_ptr).is_under_construction() } {
-                            (*header).clear_mark_atomic(i);
                             break;
                         }
                         refs_found += 1;
@@ -1011,7 +1010,6 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                         // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
                         // mark_object_black / mark_new_object_black (bug238, bug309).
                         if unsafe { (*gc_box_ptr).is_under_construction() } {
-                            (*header).clear_mark_atomic(i);
                             break;
                         }
                         if let Some(gc_box) = NonNull::new(gc_box_ptr) {
