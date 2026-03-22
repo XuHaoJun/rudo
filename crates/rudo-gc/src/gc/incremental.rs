@@ -858,7 +858,7 @@ unsafe fn scan_page_for_marked_refs(
                         // generation will differ and we should skip this object.
                         let current_generation = unsafe { (*gc_box_ptr).generation() };
                         if current_generation != marked_generation {
-                            (*header).clear_mark_atomic(i);
+                            // Slot was reused - the mark now belongs to the new object, don't clear.
                             break;
                         }
                         // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
@@ -1005,7 +1005,7 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                         // generation will differ and we should skip this object.
                         let current_generation = unsafe { (*gc_box_ptr).generation() };
                         if current_generation != marked_generation {
-                            (*header).clear_mark_atomic(i);
+                            // Slot was reused - the mark now belongs to the new object, don't clear.
                             break;
                         }
                         // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
