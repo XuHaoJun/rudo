@@ -653,8 +653,11 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                 || gc_box.dropping_state() != 0
                 || gc_box.is_under_construction()
             {
-                GcBox::dec_ref(gc_box_ptr.cast_mut());
-                panic!("AsyncHandle::get: object became dead/dropping after dec_ref");
+                // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+                // decrementing when DEAD_FLAG is set or is_under_construction is true,
+                // but we need to actually rollback the try_inc_ref_if_nonzero increment.
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("AsyncHandle::get: object became dead/dropping after inc_ref");
             }
 
             crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
@@ -697,6 +700,7 @@ impl<T: Trace + 'static> AsyncHandle<T> {
     /// ```
     #[inline]
     #[track_caller]
+    #[allow(unsafe_op_in_unsafe_fn)]
     pub unsafe fn get_unchecked(&self) -> &T {
         let slot = unsafe { &*self.slot };
         let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
@@ -742,8 +746,11 @@ impl<T: Trace + 'static> AsyncHandle<T> {
 
         if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 || gc_box.is_under_construction()
         {
-            GcBox::dec_ref(gc_box_ptr.cast_mut());
-            panic!("AsyncHandle::get_unchecked: object became dead/dropping after dec_ref");
+            // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+            // decrementing when DEAD_FLAG is set or is_under_construction is true,
+            // but we need to actually rollback the try_inc_ref_if_nonzero increment.
+            unsafe { GcBox::undo_inc_ref(gc_box_ptr.cast_mut()) };
+            panic!("AsyncHandle::get_unchecked: object became dead/dropping after inc_ref");
         }
 
         crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
@@ -843,7 +850,10 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                 || gc_box.dropping_state() != 0
                 || gc_box.is_under_construction()
             {
-                GcBox::dec_ref(gc_box_ptr.cast_mut());
+                // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+                // decrementing when DEAD_FLAG is set or is_under_construction is true,
+                // but we need to actually rollback the try_inc_ref_if_nonzero increment.
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
                 panic!("AsyncHandle::to_gc: object became dead/dropping after ref increment");
             }
             Gc::from_raw(gc_box_ptr as *const u8)

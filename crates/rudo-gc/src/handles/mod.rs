@@ -429,7 +429,10 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
                 || gc_box.dropping_state() != 0
                 || gc_box.is_under_construction()
             {
-                GcBox::dec_ref(gc_box_ptr.cast_mut());
+                // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+                // decrementing when DEAD_FLAG is set or is_under_construction is true,
+                // but we need to actually rollback the try_inc_ref_if_nonzero increment.
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
                 panic!("Handle::to_gc: object became dead/dropping after ref increment");
             }
             Gc::from_raw(gc_box_ptr as *const u8)
