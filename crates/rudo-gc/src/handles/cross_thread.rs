@@ -212,6 +212,17 @@ impl<T: Trace + 'static> GcHandle<T> {
     #[allow(clippy::significant_drop_tightening)]
     fn resolve_impl(&self) -> Gc<T> {
         unsafe {
+            // FIX bug382: Check is_allocated BEFORE dereferencing to avoid TOCTOU.
+            // If slot is swept and reused between dereference and check, we'd read
+            // fields from the wrong object (type confusion).
+            if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "GcHandle::resolve: object slot was swept before dereference"
+                );
+            }
+
             let gc_box = &*self.ptr.as_ptr();
             assert!(
                 !gc_box.is_under_construction(),
