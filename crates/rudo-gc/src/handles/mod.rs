@@ -330,6 +330,27 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
                 gc_box.generation(),
                 "Handle::get: slot was reused before value read (generation mismatch)"
             );
+
+            // Second is_allocated check after dec_ref to fix TOCTOU with lazy sweep (bug372).
+            // If slot was swept between generation check and value read, we could
+            // access a dropped value.
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Handle::get: object slot was swept after dec_ref"
+                );
+            }
+
+            // Recheck flags before reading value (same as Handle::to_gc).
+            // If object became dead/dropping after dec_ref, panic before reading value.
+            if gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+                || gc_box.is_under_construction()
+            {
+                panic!("Handle::get: object became dead/dropping after dec_ref");
+            }
+
             crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
             let value = gc_box.value();
             value
