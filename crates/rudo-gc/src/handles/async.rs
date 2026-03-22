@@ -631,6 +631,16 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                     && !gc_box.is_under_construction(),
                 "AsyncHandle::get: cannot access a dead, dropping, or under construction Gc"
             );
+            let pre_generation = gc_box.generation();
+            if !gc_box.try_inc_ref_if_nonzero() {
+                panic!("AsyncHandle::get: object is being dropped");
+            }
+            assert_eq!(
+                pre_generation,
+                gc_box.generation(),
+                "AsyncHandle::get: slot was reused before value read (generation mismatch)"
+            );
+            crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
             let value = gc_box.value();
             value
         }
@@ -696,11 +706,15 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             "AsyncHandle::get_unchecked: cannot access a dead, dropping, or under construction Gc"
         );
         let pre_generation = gc_box.generation();
+        if !gc_box.try_inc_ref_if_nonzero() {
+            panic!("AsyncHandle::get_unchecked: object is being dropped");
+        }
         assert_eq!(
             pre_generation,
             gc_box.generation(),
             "AsyncHandle::get_unchecked: slot was reused before value read (generation mismatch)"
         );
+        crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
         let value = gc_box.value();
         value
     }
