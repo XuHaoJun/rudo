@@ -640,6 +640,23 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                 gc_box.generation(),
                 "AsyncHandle::get: slot was reused before value read (generation mismatch)"
             );
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "AsyncHandle::get: object slot was swept after dec_ref"
+                );
+            }
+
+            if gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+                || gc_box.is_under_construction()
+            {
+                GcBox::dec_ref(gc_box_ptr.cast_mut());
+                panic!("AsyncHandle::get: object became dead/dropping after dec_ref");
+            }
+
             crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
             let value = gc_box.value();
             value
@@ -714,6 +731,21 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             gc_box.generation(),
             "AsyncHandle::get_unchecked: slot was reused before value read (generation mismatch)"
         );
+
+        if let Some(idx) = unsafe { crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) } {
+            let header = unsafe { crate::heap::ptr_to_page_header(gc_box_ptr as *const u8) };
+            assert!(
+                unsafe { (*header.as_ptr()).is_allocated(idx) },
+                "AsyncHandle::get_unchecked: object slot was swept after dec_ref"
+            );
+        }
+
+        if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 || gc_box.is_under_construction()
+        {
+            GcBox::dec_ref(gc_box_ptr.cast_mut());
+            panic!("AsyncHandle::get_unchecked: object became dead/dropping after dec_ref");
+        }
+
         crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
         let value = gc_box.value();
         value
