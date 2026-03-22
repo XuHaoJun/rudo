@@ -1278,6 +1278,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
+                    // Second is_allocated check - prevents TOCTOU race (bug376)
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     h
                 };
 
@@ -1350,6 +1354,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                             if (*header.as_ptr()).generation.load(Ordering::Acquire) == 0
                                 && !has_gen_old
                             {
+                                return;
+                            }
+                            // Second is_allocated check - prevents TOCTOU race (bug376)
+                            if !(*header.as_ptr()).is_allocated(index) {
                                 return;
                             }
                             (*header.as_ptr()).set_dirty(index);
