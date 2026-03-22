@@ -661,6 +661,17 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             }
 
             crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
+
+            // Second is_allocated check after dec_ref (bug379 fix).
+            // If slot was swept after dec_ref, we could read from a freed object.
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "AsyncHandle::get: object slot was swept after dec_ref"
+                );
+            }
+
             let value = gc_box.value();
             value
         }
@@ -754,6 +765,17 @@ impl<T: Trace + 'static> AsyncHandle<T> {
         }
 
         crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
+
+        // Second is_allocated check after dec_ref (bug379 fix).
+        // If slot was swept after dec_ref, we could read from a freed object.
+        if let Some(idx) = unsafe { crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) } {
+            let header = unsafe { crate::heap::ptr_to_page_header(gc_box_ptr as *const u8) };
+            assert!(
+                unsafe { (*header.as_ptr()).is_allocated(idx) },
+                "AsyncHandle::get_unchecked: object slot was swept after dec_ref"
+            );
+        }
+
         let value = gc_box.value();
         value
     }
