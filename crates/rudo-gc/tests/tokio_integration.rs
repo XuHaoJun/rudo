@@ -7,10 +7,6 @@ struct TestData {
     value: i32,
 }
 
-fn register_test_root(ptr: NonNull<u8>) {
-    GcRootSet::global().register(ptr.as_ptr() as usize);
-}
-
 #[test]
 fn test_gcrootset_singleton() {
     let set1 = GcRootSet::global();
@@ -66,8 +62,6 @@ fn test_guard_registration() {
     let gc = Gc::new(TestData { value: 42 });
     let ptr = gc_internal_ptr(&gc);
 
-    register_test_root(ptr);
-
     let guard = unsafe { GcRootGuard::new(ptr) };
     assert!(unsafe { GcRootSet::global().is_registered(ptr.as_ptr() as usize) });
 
@@ -80,10 +74,16 @@ fn test_guard_unregistration_only_once() {
     let gc = Gc::new(TestData { value: 42 });
     let ptr = gc_internal_ptr(&gc);
 
-    register_test_root(ptr);
-    let guard = unsafe { GcRootGuard::new(ptr) };
-    drop(guard);
+    // Create two guards for the same pointer (tests reference counting)
+    let guard1 = unsafe { GcRootGuard::new(ptr) };
+    let guard2 = unsafe { GcRootGuard::new(ptr) };
 
+    // Drop first guard - pointer should still be registered
+    drop(guard1);
+    assert!(unsafe { GcRootSet::global().is_registered(ptr.as_ptr() as usize) });
+
+    // Drop second guard - pointer should now be unregistered
+    drop(guard2);
     assert!(!unsafe { GcRootSet::global().is_registered(ptr.as_ptr() as usize) });
 }
 
