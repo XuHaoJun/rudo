@@ -2715,7 +2715,19 @@ impl<T: Trace> Clone for Weak<T> {
                     };
                 }
             }
+
+            // Get generation BEFORE inc_weak to detect slot reuse (bug373).
+            let pre_generation = (*ptr.as_ptr()).generation();
+
             (*ptr.as_ptr()).inc_weak();
+
+            // Verify generation hasn't changed - if slot was reused, undo inc_weak.
+            if pre_generation != (*ptr.as_ptr()).generation() {
+                (*ptr.as_ptr()).dec_weak();
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
