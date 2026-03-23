@@ -1,7 +1,8 @@
 # [Bug]: ThreadControlBlock unsafe impl Sync may be unsound due to UnsafeCell<LocalHeap>
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified, Soundness
+**Fixed by:** `841bf73` — "fix(sync): add explicit unsafe impl Sync for LocalHeap and LocalHandles (bug122)"
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
