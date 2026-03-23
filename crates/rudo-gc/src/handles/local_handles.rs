@@ -359,3 +359,10 @@ impl Drop for LocalHandles {
 }
 
 unsafe impl Send for LocalHandles {}
+
+/// SAFETY: `LocalHandles` is only accessed from its owning thread, except during
+/// STW GC pauses when all mutator threads are suspended. During STW, the GC holds
+/// exclusive &mut access to `LocalHandles` through `ThreadControlBlock`. The handle
+/// blocks linked list and scope data are thread-local by design and the GC does
+/// not iterate handles during STW (it only accesses heap pages for marking).
+unsafe impl Sync for LocalHandles {}

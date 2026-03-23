@@ -384,6 +384,9 @@ pub struct ThreadControlBlock {
 
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for ThreadControlBlock {}
+/// SAFETY: `LocalHeap` and `LocalHandles` are explicitly `Sync` (see their SAFETY
+/// docs). All other fields are `Sync` or protected by mutexes. During STW, all
+/// mutator threads are suspended and the GC holds exclusive &mut access.
 unsafe impl Sync for ThreadControlBlock {}
 
 impl Default for ThreadControlBlock {
@@ -1785,6 +1788,15 @@ pub struct LocalHeap {
     #[cfg(feature = "lazy-sweep")]
     pub(crate) pending_sweep_by_class: [Vec<NonNull<PageHeader>>; 8],
 }
+
+/// SAFETY: The only field that makes `LocalHeap` auto-!Sync is `UnsafeCell<T>` where
+/// `T` is `Tlab` (`tlab_16` through `tlab_2048`). TLABs are thread-local by design
+/// and are only accessed from the owning thread. The GC does not access TLABs during
+/// STW (it only clears marks and sweeps pages). During STW pauses, all mutator threads
+/// are suspended, so there is no concurrent access to any `LocalHeap` field. The GC
+/// accesses `LocalHeap` through `&mut` references exclusively during STW when no other
+/// thread can access it.
+unsafe impl Sync for LocalHeap {}
 
 impl LocalHeap {
     /// Create a new empty heap.
