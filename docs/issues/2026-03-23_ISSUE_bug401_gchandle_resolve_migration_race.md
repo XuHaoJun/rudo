@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::resolve panic during cross-thread handle migration (bug313)
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -175,3 +175,21 @@ While this is a denial-of-service (panic) rather than a memory corruption bug, i
 3. The panic propagates to crash a service
 
 However, since this is a library bug (not application logic), exploitation is unlikely in practice.
+
+---
+
+## Resolution (2026-03-23)
+
+**Fixed.** Applied retry logic to both `resolve()` and `try_resolve()` in `cross_thread.rs`:
+
+1. When TCB is alive but entry not found in TCB roots, check orphan
+2. If not found in orphan, re-check TCB (migration may have completed during orphan lock acquisition)
+3. If still not found and TCB is still alive, check orphan again
+
+This handles the race window where `migrate_roots_to_orphan` releases TCB lock before acquiring orphan lock, leaving the entry temporarily invisible.
+
+**Changes:**
+- `GcHandle::resolve()` (cross_thread.rs:194-215): Added retry logic
+- `GcHandle::try_resolve()` (cross_thread.rs:333-354): Added retry logic
+- Clippy passes
+- All tests pass

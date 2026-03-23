@@ -196,13 +196,23 @@ impl<T: Trace + 'static> GcHandle<T> {
                 if roots.strong.contains_key(&self.handle_id) {
                     return self.resolve_impl();
                 }
-                // Migration window (bug313): roots drained, entry only in orphan table.
                 drop(roots);
                 let orphan = heap::lock_orphan_roots();
-                if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
-                    panic!("GcHandle::resolve: handle has been unregistered");
+                if orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                    return self.resolve_impl();
                 }
-                self.resolve_impl()
+                drop(orphan);
+                let roots = tcb.cross_thread_roots.lock().unwrap();
+                if roots.strong.contains_key(&self.handle_id) {
+                    return self.resolve_impl();
+                }
+                if self.origin_tcb.upgrade().is_some() {
+                    let orphan = heap::lock_orphan_roots();
+                    if orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                        return self.resolve_impl();
+                    }
+                }
+                panic!("GcHandle::resolve: handle has been unregistered");
             },
         )
     }
@@ -335,14 +345,24 @@ impl<T: Trace + 'static> GcHandle<T> {
                 if roots.strong.contains_key(&self.handle_id) {
                     return self.try_resolve_impl();
                 }
-                // Same migration window as `is_valid` (bug313): roots may be empty while the
-                // entry already moved under the orphan lock.
                 drop(roots);
                 let orphan = heap::lock_orphan_roots();
-                if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
-                    return None;
+                if orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                    return self.try_resolve_impl();
                 }
-                self.try_resolve_impl()
+                drop(orphan);
+                let roots = tcb.cross_thread_roots.lock().unwrap();
+                if roots.strong.contains_key(&self.handle_id) {
+                    return self.try_resolve_impl();
+                }
+                drop(roots);
+                if self.origin_tcb.upgrade().is_some() {
+                    let orphan = heap::lock_orphan_roots();
+                    if orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                        return self.try_resolve_impl();
+                    }
+                }
+                None
             },
         )
     }
