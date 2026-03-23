@@ -2102,7 +2102,12 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
                     return; // Already marked by another thread, slot valid
                 }
                 Ok(true) => {
+                    let marked_generation = (*ptr.as_ptr()).generation();
                     if !(*header.as_ptr()).is_allocated(index) {
+                        let current_generation = (*ptr.as_ptr()).generation();
+                        if current_generation != marked_generation {
+                            return;
+                        }
                         (*header.as_ptr()).clear_mark_atomic(index);
                         return;
                     }
