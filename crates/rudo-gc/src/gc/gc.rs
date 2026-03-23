@@ -2411,7 +2411,12 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
                         return; // Already marked by another thread, no push needed
                     }
                     Ok(true) => {
+                        let marked_generation = (*ptr.as_ptr()).generation();
                         if !(*header.as_ptr()).is_allocated(idx) {
+                            let current_generation = (*ptr.as_ptr()).generation();
+                            if current_generation != marked_generation {
+                                return;
+                            }
                             (*header.as_ptr()).clear_mark_atomic(idx);
                             return;
                         }
@@ -2461,7 +2466,12 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
                     return; // Already marked by another thread, no push needed
                 }
                 Ok(true) => {
+                    let marked_generation = (*ptr.as_ptr()).generation();
                     if !(*header.as_ptr()).is_allocated(idx) {
+                        let current_generation = (*ptr.as_ptr()).generation();
+                        if current_generation != marked_generation {
+                            return;
+                        }
                         (*header.as_ptr()).clear_mark_atomic(idx);
                         return;
                     }

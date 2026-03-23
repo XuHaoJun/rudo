@@ -1,7 +1,9 @@
-# [Bug]: mark_and_trace_incremental missing generation check after try_mark
+# [Bug]: mark_object and mark_and_trace_incremental missing generation check after try_mark
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Bug, GC, Incremental Marking, Slot Reuse, TOCTOU
+
+**Fix Applied:** Both `mark_object` and `mark_and_trace_incremental` were fixed by adding generation check after successful `try_mark`, following the pattern from `mark_and_push_to_worker_queue`.
 
 ## 威脅模型評估 (Threat Model Assessment)
 
@@ -15,7 +17,7 @@
 
 ## 受影響的組件與環境 (Affected Component & Environment)
 
-- **Component:** `mark_and_trace_incremental` in `gc/gc.rs`
+- **Component:** `mark_and_trace_incremental` AND `mark_object` in `gc/gc.rs`
 - **OS / Architecture:** `All`
 - **Rust Version:** `1.75.0+`
 - **rudo-gc Version:** `0.8.x`
@@ -26,7 +28,7 @@
 
 ### 預期行為 (Expected Behavior)
 
-After `try_mark` succeeds but `is_allocated` returns false, the code should verify the **generation** hasn't changed to distinguish between:
+After `try_mark` succeeds but `is_allocated` returns false, the code should verify the **generation** hasn't changed that distinguish between:
 1. Slot was swept (slot still contains same object, mark should be cleared)
 2. Slot was swept AND reused (slot contains new object with different generation, mark should NOT be cleared)
 
@@ -34,11 +36,13 @@ After `try_mark` succeeds but `is_allocated` returns false, the code should veri
 
 The code clears the mark unconditionally when `is_allocated` fails after a successful `try_mark`, without checking the generation. This can incorrectly clear the mark on a **newly allocated object** that just happens to be in a swept slot.
 
+**STATUS:** FIXED - Both `mark_object` (gc.rs:2413-2425) and `mark_and_trace_incremental` (gc.rs:2468-2480) now have the generation check.
+
 ---
 
 ## 根本原因分析 (Root Cause Analysis)
 
-In `crates/rudo-gc/src/gc/gc.rs`, lines 2463-2469:
+In `crates/rudo-gc/src/gc/gc.rs`, lines 2463-2469 (original code):
 
 ```rust
 Ok(true) => {
@@ -57,8 +61,9 @@ The issue: When `is_allocated` returns false after successful `try_mark`, the co
 - `mark_object_black` (incremental.rs:1133-1144): HAS generation check (bug355 fix)
 - `mark_and_push_to_worker_queue` (gc.rs:1236-1243): HAS generation check (bug360 fix)
 - `mark_and_trace_incremental` (gc.rs:2463-2469): **MISSING generation check**
+- `mark_object` (gc.rs:2413-2417): **MISSING generation check** (same bug)
 
-This function was apparently missed when the generation check pattern was established.
+Both functions were missed when the generation check pattern was established.
 
 ---
 
@@ -125,3 +130,9 @@ In a concurrent scenario, an attacker could influence allocation patterns and GC
 - bug355: mark_object_black missing generation check - similar issue in incremental.rs
 - bug360: mark_and_push_to_worker_queue missing generation check - similar issue in gc.rs
 - bug363: scan_page_for_unmarked_refs missing generation check - similar pattern
+
+## 修復紀錄 (Fix Record)
+
+- **Date:** 2026-03-23
+- **Fixed:** Both `mark_object` (gc.rs:2413-2425) and `mark_and_trace_incremental` (gc.rs:2468-2480) now have the generation check matching the pattern from `mark_and_push_to_worker_queue`.
+- **Verification:** All tests pass, clippy passes.
