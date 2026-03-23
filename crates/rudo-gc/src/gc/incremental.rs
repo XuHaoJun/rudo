@@ -1134,6 +1134,12 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
                 let marked_generation = (*gc_box).generation();
                 // We just marked. Re-check is_allocated to fix TOCTOU with lazy sweep.
                 if (*h).is_allocated(idx) {
+                    // bug399 fix: also check generation to detect slot reuse
+                    let current_generation = (*gc_box).generation();
+                    if current_generation != marked_generation {
+                        // Slot was reused - mark belongs to new object
+                        return None;
+                    }
                     return Some(idx);
                 }
                 // Slot was swept between our check and try_mark.
