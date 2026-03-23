@@ -612,6 +612,18 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
             // no root entry exists; the extra ref would leak but no UAF from orphaned root.
             // (matches Gc::cross_thread_handle: inc_ref before insert)
             unsafe {
+                // FIX bug383: Check is_allocated BEFORE dereference to avoid TOCTOU.
+                // If slot is swept and reused between dereference and check, we'd read
+                // fields from the wrong object (type confusion).
+                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
+                {
+                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                    assert!(
+                        (*header.as_ptr()).is_allocated(idx),
+                        "GcHandle::clone: object slot was swept before dereference"
+                    );
+                }
+
                 let gc_box = &*self.ptr.as_ptr();
                 assert!(
                         !gc_box.has_dead_flag()
@@ -619,15 +631,6 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
                             && !gc_box.is_under_construction(),
                         "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle"
                     );
-                // Check is_allocated before inc_ref; if this panics, no root entry exists yet.
-                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
-                {
-                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                    assert!(
-                        (*header.as_ptr()).is_allocated(idx),
-                        "GcHandle::clone: object slot was swept"
-                    );
-                }
                 // Get generation BEFORE inc_ref to detect slot reuse.
                 // If slot is swept and reused between check and inc_ref,
                 // the generation will be different after inc_ref.
