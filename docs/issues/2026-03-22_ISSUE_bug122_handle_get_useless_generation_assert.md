@@ -1,7 +1,7 @@
 # [Bug]: Handle::get() / AsyncHandle::get() useless generation assertion
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

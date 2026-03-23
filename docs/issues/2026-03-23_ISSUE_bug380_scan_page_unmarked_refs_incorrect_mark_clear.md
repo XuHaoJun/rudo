@@ -1,6 +1,6 @@
 # [Bug]: scan_page_for_unmarked_refs incorrectly clears mark when slot is reused
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

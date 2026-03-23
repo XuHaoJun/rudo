@@ -1247,6 +1247,9 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     NonNull::new_unchecked(h_ptr)
                 } else {
                     let h = ptr_to_page_header(ptr);
@@ -1322,6 +1325,9 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                         let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                         let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                         if (*header).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
+                            return;
+                        }
+                        if !(*header).is_allocated(0) {
                             return;
                         }
                         (*header).set_dirty(0);

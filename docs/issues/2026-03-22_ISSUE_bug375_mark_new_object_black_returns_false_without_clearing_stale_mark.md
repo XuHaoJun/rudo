@@ -1,6 +1,6 @@
 # [Bug]: mark_new_object_black 返回 false 時未清除已回收 slot 的 stale mark
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

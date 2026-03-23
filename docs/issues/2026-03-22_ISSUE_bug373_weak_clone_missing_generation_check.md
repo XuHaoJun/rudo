@@ -1,7 +1,7 @@
 # [Bug]: Weak::clone 缺少 Generation 檢查 - 落後於其他類似函數
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

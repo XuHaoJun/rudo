@@ -1,7 +1,7 @@
 # [Bug]: AsyncHandle::get() Value Read BEFORE Generation Check (TOCTOU)
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

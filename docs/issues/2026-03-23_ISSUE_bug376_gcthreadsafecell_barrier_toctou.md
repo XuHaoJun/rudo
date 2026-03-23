@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell barriers missing second is_allocated check - TOCTOU race
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

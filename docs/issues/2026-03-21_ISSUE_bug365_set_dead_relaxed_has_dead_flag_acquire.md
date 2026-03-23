@@ -1,7 +1,7 @@
 # [Bug]: GcBox::set_dead uses Relaxed ordering but has_dead_flag uses Acquire - Synchronization Bug
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
