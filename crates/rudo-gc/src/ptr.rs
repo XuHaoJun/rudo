@@ -571,9 +571,20 @@ impl<T: Trace> GcBox<T> {
                 };
             }
 
-            // inc_weak before is_allocated check to avoid TOCTOU with lazy sweep (bug240).
-            // If slot was swept between check and inc_weak, we'd increment the wrong object.
+            // FIX bug400: Get generation BEFORE inc_weak to detect slot reuse.
+            // If slot is swept and reused between flag check and inc_weak,
+            // the generation will be different after inc_weak.
+            let pre_generation = (*NonNull::from(self).as_ptr()).generation();
+
             (*NonNull::from(self).as_ptr()).inc_weak();
+
+            // Verify generation hasn't changed - if slot was reused, undo inc_weak.
+            if pre_generation != (*NonNull::from(self).as_ptr()).generation() {
+                (*NonNull::from(self).as_ptr()).dec_weak();
+                return GcBoxWeakRef {
+                    ptr: AtomicNullable::null(),
+                };
+            }
 
             let self_ptr = NonNull::from(self).as_ptr() as *const u8;
             if let Some(idx) = crate::heap::ptr_to_object_index(self_ptr) {
