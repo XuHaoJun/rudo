@@ -915,13 +915,12 @@ impl<T: Trace + 'static> Drop for WeakCrossThreadHandle<T> {
             return;
         }
         unsafe {
-            // Check slot is still allocated before dereferencing (bug231) — avoids UAF when lazy
-            // sweep has reclaimed and reused the slot.
-            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
-                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
-                if !(*header.as_ptr()).is_allocated(idx) {
-                    return;
-                }
+            // Check generation to detect slot reuse (bug231 fix: avoid UAF/corruption).
+            // bug402 fix: use generation check instead of is_allocated to avoid weak ref leak.
+            let current_generation = (*ptr.as_ptr()).generation();
+            if current_generation != self.weak.generation() {
+                // Slot was reused - skip dec_weak_raw to avoid corrupting new GcBox's weak count
+                return;
             }
             // SAFETY: Use dec_weak_raw to avoid creating a reference to the GcBox.
             // When WeakCrossThreadHandle::drop runs during drop of a value inside a GcBox,
