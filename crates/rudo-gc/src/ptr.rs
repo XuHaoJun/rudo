@@ -2065,7 +2065,19 @@ impl<T: Trace> Clone for Gc<T> {
                 );
             }
 
+            // Get generation BEFORE inc_ref to detect slot reuse (bug387).
+            // If the slot is swept and reused between this check and inc_ref,
+            // the generation will be different after inc_ref.
+            let pre_generation = (*gc_box_ptr).generation();
+
             (*gc_box_ptr).inc_ref();
+
+            // Verify generation hasn't changed - if slot was reused, undo inc_ref.
+            // This prevents inc_ref from operating on the wrong object's ref count.
+            if pre_generation != (*gc_box_ptr).generation() {
+                crate::ptr::GcBox::undo_inc_ref(gc_box_ptr);
+                panic!("Gc::clone: slot was reused during clone (generation mismatch)");
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
