@@ -352,6 +352,15 @@ impl<T: Trace + 'static> GcHandle<T> {
     #[allow(clippy::significant_drop_tightening)]
     fn try_resolve_impl(&self) -> Option<Gc<T>> {
         unsafe {
+            // FIX bug388: Check is_allocated BEFORE dereferencing to avoid type confusion.
+            // If slot is swept and reused, we'd read flags from the wrong object.
+            if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return None;
+                }
+            }
+
             let gc_box = &*self.ptr.as_ptr();
             if gc_box.is_under_construction()
                 || gc_box.has_dead_flag()
