@@ -1,7 +1,7 @@
 # [Bug]: Handle::as_ptr() missing is_allocated check before dereference
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -130,3 +130,12 @@ This is a soundness issue. `Handle::as_ptr()` returns a raw pointer derived from
 
 **Geohot (Exploit 觀點):**
 Type confusion from a swept/reused slot is a classic exploit primitive. If an attacker can trigger GC at a specific time, they could potentially have a handle point to attacker-controlled data. The missing `is_allocated` check combined with lazy sweep timing creates a controllable race window.
+
+---
+
+## Resolution (2026-03-23)
+
+**Fixed.** Applied the suggested fix to `handles/mod.rs` in `Handle::as_ptr()`:
+- Added `is_allocated` check before dereferencing the slot
+- Matches the pattern used in `Handle::get()` and other handle access methods
+- Clippy passes

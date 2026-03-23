@@ -451,8 +451,18 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
     /// is only used while the handle scope is active.
     #[inline]
     pub unsafe fn as_ptr(&self) -> *const GcBox<T> {
-        let slot = unsafe { &*self.slot };
-        slot.as_ptr() as *const GcBox<T>
+        unsafe {
+            let slot_ref = &*self.slot;
+            let gc_box_ptr = slot_ref.as_ptr() as *const GcBox<T>;
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Handle::as_ptr: slot has been swept and reused"
+                );
+            }
+            gc_box_ptr
+        }
     }
 }
 
