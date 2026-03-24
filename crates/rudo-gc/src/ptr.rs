@@ -797,8 +797,9 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return Self::null();
             }
 
-            // Check is_allocated BEFORE inc_weak to prevent corrupting another
-            // object's weak_count if this slot has been swept (bug354).
+            // Check is_allocated AFTER inc_weak + generation check.
+            // The generation check (lines 794-798) detects slot reuse and undoes inc_weak.
+            // This is_allocated check is a secondary safety net (bug354).
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
