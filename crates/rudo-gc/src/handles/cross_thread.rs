@@ -819,14 +819,8 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     /// fallible resolution.
     #[track_caller]
     pub fn resolve(&self) -> Option<Gc<T>> {
-        // Check TCB liveness BEFORE the ThreadId comparison to prevent ThreadId
-        // reuse from bypassing origin-thread affinity after the thread terminates.
         if self.origin_tcb.upgrade().is_none() {
-            panic!(
-                "WeakCrossThreadHandle::resolve: origin thread has terminated (origin={:?}). \
-                 Use try_resolve() instead.",
-                self.origin_thread
-            );
+            return self.weak.upgrade();
         }
         assert_eq!(
             std::thread::current().id(),
@@ -834,7 +828,6 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
             "WeakCrossThreadHandle::resolve() must be called on the origin thread. \
              If the origin thread has terminated, use try_resolve() instead."
         );
-        // Weak handle does not prevent collection. Check liveness first.
         self.weak.upgrade()
     }
 
