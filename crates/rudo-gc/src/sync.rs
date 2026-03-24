@@ -296,8 +296,6 @@ impl<T: ?Sized> GcRwLock<T> {
         GcRwLockWriteGuard {
             guard,
             _marker: PhantomData,
-            incremental_active,
-            generational_active,
         }
     }
 
@@ -339,8 +337,6 @@ impl<T: ?Sized> GcRwLock<T> {
             GcRwLockWriteGuard {
                 guard,
                 _marker: PhantomData,
-                incremental_active,
-                generational_active,
             }
         })
     }
@@ -439,8 +435,6 @@ impl<T: GcCapture + ?Sized> Drop for GcRwLockReadGuard<'_, T> {
 pub struct GcRwLockWriteGuard<'a, T: GcCapture + ?Sized> {
     guard: parking_lot::RwLockWriteGuard<'a, T>,
     _marker: PhantomData<&'a T>,
-    incremental_active: bool,
-    generational_active: bool,
 }
 
 impl<T: GcCapture + ?Sized> Deref for GcRwLockWriteGuard<'_, T> {
@@ -469,11 +463,13 @@ impl<T: GcCapture + ?Sized> DerefMut for GcRwLockWriteGuard<'_, T> {
 /// swept between check and mark. No explicit pre-check is needed here.
 impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
-        let incremental_active = self.incremental_active;
-        let generational_active = self.generational_active;
-
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
+
+        // FIX bug409: Re-check current barrier state instead of using cached values.
+        // The incremental marking phase may have started after lock acquisition.
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
         // Mark new GC pointers black only during incremental marking (bug302).
         // Generational barrier should only mark page as dirty, not prevent collection.
@@ -606,8 +602,6 @@ impl<T: ?Sized> GcMutex<T> {
         GcMutexGuard {
             guard,
             _marker: PhantomData,
-            incremental_active,
-            generational_active,
         }
     }
 
@@ -647,8 +641,6 @@ impl<T: ?Sized> GcMutex<T> {
             GcMutexGuard {
                 guard,
                 _marker: PhantomData,
-                incremental_active,
-                generational_active,
             }
         })
     }
@@ -716,8 +708,6 @@ where
 pub struct GcMutexGuard<'a, T: GcCapture + ?Sized> {
     guard: parking_lot::MutexGuard<'a, T>,
     _marker: PhantomData<&'a T>,
-    incremental_active: bool,
-    generational_active: bool,
 }
 
 impl<T: GcCapture + ?Sized> Deref for GcMutexGuard<'_, T> {
@@ -746,11 +736,13 @@ impl<T: GcCapture + ?Sized> DerefMut for GcMutexGuard<'_, T> {
 /// swept between check and mark. No explicit pre-check is needed here.
 impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
     fn drop(&mut self) {
-        let incremental_active = self.incremental_active;
-        let generational_active = self.generational_active;
-
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
+
+        // FIX bug409: Re-check current barrier state instead of using cached values.
+        // The incremental marking phase may have started after lock acquisition.
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
         // FIX bug304: Only mark GC pointers black during incremental marking, not generational barrier.
         if incremental_active {
