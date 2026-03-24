@@ -730,7 +730,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
             // ref_count > 0: use atomic try_inc_ref_if_nonzero to avoid TOCTOU with
             // concurrent dec_ref (another thread could drop last ref between check and inc_ref)
+            let pre_generation = gc_box.generation();
             if !gc_box.try_inc_ref_if_nonzero() {
+                return None;
+            }
+            // Verify generation hasn't changed - if slot was reused, undo inc_ref (bug413).
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(ptr.as_ptr());
                 return None;
             }
             // Post-CAS safety check: verify object wasn't dropped between check and CAS
@@ -943,7 +949,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
             // ref_count > 0: use atomic try_inc_ref_if_nonzero to avoid TOCTOU with
             // concurrent dec_ref (another thread could drop last ref between check and inc_ref)
+            let pre_generation = gc_box.generation();
             if !gc_box.try_inc_ref_if_nonzero() {
+                return None;
+            }
+            // Verify generation hasn't changed - if slot was reused, undo inc_ref (bug413).
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(ptr.as_ptr());
                 return None;
             }
             // Post-CAS safety check: verify object wasn't dropped between check and CAS

@@ -14,7 +14,7 @@
 ---
 
 ## 🧩 受影響的組件與環境 (Affected Component & Environment)
-- **Component:** `GcBoxWeakRef::upgrade()` in `ptr.rs`
+- **Component:** `GcBoxWeakRef::upgrade()` and `GcBoxWeakRef::try_upgrade()` in `ptr.rs`
 - **OS / Architecture:** All
 - **Rust Version:** 1.75+
 - **rudo-gc Version:** Current
@@ -30,6 +30,8 @@
 ### 實際行為 (Actual Behavior)
 
 The `try_inc_ref_if_nonzero` path (lines 731-754) does NOT check generation after a successful increment. Only `dropping_state`, `has_dead_flag`, and `is_allocated` are checked.
+
+Similarly, `GcBoxWeakRef::try_upgrade()` (lines 889-973) has the SAME bug - its `try_inc_ref_if_nonzero` path (line 946) also lacks generation check.
 
 This contrasts with `GcBoxWeakRef::clone()` (lines 789-798) which correctly checks generation:
 
@@ -143,3 +145,26 @@ if pre_generation != gc_box.generation() {
 
 - bug400: GcBox::as_weak missing generation check (similar issue, already fixed)
 - bug354: GcBoxWeakRef::clone missing generation check (similar pattern)
+
+---
+
+## Additional Finding: try_upgrade() Has Same Bug
+
+`GcBoxWeakRef::try_upgrade()` (ptr.rs line 889) has the identical bug in its `try_inc_ref_if_nonzero` path (line 946). The fix is the same pattern - add generation check after successful `try_inc_ref_if_nonzero`:
+
+```rust
+// Get generation BEFORE try_inc_ref_if_nonzero to detect slot reuse.
+let pre_generation = gc_box.generation();
+
+if !gc_box.try_inc_ref_if_nonzero() {
+    return None;
+}
+
+// Verify generation hasn't changed - if slot was reused, undo inc_ref.
+if pre_generation != gc_box.generation() {
+    GcBox::undo_inc_ref(ptr.as_ptr());
+    return None;
+}
+```
+
+Both `upgrade()` and `try_upgrade()` need this fix.
