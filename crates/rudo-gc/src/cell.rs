@@ -1146,13 +1146,46 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     #[inline]
     pub fn borrow_mut_simple(&self) -> parking_lot::MutexGuard<'_, T>
     where
-        T: Trace,
+        T: GcCapture,
     {
-        // Cache barrier states once to avoid TOCTOU (bug116, bug153, bug173)
+        let guard = self.inner.lock();
+
+        // FIX bug174: Capture old GC pointers for SATB when incremental marking is active.
+        // This was previously missing - borrow_mut_simple would skip SATB capture even when
+        // incremental marking was active, potentially causing premature collection.
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        if incremental_active {
+            let value = &*guard;
+            let mut gc_ptrs = Vec::with_capacity(32);
+            value.capture_gc_ptrs_into(&mut gc_ptrs);
+            if !gc_ptrs.is_empty()
+                && crate::heap::try_with_heap(|heap| {
+                    for gc_ptr in &gc_ptrs {
+                        if !heap.record_satb_old_value(*gc_ptr) {
+                            crate::gc::incremental::IncrementalMarkState::global()
+                                .request_fallback(
+                                    crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                                );
+                            break;
+                        }
+                    }
+                    true
+                })
+                .is_none()
+            {
+                for gc_ptr in gc_ptrs {
+                    if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
+                        crate::gc::incremental::IncrementalMarkState::global().request_fallback(
+                            crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                        );
+                    }
+                }
+            }
+        }
+
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
         self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
-        self.inner.lock()
+        guard
     }
 
     /// Mutably borrows the wrapped value without write barriers.
