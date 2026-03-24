@@ -1082,6 +1082,10 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
                 }
                 let current_generation = (*gc_box).generation();
                 if current_generation != marked_generation {
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        (*header.as_ptr()).clear_mark_atomic(idx);
+                        return false;
+                    }
                     return true;
                 }
                 return true;
