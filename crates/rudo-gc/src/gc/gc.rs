@@ -942,6 +942,7 @@ fn perform_multi_threaded_collect_full() {
     log_phase_start(GcPhase::Mark, before_bytes);
 
     let mark_start = Instant::now();
+    super::sync::GC_MARK_IN_PROGRESS.store(true, std::sync::atomic::Ordering::Release);
     for tcb in &tcbs {
         unsafe {
             total_objects_marked = total_objects_marked.saturating_add(mark_major_roots_multi(
@@ -950,6 +951,7 @@ fn perform_multi_threaded_collect_full() {
             ));
         }
     }
+    super::sync::GC_MARK_IN_PROGRESS.store(false, std::sync::atomic::Ordering::Release);
     mark_duration = mark_start.elapsed();
 
     #[cfg(feature = "tracing")]
