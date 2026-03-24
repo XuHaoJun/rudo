@@ -706,6 +706,12 @@ impl<T: Trace + 'static> Drop for GcHandle<T> {
         if self.handle_id == HandleId::INVALID {
             return;
         }
+
+        // FIX bug407: Get generation BEFORE removing from handle map to detect slot reuse.
+        // If slot is swept and reused between remove and dec_ref, the generation
+        // will be different when we check before dec_ref.
+        let pre_generation = unsafe { (*self.ptr.as_ptr()).generation() };
+
         if let Some(tcb) = self.origin_tcb.upgrade() {
             let mut roots = tcb.cross_thread_roots.lock().unwrap();
             roots.strong.remove(&self.handle_id);
@@ -721,6 +727,13 @@ impl<T: Trace + 'static> Drop for GcHandle<T> {
                 if !(*header.as_ptr()).is_allocated(idx) {
                     return;
                 }
+            }
+            // FIX bug407: Verify generation hasn't changed before dec_ref.
+            // If slot was reused during the window between remove and dec_ref,
+            // panic to prevent corrupting the new object's ref_count.
+            let current_generation = (*self.ptr.as_ptr()).generation();
+            if pre_generation != current_generation {
+                panic!("GcHandle::drop: slot was reused during drop (generation mismatch)");
             }
         }
         crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
