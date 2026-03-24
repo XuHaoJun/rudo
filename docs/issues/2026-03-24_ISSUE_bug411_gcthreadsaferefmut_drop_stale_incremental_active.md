@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeRefMut::drop() uses stale cached incremental_active value (bug409 pattern)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -180,3 +180,24 @@ SATB barrier 的关键不变量是：在 marking 开始时可达的对象必须�
 - bug302: GcThreadSafeRefMut::drop incorrectly marks GC pointers during generational barrier
 - bug122: GcThreadSafeCell::borrow_mut missing barrier check
 - bug160/161: GcThreadSafeRefMut::drop TOCTOU
+
+---
+
+## Fix Applied (2026-03-24)
+
+**File Modified:** `crates/rudo-gc/src/cell.rs`
+
+**Change:** `GcThreadSafeRefMut::drop()` now re-checks barrier state at drop time instead of using cached values.
+
+```rust
+// Before (buggy):
+let incremental_active = self.incremental_active;  // CACHED value!
+let generational_active = self.generational_active;  // CACHED value!
+
+// After (fixed):
+// FIX bug411: Re-check current barrier state instead of using cached values.
+let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+let generational_active = crate::gc::incremental::is_generational_barrier_active();
+```
+
+This matches the fix applied to `GcRwLockWriteGuard::drop()` and `GcMutexGuard::drop()` in bug409.
