@@ -519,6 +519,14 @@ impl<T: Trace + ?Sized> GcBox<T> {
         self.weak_count
             .fetch_and(!Self::UNDER_CONSTRUCTION_FLAG, Ordering::Release);
     }
+
+    /// Clear `is_dropping`. Used when reusing a slot so the new object does not inherit
+    /// a dropping state from the previous object. Must be called before the slot is used
+    /// for a new allocation (bug408).
+    #[inline]
+    pub(crate) fn clear_is_dropping(&self) {
+        self.is_dropping.store(0, Ordering::Release);
+    }
 }
 
 impl<T: Trace> GcBox<T> {
