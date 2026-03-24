@@ -526,6 +526,9 @@ fn stop_all_mutators_for_snapshot() {
 
     drop(registry);
 
+    let start_time = std::time::Instant::now();
+    let timeout = std::time::Duration::from_millis(100);
+
     loop {
         let registry = crate::heap::thread_registry().lock().unwrap();
         let active = registry
@@ -533,19 +536,24 @@ fn stop_all_mutators_for_snapshot() {
             .load(std::sync::atomic::Ordering::Acquire);
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
 
-        // If no threads registered (e.g., after reset), we're the only mutator
-        // so we can proceed immediately
         if registry.threads.is_empty() {
             break;
         }
 
-        // active == 1 means only the collector is running; all mutators have
-        // reached safepoint and decremented active_count in enter_rendezvous().
-        // The rendezvous_ack_counter was never fully wired: mutators never
-        // increment it, so ack_count >= thread_count would never hold.
         if active == 1 {
             break;
         }
+
+        if start_time.elapsed() > timeout {
+            eprintln!(
+                "[GC] WARNING: Timeout waiting for mutators to reach safepoint, \
+                 threads may be spinning without allocations. Forcing STW fallback."
+            );
+            state.request_fallback(crate::gc::incremental::FallbackReason::SliceTimeout);
+            break;
+        }
+
+        std::thread::yield_now();
     }
 }
 

@@ -1,7 +1,7 @@
 # [Bug]: stop_all_mutators_for_snapshot busy-wait loop without timeout can cause GC deadlock
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
