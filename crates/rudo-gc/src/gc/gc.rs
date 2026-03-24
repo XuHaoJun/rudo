@@ -2319,6 +2319,7 @@ fn sweep_phase2_reclaim(
 
                         (*header).clear_allocated(i);
                         (*gc_box_ptr).clear_gen_old();
+                        (*gc_box_ptr).clear_under_construction();
                         reclaimed += 1;
                         is_alloc = false;
                         continue;
