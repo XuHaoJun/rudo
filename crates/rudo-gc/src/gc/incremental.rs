@@ -1080,6 +1080,10 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
                     (*header.as_ptr()).clear_mark_atomic(idx);
                     return false;
                 }
+                let current_generation = (*gc_box).generation();
+                if current_generation != marked_generation {
+                    return true;
+                }
                 return true;
             }
         }
