@@ -394,7 +394,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// Uses `AcqRel` ordering to synchronize weak count changes.
     pub fn dec_weak(&self) -> bool {
         loop {
-            let current = self.weak_count.load(Ordering::Relaxed);
+            let current = self.weak_count.load(Ordering::Acquire);
             let flags = current & Self::FLAGS_MASK;
             let count = current & !Self::FLAGS_MASK;
 
