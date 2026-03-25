@@ -311,7 +311,7 @@ impl IncrementalMarkState {
             return false;
         }
         // Use CAS to make the transition atomic (bug73: avoid TOCTOU race).
-        if self
+        let ok = self
             .phase
             .compare_exchange(
                 current,
@@ -319,8 +319,8 @@ impl IncrementalMarkState {
                 Ordering::SeqCst,
                 Ordering::SeqCst,
             )
-            .is_ok()
-        {
+            .is_ok();
+        if ok {
             #[cfg(feature = "tracing")]
             {
                 let phase_str = match new_phase {
@@ -333,10 +333,8 @@ impl IncrementalMarkState {
                 let objects_marked = self.stats.objects_marked.load(Ordering::Relaxed);
                 crate::gc::tracing::log_phase_transition(phase_str, objects_marked);
             }
-            true
-        } else {
-            false
         }
+        ok
     }
 
     #[allow(clippy::unused_self)]

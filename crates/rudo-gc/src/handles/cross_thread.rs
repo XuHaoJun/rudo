@@ -187,7 +187,7 @@ impl<T: Trace + 'static> GcHandle<T> {
             || {
                 let orphan = heap::lock_orphan_roots();
                 if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
-                    panic!("GcHandle::resolve: handle has been unregistered");
+                    panic!("GcHandle::resolve: handle has been unregistered (TCB died before migration completed)");
                 }
                 self.resolve_impl()
             },
