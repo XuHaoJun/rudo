@@ -820,7 +820,8 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     #[track_caller]
     pub fn resolve(&self) -> Option<Gc<T>> {
         if self.origin_tcb.upgrade().is_none() {
-            return self.weak.upgrade();
+            panic!("WeakCrossThreadHandle::resolve() cannot be called after origin thread terminated. \
+                    Use try_resolve() instead.");
         }
         assert_eq!(
             std::thread::current().id(),
