@@ -704,13 +704,30 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return None;
             }
 
+            // FIX bug425: Get generation BEFORE try_inc_ref_from_zero to detect slot reuse.
+            // If slot is swept and reused between pre-check and CAS success,
+            // the generation will be different after the CAS.
+            let pre_resurrection_generation = gc_box.generation();
+
             // Try atomic transition from 0 to 1 (resurrection)
             if gc_box.try_inc_ref_from_zero() {
+                // FIX bug425: Get generation AFTER successful CAS to detect slot reuse.
+                // If slot is swept and reused between CAS success and return,
+                // the generation will be different.
+                let post_resurrection_generation = gc_box.generation();
+
                 // Second check: verify object wasn't dropped between check and CAS
                 if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
                     // Undo the increment and return None. Use undo_inc_ref, not dec_ref:
                     // dec_ref returns early without decrementing when DEAD_FLAG is set.
                     let _ = gc_box;
+                    crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
+                    return None;
+                }
+                // Verify generation hasn't changed - if slot was reused, undo inc_ref.
+                // This is the ONLY check that can detect slot reuse after resurrection.
+                // is_allocated returns true for both old and new object in reused slot.
+                if post_resurrection_generation != pre_resurrection_generation {
                     crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
                 }
@@ -919,8 +936,18 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return None;
             }
 
+            // FIX bug425: Get generation BEFORE try_inc_ref_from_zero to detect slot reuse.
+            // If slot is swept and reused between pre-check and CAS success,
+            // the generation will be different after the CAS.
+            let pre_resurrection_generation = gc_box.generation();
+
             // Try atomic transition from 0 to 1 (same as regular upgrade)
             if gc_box.try_inc_ref_from_zero() {
+                // FIX bug425: Get generation AFTER successful CAS to detect slot reuse.
+                // If slot is swept and reused between CAS success and return,
+                // the generation will be different.
+                let post_resurrection_generation = gc_box.generation();
+
                 // Second check: verify object wasn't dropped between check and CAS
                 if gc_box.dropping_state() != 0
                     || gc_box.has_dead_flag()
@@ -929,6 +956,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                     // Undo the increment and return None. Use undo_inc_ref, not dec_ref:
                     // dec_ref returns early without decrementing when DEAD_FLAG is set.
                     let _ = gc_box;
+                    crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
+                    return None;
+                }
+                // Verify generation hasn't changed - if slot was reused, undo inc_ref.
+                // This is the ONLY check that can detect slot reuse after resurrection.
+                // is_allocated returns true for both old and new object in reused slot.
+                if post_resurrection_generation != pre_resurrection_generation {
                     crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
                 }
