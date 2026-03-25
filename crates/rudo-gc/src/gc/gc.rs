@@ -2461,6 +2461,9 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
                     return; // Already marked by another thread, no push needed
                 }
                 Ok(true) => {
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        return;
+                    }
                     let marked_generation = (*ptr.as_ptr()).generation();
                     if !(*header.as_ptr()).is_allocated(idx) {
                         let current_generation = (*ptr.as_ptr()).generation();

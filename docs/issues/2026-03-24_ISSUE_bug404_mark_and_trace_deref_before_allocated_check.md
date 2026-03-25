@@ -1,6 +1,6 @@
 # [Bug]: mark_and_trace_incremental dereferences before is_allocated check
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -114,5 +114,37 @@ Ok(true) => {
 - Precise timing window could be exploited if an attacker can influence GC timing
 - If memory is freed and not immediately reused, reading stale pointer could leak sensitive data from freed object
 - The race between lazy sweep and marking creates a narrow but real exploit window
+
+---
+
+## Resolution (2026-03-25)
+
+**Outcome:** Fixed.
+
+Applied the suggested fix to `gc/gc.rs` in `mark_and_trace_incremental()`:
+- Added `is_allocated` check BEFORE the dereference at line 2464
+- This matches the pattern used in `mark_object_black` and prevents UAF when lazy sweep runs concurrently
+
+```rust
+Ok(true) => {
+    if !(*header.as_ptr()).is_allocated(idx) {  // CHECK FIRST (FIX)
+        return;
+    }
+    let marked_generation = (*ptr.as_ptr()).generation();  // THEN DEREF
+    if !(*header.as_ptr()).is_allocated(idx) {
+        let current_generation = (*ptr.as_ptr()).generation();
+        if current_generation != marked_generation {
+            return;
+        }
+        (*header.as_ptr()).clear_mark_atomic(idx);
+        return;
+    }
+    visitor.objects_marked += 1;
+    break;
+}
+```
+
+- Clippy passes
+- All tests pass
 
 (End of file - total 97 lines)
