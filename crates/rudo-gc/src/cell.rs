@@ -1188,6 +1188,21 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
         self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
+
+        if incremental_active {
+            unsafe {
+                let guard_ref = &*guard;
+                let mut new_gc_ptrs = Vec::with_capacity(32);
+                guard_ref.capture_gc_ptrs_into(&mut new_gc_ptrs);
+                if !new_gc_ptrs.is_empty() {
+                    for gc_ptr in new_gc_ptrs {
+                        let _ =
+                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
+                    }
+                }
+            }
+        }
+
         guard
     }
 

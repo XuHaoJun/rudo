@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell::borrow_mut_simple 缺少 mark_object_black 導致增量 GC 遺漏新指標
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
