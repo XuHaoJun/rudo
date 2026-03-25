@@ -2137,8 +2137,8 @@ fn sweep_segment_pages(heap: &mut LocalHeap, only_young: bool) -> usize {
     #[cfg(feature = "tracing")]
     tracing::debug!(heap_bytes = heap.total_allocated(), "sweep_start");
 
-    let pending = sweep_phase1_finalize(heap, only_young);
-    let reclaimed = sweep_phase2_reclaim(heap, pending, only_young);
+    sweep_phase1_finalize(heap, only_young);
+    let reclaimed = sweep_phase2_reclaim(heap, only_young);
 
     #[cfg(feature = "tracing")]
     tracing::debug!(objects_freed = reclaimed, "sweep_end");
@@ -2163,9 +2163,7 @@ fn sweep_segment_pages(heap: &mut LocalHeap, only_young: bool) -> usize {
 /// ```
 ///
 /// See `docs/reentrant-alloc-rules.md` for safety guidelines.
-fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop> {
-    let mut pending = Vec::new();
-
+fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) {
     // Snapshot pages to prevent iterator invalidation if drop_fn allocates memory
     // (which could trigger heap.pages.push() and invalidate the iterator)
     let pages_snapshot: Vec<_> = heap.all_pages().collect();
@@ -2237,18 +2235,11 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                         // objects are never reclaimed, and the next GC cycle will
                         // try to drop them again - use-after-free!
                         (*gc_box_ptr).set_dead();
-
-                        pending.push(PendingDrop {
-                            page: page_ptr,
-                            index: i,
-                        });
                     }
                 }
             }
         }
     }
-
-    pending
 }
 
 /// Phase 2: Reclaim memory and rebuild free lists.
@@ -2270,11 +2261,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
     clippy::if_not_else,
     clippy::doc_markdown
 )]
-fn sweep_phase2_reclaim(
-    heap: &mut LocalHeap,
-    _pending: Vec<PendingDrop>,
-    only_young: bool,
-) -> usize {
+fn sweep_phase2_reclaim(heap: &mut LocalHeap, only_young: bool) -> usize {
     let mut reclaimed = 0;
 
     let pages_snapshot: Vec<_> = heap.all_pages().collect();
