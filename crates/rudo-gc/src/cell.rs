@@ -1171,8 +1171,11 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     }
                     true
                 })
-                .is_none()
+                .is_some()
             {
+                // Heap available, SATB recorded in thread-local buffer
+            } else {
+                // No GC heap on this thread, use cross-thread buffer (bug417)
                 for gc_ptr in gc_ptrs {
                     if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
                         crate::gc::incremental::IncrementalMarkState::global().request_fallback(
