@@ -1086,6 +1086,10 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
                         (*header.as_ptr()).clear_mark_atomic(idx);
                         return false;
                     }
+                    if (*gc_box).is_under_construction() {
+                        (*header.as_ptr()).clear_mark_atomic(idx);
+                        return false;
+                    }
                     return true;
                 }
                 return true;
