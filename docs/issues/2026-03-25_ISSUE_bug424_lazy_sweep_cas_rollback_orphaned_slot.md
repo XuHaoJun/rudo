@@ -1,7 +1,7 @@
 # [Bug]: Lazy Sweep CAS 回滾後 Slot 遺留 allocated 標記導致記憶體洩漏
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Closed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
