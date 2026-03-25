@@ -958,8 +958,25 @@ pub fn worker_mark_loop(
                                 (*header.as_ptr()).clear_mark_atomic(idx);
                                 break;
                             }
-                            marked += 1;
                             let gc_box_ptr = obj.cast_mut();
+                            // FIX bug427: Capture generation to detect slot reuse.
+                            // If slot is swept and reused between mark and trace_fn call,
+                            // generation will differ and we should skip this object.
+                            let marked_generation = (*gc_box_ptr).generation();
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                let current_generation = (*gc_box_ptr).generation();
+                                if current_generation != marked_generation {
+                                    break; // Slot was reused - skip
+                                }
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                break;
+                            }
+                            // Verify generation hasn't changed before calling trace_fn (bug427 fix).
+                            // If slot was reused, trace_fn would be called on wrong object data.
+                            if (*gc_box_ptr).generation() != marked_generation {
+                                break; // Slot was reused - skip
+                            }
+                            marked += 1;
                             ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
                             break;
                         }
@@ -1097,8 +1114,25 @@ pub fn worker_mark_loop_with_registry(
                                 (*header.as_ptr()).clear_mark_atomic(idx);
                                 break;
                             }
-                            marked += 1;
                             let gc_box_ptr = obj.cast_mut();
+                            // FIX bug427: Capture generation to detect slot reuse.
+                            // If slot is swept and reused between mark and trace_fn call,
+                            // generation will differ and we should skip this object.
+                            let marked_generation = (*gc_box_ptr).generation();
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                let current_generation = (*gc_box_ptr).generation();
+                                if current_generation != marked_generation {
+                                    break; // Slot was reused - skip
+                                }
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                break;
+                            }
+                            // Verify generation hasn't changed before calling trace_fn (bug427 fix).
+                            // If slot was reused, trace_fn would be called on wrong object data.
+                            if (*gc_box_ptr).generation() != marked_generation {
+                                break; // Slot was reused - skip
+                            }
+                            marked += 1;
                             ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
                             break;
                         }
