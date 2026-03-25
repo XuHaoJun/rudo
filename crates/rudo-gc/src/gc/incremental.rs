@@ -808,9 +808,20 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
         return;
     }
 
+    // Capture generation to detect slot reuse (bug426 fix).
+    // If slot is swept and reused between entry and trace_fn call,
+    // generation will differ and we should skip this object.
+    let marked_generation = (*gc_box.as_ptr()).generation();
+
     let block_size = (*header.as_ptr()).block_size as usize;
     let header_size = crate::heap::PageHeader::header_size(block_size);
     let data_ptr = ptr.add(header_size);
+
+    // Verify generation hasn't changed before calling trace_fn (bug426 fix).
+    // If slot was reused, trace_fn would be called on wrong object data.
+    if (*gc_box.as_ptr()).generation() != marked_generation {
+        return;
+    }
 
     let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
 

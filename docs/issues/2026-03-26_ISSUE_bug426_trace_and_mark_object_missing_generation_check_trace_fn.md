@@ -1,7 +1,8 @@
 # [Bug]: trace_and_mark_object missing generation check before trace_fn - slot reuse TOCTOU
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
+**Fixed:** Applied generation check in `trace_and_mark_object` at `gc/incremental.rs:807-818`
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
