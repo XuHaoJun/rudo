@@ -823,6 +823,14 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
         return;
     }
 
+    // Defensive second is_allocated check before trace_fn (bug434).
+    // Provides consistency with mark_object_black which has the same check
+    // after generation verification. Guards against concurrent lazy sweep
+    // modifying slot state between generation check and trace_fn call.
+    if !(*header.as_ptr()).is_allocated(idx) {
+        return;
+    }
+
     let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
 
     ((*gc_box.as_ptr()).trace_fn)(data_ptr, &mut visitor);
