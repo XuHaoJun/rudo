@@ -3036,6 +3036,8 @@ impl GcVisitor {
                 }
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+                    let pop_generation = (*ptr.as_ptr()).generation();
+
                     // Skip freed slots (lazy sweep may have reclaimed this between enqueue and
                     // processing) and already-marked objects to avoid double-counting.
                     if !(*header.as_ptr()).is_allocated(idx) {
@@ -3044,6 +3046,15 @@ impl GcVisitor {
                     if (*header.as_ptr()).is_marked(idx) {
                         continue;
                     }
+
+                    // FIX bug435: Verify generation hasn't changed before calling trace_fn.
+                    // If slot was reused between enqueue and processing, generation would differ
+                    // and calling trace_fn on the wrong object data could cause memory corruption.
+                    let current_generation = (*ptr.as_ptr()).generation();
+                    if current_generation != pop_generation {
+                        continue;
+                    }
+
                     (*header.as_ptr()).set_mark(idx);
                     self.objects_marked += 1;
                 } else {

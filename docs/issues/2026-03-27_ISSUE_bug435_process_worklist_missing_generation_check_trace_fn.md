@@ -1,7 +1,7 @@
 # [Bug]: process_worklist missing generation check before trace_fn - trace_fn called on wrong object after slot reuse
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Closed
+**Tags:** Verified
 
 ## 威脅模型評估 (Threat Model Assessment)
 
@@ -180,3 +180,41 @@ An attacker who can influence GC timing could trigger this race to cause memory 
 - bug427: worker_mark_loop missing generation check - correct pattern followed
 - bug431: mark_and_trace_incremental missing generation check - claimed missing but has check at lines 2477-2479
 - bug295: TOCTOU between is_allocated check and set_mark - root cause pattern
+
+---
+
+## 修復紀錄 (Fix Applied)
+
+**Date:** 2026-03-27
+**Commit:** Applied fix to `process_worklist` in `gc/gc.rs`
+
+**Fix:** Added generation capture and check before calling `trace_fn`:
+
+```rust
+if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
+    let pop_generation = (*ptr.as_ptr()).generation();
+
+    // Skip freed slots and already-marked objects
+    if !(*header.as_ptr()).is_allocated(idx) {
+        continue;
+    }
+    if (*header.as_ptr()).is_marked(idx) {
+        continue;
+    }
+
+    // FIX bug435: Verify generation hasn't changed before calling trace_fn.
+    // If slot was reused between enqueue and processing, generation would differ
+    // and calling trace_fn on the wrong object data could cause memory corruption.
+    let current_generation = (*ptr.as_ptr()).generation();
+    if current_generation != pop_generation {
+        continue;
+    }
+
+    (*header.as_ptr()).set_mark(idx);
+    self.objects_marked += 1;
+} else {
+    continue;
+}
+
+(((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), self);
+```
