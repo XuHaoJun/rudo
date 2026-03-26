@@ -2474,6 +2474,9 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
                         (*header.as_ptr()).clear_mark_atomic(idx);
                         return;
                     }
+                    if (*ptr.as_ptr()).generation() != marked_generation {
+                        return;
+                    }
                     visitor.objects_marked += 1;
                     break;
                 }
