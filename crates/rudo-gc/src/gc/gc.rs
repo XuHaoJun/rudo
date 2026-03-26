@@ -2309,6 +2309,7 @@ fn sweep_phase2_reclaim(heap: &mut LocalHeap, only_young: bool) -> usize {
                         (*header).clear_allocated(i);
                         (*gc_box_ptr).clear_gen_old();
                         (*gc_box_ptr).clear_under_construction();
+                        (*gc_box_ptr).clear_is_dropping();
                         reclaimed += 1;
                         is_alloc = false;
                         continue;
