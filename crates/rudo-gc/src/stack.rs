@@ -225,11 +225,11 @@ where
     #[cfg(all(target_arch = "aarch64", not(miri)))]
     std::hint::black_box(&regs);
 
-    // For other architectures (not x86_64 or aarch64), we need a fallback.
-    // Use a large enough dummy array and black_box.
-    #[cfg(all(not(target_arch = "x86_64"), not(target_arch = "aarch64")))]
+    // For other architectures (not x86_64 or aarch64) and for miri testing,
+    // we need a fallback. Use a large enough dummy array and black_box.
+    #[cfg(any(all(not(target_arch = "x86_64"), not(target_arch = "aarch64")), miri))]
     let regs = [0usize; 32];
-    #[cfg(all(not(target_arch = "x86_64"), not(target_arch = "aarch64")))]
+    #[cfg(any(all(not(target_arch = "x86_64"), not(target_arch = "aarch64")), miri))]
     std::hint::black_box(&regs);
 
     // Scan spilled registers explicitly as "Registers"
