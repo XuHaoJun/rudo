@@ -2751,12 +2751,13 @@ impl LocalHeap {
                                 unsafe { ((*gc_box_ptr).drop_fn)(obj_ptr) };
                             }
 
-                            // Clear DEAD_FLAG, GEN_OLD_FLAG, and UNDER_CONSTRUCTION_FLAG so reused slots
-                            // don't inherit stale state.
+                            // Clear DEAD_FLAG, GEN_OLD_FLAG, UNDER_CONSTRUCTION_FLAG, and is_dropping so
+                            // reused slots don't inherit stale state.
                             unsafe {
                                 (*gc_box_ptr).clear_dead();
                                 (*gc_box_ptr).clear_gen_old();
                                 (*gc_box_ptr).clear_under_construction();
+                                (*gc_box_ptr).clear_is_dropping();
                             }
 
                             // Add back to free list
