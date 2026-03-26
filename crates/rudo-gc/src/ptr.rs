@@ -626,6 +626,7 @@ impl GcBox<()> {
             std::ptr::addr_of_mut!((*ptr).drop_fn).write(Self::no_op_drop);
             std::ptr::addr_of_mut!((*ptr).trace_fn).write(Self::no_op_trace);
             std::ptr::addr_of_mut!((*ptr).is_dropping).write(AtomicUsize::new(0));
+            std::ptr::addr_of_mut!((*ptr).generation).write(AtomicU32::new(1));
         }
     }
 }

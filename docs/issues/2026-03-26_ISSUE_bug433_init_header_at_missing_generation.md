@@ -1,7 +1,7 @@
 # [Bug]: GcBox::init_header_at Does Not Initialize generation Field
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Closed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
