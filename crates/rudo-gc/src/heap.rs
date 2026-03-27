@@ -3173,6 +3173,9 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
                 } else {
                     let h = ptr_to_page_header(ptr);
