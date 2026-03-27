@@ -1205,6 +1205,8 @@ fn try_steal_work(queue: &Arc<PerThreadMarkQueue>, all_queues: &[Arc<PerThreadMa
                     return true;
                 }
             }
+            let _ = push_overflow_work(obj);
+            return true;
         }
     }
 
