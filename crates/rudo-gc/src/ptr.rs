@@ -363,7 +363,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
         // SAFETY: Caller ensures ptr is valid and allocated.
         let weak_count_ptr = std::ptr::addr_of!((*ptr).weak_count);
         loop {
-            let current = (*weak_count_ptr).load(Ordering::Relaxed);
+            let current = (*weak_count_ptr).load(Ordering::Acquire);
             let flags = current & Self::FLAGS_MASK;
             let count = current & !Self::FLAGS_MASK;
 
@@ -2880,7 +2880,7 @@ impl<T: Trace> Drop for Weak<T> {
             // between a pre-check and dec_weak is eliminated by always decrementing.
             let weak_count_ptr = std::ptr::addr_of!((*ptr.as_ptr()).weak_count);
 
-            let mut current = (*weak_count_ptr).load(Ordering::Relaxed);
+            let mut current = (*weak_count_ptr).load(Ordering::Acquire);
             loop {
                 let flags = current & GcBox::<T>::FLAGS_MASK;
                 let count = current & !GcBox::<T>::FLAGS_MASK;
