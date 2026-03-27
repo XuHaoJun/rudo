@@ -1206,11 +1206,7 @@ fn mark_minor_roots_multi(
         }
     }
     heap.clear_dirty_pages_snapshot();
-    while let Some(ptr) = visitor.worklist.pop() {
-        unsafe {
-            ((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), &mut visitor);
-        }
-    }
+    visitor.process_worklist();
 }
 
 #[inline]
@@ -1499,12 +1495,7 @@ fn mark_major_roots_multi(
         }
     }
 
-    while let Some(ptr) = visitor.worklist.pop() {
-        unsafe {
-            ((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), &mut visitor);
-        }
-    }
-
+    visitor.process_worklist();
     visitor.objects_marked()
 }
 
@@ -2124,7 +2115,8 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
             return;
         }
 
-        visitor.worklist.push(ptr);
+        let enqueue_generation = (*ptr.as_ptr()).generation();
+        visitor.worklist.push((ptr, enqueue_generation));
     }
 }
 
@@ -2426,7 +2418,8 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
             return;
         }
 
-        visitor.worklist.push(ptr);
+        let enqueue_generation = (*ptr.as_ptr()).generation();
+        visitor.worklist.push((ptr, enqueue_generation));
     }
 }
 
@@ -2487,7 +2480,8 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
         return;
     }
 
-    visitor.worklist.push(ptr);
+    let enqueue_generation = (*ptr.as_ptr()).generation();
+    visitor.worklist.push((ptr, enqueue_generation));
 }
 
 /// Sweep Large Object Space.
@@ -3033,7 +3027,7 @@ impl GcVisitor {
 
     #[inline]
     pub fn process_worklist(&mut self) {
-        while let Some(ptr) = self.worklist.pop() {
+        while let Some((ptr, enqueue_generation)) = self.worklist.pop() {
             unsafe {
                 let ptr_addr = ptr.as_ptr() as *const u8;
                 let header = crate::heap::ptr_to_page_header(ptr_addr);
@@ -3043,8 +3037,6 @@ impl GcVisitor {
                 }
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
-                    let pop_generation = (*ptr.as_ptr()).generation();
-
                     // Skip freed slots (lazy sweep may have reclaimed this between enqueue and
                     // processing) and already-marked objects to avoid double-counting.
                     if !(*header.as_ptr()).is_allocated(idx) {
@@ -3054,11 +3046,11 @@ impl GcVisitor {
                         continue;
                     }
 
-                    // FIX bug435: Verify generation hasn't changed before calling trace_fn.
+                    // FIX bug444: Verify generation matches enqueue-time generation.
                     // If slot was reused between enqueue and processing, generation would differ
                     // and calling trace_fn on the wrong object data could cause memory corruption.
                     let current_generation = (*ptr.as_ptr()).generation();
-                    if current_generation != pop_generation {
+                    if current_generation != enqueue_generation {
                         continue;
                     }
 
@@ -3118,7 +3110,9 @@ impl Visitor for GcVisitor {
                     return;
                 }
 
-                self.worklist.push(std::ptr::NonNull::new_unchecked(ptr));
+                let enqueue_generation = (*ptr).generation();
+                self.worklist
+                    .push((std::ptr::NonNull::new_unchecked(ptr), enqueue_generation));
             }
         }
     }

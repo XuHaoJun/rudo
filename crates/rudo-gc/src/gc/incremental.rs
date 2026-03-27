@@ -587,7 +587,8 @@ unsafe fn mark_root_for_snapshot(ptr: NonNull<GcBox<()>>, visitor: &mut crate::t
         if !was_marked {
             (*header.as_ptr()).set_mark(idx);
             visitor.objects_marked += 1;
-            visitor.worklist.push(ptr);
+            let enqueue_generation = (*ptr.as_ptr()).generation();
+            visitor.worklist.push((ptr, enqueue_generation));
         }
     }
 }
@@ -635,7 +636,7 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
         }
     }
 
-    while let Some(ptr) = visitor.worklist.pop() {
+    while let Some((ptr, _enqueue_generation)) = visitor.worklist.pop() {
         state.push_work(ptr);
     }
 
@@ -835,7 +836,7 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
 
     ((*gc_box.as_ptr()).trace_fn)(data_ptr, &mut visitor);
 
-    while let Some(child_ptr) = visitor.worklist.pop() {
+    while let Some((child_ptr, _enqueue_generation)) = visitor.worklist.pop() {
         state.push_work(child_ptr);
     }
 }
@@ -975,7 +976,7 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
         heap.clear_dirty_pages_snapshot();
     }
 
-    while let Some(ptr) = visitor.worklist.pop() {
+    while let Some((ptr, _enqueue_generation)) = visitor.worklist.pop() {
         state.push_work(ptr);
         total_marked += 1;
     }
