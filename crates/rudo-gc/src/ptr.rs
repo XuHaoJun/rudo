@@ -2073,6 +2073,15 @@ impl<T: Trace> Deref for Gc<T> {
         assert!(!ptr.is_null(), "Gc::deref: cannot dereference a null Gc");
         let gc_box_ptr = ptr.as_ptr();
         unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::deref: slot has been swept and reused"
+                );
+            }
+        }
+        unsafe {
             assert!(
                 !(*gc_box_ptr).has_dead_flag()
                     && (*gc_box_ptr).dropping_state() == 0
