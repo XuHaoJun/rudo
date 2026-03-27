@@ -1182,9 +1182,10 @@ fn try_steal_work(queue: &Arc<PerThreadMarkQueue>, all_queues: &[Arc<PerThreadMa
             }
         }
         // Fallback: push back to overflow queue to prevent work loss
-        // This can only fail if clearing is in progress, in which case
-        // the work will be picked up by the clearer
-        let _ = push_overflow_work(obj);
+        // Retry until successful to ensure work is not lost
+        while push_overflow_work(obj).is_err() {
+            std::hint::spin_loop();
+        }
         return true;
     }
 
@@ -1205,7 +1206,11 @@ fn try_steal_work(queue: &Arc<PerThreadMarkQueue>, all_queues: &[Arc<PerThreadMa
                     return true;
                 }
             }
-            let _ = push_overflow_work(obj);
+            // Fallback: push back to overflow queue to prevent work loss
+            // Retry until successful to ensure work is not lost
+            while push_overflow_work(obj).is_err() {
+                std::hint::spin_loop();
+            }
             return true;
         }
     }
