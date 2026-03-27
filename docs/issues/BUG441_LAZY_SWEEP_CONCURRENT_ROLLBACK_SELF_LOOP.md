@@ -1,6 +1,6 @@
 # [Bug]: lazy_sweep_page 并发回滚时可能产生自循环空闲链表
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

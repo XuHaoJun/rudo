@@ -2596,6 +2596,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
 /// - `header_size` must be correctly calculated for the block size
 /// - The page must not be concurrently accessed by other threads during sweep
 /// - Caller must ensure no new allocations occur on this page during sweep
+#[allow(clippy::too_many_lines)]
 unsafe fn lazy_sweep_page(
     page_ptr: NonNull<PageHeader>,
     block_size: usize,
@@ -2692,6 +2693,9 @@ unsafe fn lazy_sweep_page(
                             } else {
                                 Some(actual)
                             };
+                            if current_free == Some(u16::try_from(i).unwrap()) {
+                                break;
+                            }
                             obj_cast.write_unaligned(current_free);
                         }
                     }
@@ -2817,6 +2821,9 @@ unsafe fn lazy_sweep_page_all_dead(
                             } else {
                                 Some(actual)
                             };
+                            if current_free == Some(u16::try_from(i).unwrap()) {
+                                break;
+                            }
                             obj_cast.write_unaligned(current_free);
                         }
                     }
