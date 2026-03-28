@@ -1,7 +1,28 @@
 # [Bug]: stop_all_mutators_for_snapshot timeout fallback cleared by execute_snapshot reset_fallback
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
+
+## Fix Record
+
+**Date:** 2026-03-28
+**Fix Commit:** 671626f
+**Fix Description:** The bug was fixed by moving `reset_fallback()` to BEFORE `stop_all_mutators_for_snapshot()` in `execute_snapshot()`. This ensures that if `stop_all_mutators_for_snapshot()` times out and sets `fallback_requested = true`, that flag is preserved for `mark_slice()` to detect and trigger STW fallback. The issue file was created AFTER the fix was applied, documenting a bug that no longer exists in the code.
+
+**Code After Fix:**
+```rust
+pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
+    let state = IncrementalMarkState::global();
+    state.reset_fallback();  // Reset at START of cycle
+
+    stop_all_mutators_for_snapshot();  // May set fallback_requested = true if timeout
+
+    state.set_phase(MarkPhase::Snapshot);
+    state.stats().reset();
+    state.reset_worklist();
+    // ...
+}
+```
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
