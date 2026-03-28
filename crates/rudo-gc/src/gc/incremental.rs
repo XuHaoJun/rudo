@@ -159,7 +159,6 @@ pub struct IncrementalMarkState {
     max_worklist_size: AtomicUsize,
     slice_start_time: Mutex<Option<Instant>>,
     slice_counter: AtomicUsize,
-    rendezvous_ack_counter: AtomicUsize,
     #[cfg(feature = "tracing")]
     gc_id: Mutex<Option<crate::tracing::GcId>>,
 }
@@ -256,7 +255,6 @@ impl IncrementalMarkState {
             max_worklist_size: AtomicUsize::new(0),
             slice_start_time: Mutex::new(None),
             slice_counter: AtomicUsize::new(0),
-            rendezvous_ack_counter: AtomicUsize::new(0),
             #[cfg(feature = "tracing")]
             gc_id: Mutex::new(None),
         }
@@ -311,7 +309,7 @@ impl IncrementalMarkState {
             return false;
         }
         // Use CAS to make the transition atomic (bug73: avoid TOCTOU race).
-        if self
+        let ok = self
             .phase
             .compare_exchange(
                 current,
@@ -319,8 +317,8 @@ impl IncrementalMarkState {
                 Ordering::SeqCst,
                 Ordering::SeqCst,
             )
-            .is_ok()
-        {
+            .is_ok();
+        if ok {
             #[cfg(feature = "tracing")]
             {
                 let phase_str = match new_phase {
@@ -333,10 +331,8 @@ impl IncrementalMarkState {
                 let objects_marked = self.stats.objects_marked.load(Ordering::Relaxed);
                 crate::gc::tracing::log_phase_transition(phase_str, objects_marked);
             }
-            true
-        } else {
-            false
         }
+        ok
     }
 
     #[allow(clippy::unused_self)]
@@ -468,19 +464,6 @@ impl IncrementalMarkState {
         self.stats().reset();
         *self.slice_start_time.lock() = None;
         self.root_count.store(0, Ordering::SeqCst);
-        self.rendezvous_ack_counter.store(0, Ordering::SeqCst);
-    }
-
-    pub fn increment_rendezvous_ack(&self) -> usize {
-        self.rendezvous_ack_counter.fetch_add(1, Ordering::AcqRel)
-    }
-
-    pub fn rendezvous_ack_count(&self) -> usize {
-        self.rendezvous_ack_counter.load(Ordering::Acquire)
-    }
-
-    pub fn reset_rendezvous_ack(&self) {
-        self.rendezvous_ack_counter.store(0, Ordering::Release);
     }
 }
 
@@ -522,9 +505,10 @@ fn stop_all_mutators_for_snapshot() {
             .store(true, std::sync::atomic::Ordering::Release);
     }
 
-    state.increment_rendezvous_ack();
-
     drop(registry);
+
+    let start_time = std::time::Instant::now();
+    let timeout = std::time::Duration::from_millis(100);
 
     loop {
         let registry = crate::heap::thread_registry().lock().unwrap();
@@ -533,24 +517,28 @@ fn stop_all_mutators_for_snapshot() {
             .load(std::sync::atomic::Ordering::Acquire);
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
 
-        // If no threads registered (e.g., after reset), we're the only mutator
-        // so we can proceed immediately
         if registry.threads.is_empty() {
             break;
         }
 
-        // active == 1 means only the collector is running; all mutators have
-        // reached safepoint and decremented active_count in enter_rendezvous().
-        // The rendezvous_ack_counter was never fully wired: mutators never
-        // increment it, so ack_count >= thread_count would never hold.
         if active == 1 {
             break;
         }
+
+        if start_time.elapsed() > timeout {
+            eprintln!(
+                "[GC] WARNING: Timeout waiting for mutators to reach safepoint, \
+                 threads may be spinning without allocations. Forcing STW fallback."
+            );
+            state.request_fallback(crate::gc::incremental::FallbackReason::SliceTimeout);
+            break;
+        }
+
+        std::thread::yield_now();
     }
 }
 
 fn resume_all_mutators() {
-    let state = IncrementalMarkState::global();
     let registry = crate::heap::thread_registry().lock().unwrap();
     for tcb in &registry.threads {
         tcb.gc_requested
@@ -559,7 +547,6 @@ fn resume_all_mutators() {
     }
     drop(registry);
     crate::heap::GC_REQUESTED.store(false, std::sync::atomic::Ordering::Release);
-    state.reset_rendezvous_ack();
 }
 
 #[inline]
@@ -581,7 +568,8 @@ unsafe fn mark_root_for_snapshot(ptr: NonNull<GcBox<()>>, visitor: &mut crate::t
         if !was_marked {
             (*header.as_ptr()).set_mark(idx);
             visitor.objects_marked += 1;
-            visitor.worklist.push(ptr);
+            let enqueue_generation = (*ptr.as_ptr()).generation();
+            visitor.worklist.push((ptr, enqueue_generation));
         }
     }
 }
@@ -629,7 +617,7 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
         }
     }
 
-    while let Some(ptr) = visitor.worklist.pop() {
+    while let Some((ptr, _enqueue_generation)) = visitor.worklist.pop() {
         state.push_work(ptr);
     }
 
@@ -798,15 +786,38 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
         return;
     }
 
+    if (*gc_box.as_ptr()).is_under_construction() {
+        return;
+    }
+
+    // Capture generation to detect slot reuse (bug426 fix).
+    // If slot is swept and reused between entry and trace_fn call,
+    // generation will differ and we should skip this object.
+    let marked_generation = (*gc_box.as_ptr()).generation();
+
     let block_size = (*header.as_ptr()).block_size as usize;
     let header_size = crate::heap::PageHeader::header_size(block_size);
     let data_ptr = ptr.add(header_size);
+
+    // Verify generation hasn't changed before calling trace_fn (bug426 fix).
+    // If slot was reused, trace_fn would be called on wrong object data.
+    if (*gc_box.as_ptr()).generation() != marked_generation {
+        return;
+    }
+
+    // Defensive second is_allocated check before trace_fn (bug434).
+    // Provides consistency with mark_object_black which has the same check
+    // after generation verification. Guards against concurrent lazy sweep
+    // modifying slot state between generation check and trace_fn call.
+    if !(*header.as_ptr()).is_allocated(idx) {
+        return;
+    }
 
     let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
 
     ((*gc_box.as_ptr()).trace_fn)(data_ptr, &mut visitor);
 
-    while let Some(child_ptr) = visitor.worklist.pop() {
+    while let Some((child_ptr, _enqueue_generation)) = visitor.worklist.pop() {
         state.push_work(child_ptr);
     }
 }
@@ -854,13 +865,12 @@ unsafe fn scan_page_for_marked_refs(
                         // generation will differ and we should skip this object.
                         let current_generation = unsafe { (*gc_box_ptr).generation() };
                         if current_generation != marked_generation {
-                            (*header).clear_mark_atomic(i);
+                            // Slot was reused - the mark now belongs to the new object, don't clear.
                             break;
                         }
                         // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
                         // mark_object_black / mark_new_object_black (bug238, bug309).
                         if unsafe { (*gc_box_ptr).is_under_construction() } {
-                            (*header).clear_mark_atomic(i);
                             break;
                         }
                         refs_found += 1;
@@ -947,7 +957,7 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
         heap.clear_dirty_pages_snapshot();
     }
 
-    while let Some(ptr) = visitor.worklist.pop() {
+    while let Some((ptr, _enqueue_generation)) = visitor.worklist.pop() {
         state.push_work(ptr);
         total_marked += 1;
     }
@@ -970,56 +980,55 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
     let obj_count = (*header).obj_count as usize;
 
     for i in 0..obj_count {
-        // Entry: is_marked only. After set_mark: is_allocated + generation checks, then a
+        // Entry: is_marked only. After try_mark: is_allocated + generation checks, then a
         // second is_allocated immediately before push_work (bug258 lazy-sweep TOCTOU; bug336 reuse).
         if !(*header).is_marked(i) {
             let obj_ptr = header.cast::<u8>().add(header_size + i * block_size);
-            // set_mark returns true if we successfully marked - use it as try_mark
-            // Re-check is_allocated after successful mark to fix TOCTOU with lazy sweep.
-            if (*header).set_mark(i) {
-                #[allow(clippy::cast_ptr_alignment)]
-                #[allow(clippy::unnecessary_cast)]
-                #[allow(clippy::ptr_as_ptr)]
-                let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-                // Read generation after successful mark to detect slot reuse (bug336).
-                let marked_generation = unsafe { (*gc_box_ptr).generation() };
-
-                if !(*header).is_allocated(i) {
-                    // Slot was swept after set_mark. Check generation to distinguish
-                    // swept from swept+reused (bug363 fix).
-                    let current_generation = unsafe { (*gc_box_ptr).generation() };
-                    if current_generation == marked_generation {
-                        // Slot was swept but not reused - safe to clear mark.
-                        (*header).clear_mark_atomic(i);
-                        continue;
+            // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug370)
+            loop {
+                match (*header).try_mark(i) {
+                    Ok(false) => {
+                        // Already marked by another thread; move to next slot.
+                        // No recheck needed: we didn't mark, so nothing to roll back.
+                        break;
                     }
-                    // Slot was reused - the mark now belongs to the new object, don't clear.
-                    // Continue to push_work to trace the new object.
-                }
-                // Verify generation hasn't changed (bug336 fix).
-                // If slot was reallocated between set_mark and push_work,
-                // generation will differ and we should skip this object.
-                let current_generation = unsafe { (*gc_box_ptr).generation() };
-                if current_generation != marked_generation {
-                    (*header).clear_mark_atomic(i);
-                    continue;
-                }
-                // Second is_allocated re-check to fix TOCTOU with lazy sweep (bug258).
-                // If slot was swept after first is_allocated check but before push_work,
-                // clear mark and skip to avoid pushing a pointer to a swept slot.
-                if !(*header).is_allocated(i) {
-                    (*header).clear_mark_atomic(i);
-                    continue;
-                }
-                // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
-                // mark_object_black / mark_new_object_black (bug238, bug309).
-                if unsafe { (*gc_box_ptr).is_under_construction() } {
-                    (*header).clear_mark_atomic(i);
-                    continue;
-                }
-                if let Some(gc_box) = NonNull::new(gc_box_ptr) {
-                    let ptr = IncrementalMarkState::global();
-                    ptr.push_work(gc_box);
+                    Ok(true) => {
+                        #[allow(clippy::cast_ptr_alignment)]
+                        #[allow(clippy::unnecessary_cast)]
+                        #[allow(clippy::ptr_as_ptr)]
+                        let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
+                        // Read generation after successful mark to detect slot reuse (bug336).
+                        let marked_generation = unsafe { (*gc_box_ptr).generation() };
+
+                        // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
+                        // If slot was swept after try_mark, clear mark and skip.
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
+                        // Verify generation hasn't changed (bug336 fix).
+                        // If slot was reallocated between try_mark and push_work,
+                        // generation will differ and we should skip this object.
+                        let current_generation = unsafe { (*gc_box_ptr).generation() };
+                        if current_generation != marked_generation {
+                            // Slot was reused - the mark now belongs to the new object, don't clear.
+                            break;
+                        }
+                        // Skip partially initialized objects (e.g. Gc::new_cyclic_weak); matches
+                        // mark_object_black / mark_new_object_black (bug238, bug309).
+                        if unsafe { (*gc_box_ptr).is_under_construction() } {
+                            break;
+                        }
+                        if let Some(gc_box) = NonNull::new(gc_box_ptr) {
+                            let ptr = IncrementalMarkState::global();
+                            ptr.push_work(gc_box);
+                        }
+                        break;
+                    }
+                    Err(()) => {
+                        // CAS failed - another thread modified this word.
+                        // Retry the CAS to get a consistent view.
+                    }
                 }
             }
         }
@@ -1067,10 +1076,11 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
                 let marked_generation = (*gc_box).generation();
                 (*header.as_ptr()).set_mark(idx);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    let current_generation = (*gc_box).generation();
-                    if current_generation != marked_generation {
-                        return true;
-                    }
+                    (*header.as_ptr()).clear_mark_atomic(idx);
+                    return false;
+                }
+                let current_generation = (*gc_box).generation();
+                if current_generation != marked_generation {
                     (*header.as_ptr()).clear_mark_atomic(idx);
                     return false;
                 }
@@ -1136,6 +1146,12 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
                 let marked_generation = (*gc_box).generation();
                 // We just marked. Re-check is_allocated to fix TOCTOU with lazy sweep.
                 if (*h).is_allocated(idx) {
+                    // bug399 fix: also check generation to detect slot reuse
+                    let current_generation = (*gc_box).generation();
+                    if current_generation != marked_generation {
+                        // Slot was reused - mark belongs to new object
+                        return None;
+                    }
                     return Some(idx);
                 }
                 // Slot was swept between our check and try_mark.

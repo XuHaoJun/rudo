@@ -104,7 +104,10 @@ pub struct GcVisitor {
     /// of objects, this could consume significant memory. Future optimization:
     /// use a chunked/overflow-resistant queue that spills to heap
     /// or uses multiple segments when approaching capacity limits.
-    pub(crate) worklist: Vec<std::ptr::NonNull<crate::ptr::GcBox<()>>>,
+    ///
+    /// Each entry stores `(pointer, enqueue_generation)` to detect slot reuse
+    /// between enqueue and dequeue. Generation is captured at push time.
+    pub(crate) worklist: Vec<(std::ptr::NonNull<crate::ptr::GcBox<()>>, u32)>,
     /// Count of objects marked during this collection.
     pub(crate) objects_marked: usize,
 }

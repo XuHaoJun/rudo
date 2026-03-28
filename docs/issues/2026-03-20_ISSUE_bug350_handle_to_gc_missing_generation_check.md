@@ -194,9 +194,15 @@ Slot reuse + 引用計數操作錯誤是經典的記憶體腐敗向量。攻擊�
 
 ---
 
-## Resolution (2026-03-20)
+## Re-Opened (2026-03-22) — Closed (2026-03-28)
 
-**Outcome:** Fixed.
+The concern was that `Handle::get` read `gc_box.value()` before verifying generation. **Current code** (`handles/mod.rs` `Handle::get`, and `handles/async.rs` `AsyncHandle::get` / `get_unchecked`) uses this order: `pre_generation` → `try_inc_ref_if_nonzero` → `assert_eq!(pre_generation, gc_box.generation(), …)` → `dec_ref` and post-checks → **`gc_box.value()` last**. Generation is therefore asserted before the payload read. Same pattern applies to `AsyncHandle::get` and `get_unchecked`.
+
+---
+
+## Original Resolution (2026-03-20)
+
+**Outcome:** (Incorrectly marked Fixed)
 
 Added generation checks to detect slot reuse TOCTOU in:
 - `Handle::to_gc()` in `handles/mod.rs:358-399`

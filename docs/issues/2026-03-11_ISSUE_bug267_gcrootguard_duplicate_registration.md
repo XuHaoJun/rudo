@@ -1,5 +1,8 @@
 # Issue: bug267 - GcRootGuard duplicate registration causes premature root unregistration
 
+**Status:** Fixed
+**Tags:** Verified
+
 ## Summary
 
 When multiple `GcRootGuard` instances are created for the same GC pointer, dropping one guard incorrectly unregisters the root while other guards for the same pointer still exist.
@@ -54,65 +57,43 @@ impl Drop for GcRootGuard {
 }
 ```
 
-## PoC
+## Fix Applied
+
+Changed `GcRootSet` to use `HashMap<usize, usize>` for reference counting:
 
 ```rust
-use rudo_gc::{Gc, Trace, GcTokioExt};
-use std::sync::Arc;
-use std::thread;
+// tokio/root.rs - Fixed register()
+pub fn register(&self, ptr: usize) {
+    let mut roots = self.roots.lock().unwrap();
+    let count = roots.entry(ptr).or_insert(0);
+    *count += 1;
+    self.dirty.store(true, Ordering::Release);
+}
 
-#[derive(Trace)]
-struct Data { value: i32 }
-
-fn main() {
-    let gc = Gc::new(Data { value: 42 });
-    
-    // Create two guards for the same Gc
-    let guard1 = gc.root_guard();
-    let guard2 = gc.root_guard();
-    
-    // Drop the first guard - root is now unregistered
-    drop(guard1);
-    
-    // But guard2 is still alive! Root was incorrectly removed.
-    // GC could now collect the object even though guard2 exists.
-    
-    // Access via guard2 could cause use-after-free
-    let _ = *guard2.resolve(); // May point to freed memory!
+// tokio/root.rs - Fixed unregister()
+pub fn unregister(&self, ptr: usize) {
+    let mut roots = self.roots.lock().unwrap();
+    if let Some(count) = roots.get_mut(&ptr) {
+        *count -= 1;
+        if *count == 0 {
+            roots.remove(&ptr);
+        }
+        self.dirty.store(true, Ordering::Release);
+    }
+    drop(roots);
 }
 ```
 
-## Suggested Fix
-
-Use reference counting in `GcRootSet` to track how many guards protect each pointer:
-
-1. Change `GcRootSet::roots` from `Vec<usize>` to `HashMap<usize, usize>` (ptr -> count)
-2. Modify `register()` to increment count instead of just checking presence
-3. Modify `unregister()` to decrement count and only remove when count reaches 0
-
-Alternatively, use RAII properly by making `GcRootGuard` hold an `Arc`-like reference to prevent duplicates at the guard level.
-
-## Internal Discussion Record
-
-### R. Kent Dybvig
-The issue is fundamentally about reference counting at the root set level. GC systems typically need accurate root counts to determine when objects can be collected. The current implementation treats roots as boolean (present/absent) rather than counted, which breaks down when multiple paths to the same root exist.
-
-### Rustacean
-This is a classic reference counting bug. The safety invariant violated is: "As long as any GcRootGuard exists for a pointer, that pointer must remain a GC root." The current code violates this by removing the root on any drop.
-
-### Geohot
-The exploit potential here is clear - if an attacker can arrange for guard1 to be dropped before guard2 (e.g., via exception handling or async task cancellation), they could trigger use-after-free by causing the protected object to be collected while another reference to it still exists.
-
 ## Verification
 
-- [ ] Create test that creates multiple guards for same Gc
-- [ ] Verify object stays alive while any guard exists
-- [ ] Verify object can be collected after all guards dropped
+- [x] Create test that creates multiple guards for same Gc
+- [x] Verify object stays alive while any guard exists
+- [x] Verify object can be collected after all guards dropped
 
 ## Tags
 
-- Unverified
+- Verified
 
 ## Status
 
-Open
+Fixed

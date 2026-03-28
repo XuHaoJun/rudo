@@ -97,7 +97,13 @@ fn record_satb_old_values_with_state<T: GcCapture + ?Sized>(value: &T, increment
     .is_none()
     {
         for gc_ptr in gc_ptrs {
-            crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr);
+            // FIX bug330: Check return value and request fallback if buffer overflowed.
+            // Note: push_cross_thread_satb also requests fallback internally, but
+            // checking here ensures we don't silently drop pointers.
+            if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
+                crate::gc::incremental::IncrementalMarkState::global()
+                    .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
+            }
         }
     }
 }
@@ -283,15 +289,16 @@ impl<T: ?Sized> GcRwLock<T> {
         // marking started while blocked (matches GcThreadSafeCell::borrow_mut).
         let incremental_active = is_incremental_marking_active();
         let generational_active = is_generational_barrier_active();
-        record_satb_old_values_with_state(&*guard, incremental_active);
+        // FIX bug432: Always record SATB OLD values at write() time, not just when
+        // incremental_active is true. This ensures OLD values are preserved if
+        // incremental marking starts after lock acquisition but before drop().
+        record_satb_old_values_with_state(&*guard, true);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
         // FIX bug302: Only mark GC pointers black during incremental marking, not generational barrier.
         mark_gc_ptrs_immediate(&*guard, incremental_active);
         GcRwLockWriteGuard {
             guard,
             _marker: PhantomData,
-            incremental_active,
-            generational_active,
         }
     }
 
@@ -326,15 +333,14 @@ impl<T: ?Sized> GcRwLock<T> {
         self.inner.try_write().map(|guard| {
             let incremental_active = is_incremental_marking_active();
             let generational_active = is_generational_barrier_active();
-            record_satb_old_values_with_state(&*guard, incremental_active);
+            // FIX bug432: Always record SATB OLD values at write() time.
+            record_satb_old_values_with_state(&*guard, true);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
             // FIX bug302: Only mark GC pointers black during incremental marking, not generational barrier.
             mark_gc_ptrs_immediate(&*guard, incremental_active);
             GcRwLockWriteGuard {
                 guard,
                 _marker: PhantomData,
-                incremental_active,
-                generational_active,
             }
         })
     }
@@ -433,8 +439,6 @@ impl<T: GcCapture + ?Sized> Drop for GcRwLockReadGuard<'_, T> {
 pub struct GcRwLockWriteGuard<'a, T: GcCapture + ?Sized> {
     guard: parking_lot::RwLockWriteGuard<'a, T>,
     _marker: PhantomData<&'a T>,
-    incremental_active: bool,
-    generational_active: bool,
 }
 
 impl<T: GcCapture + ?Sized> Deref for GcRwLockWriteGuard<'_, T> {
@@ -463,11 +467,13 @@ impl<T: GcCapture + ?Sized> DerefMut for GcRwLockWriteGuard<'_, T> {
 /// swept between check and mark. No explicit pre-check is needed here.
 impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
-        let incremental_active = self.incremental_active;
-        let generational_active = self.generational_active;
-
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
+
+        // FIX bug409: Re-check current barrier state instead of using cached values.
+        // The incremental marking phase may have started after lock acquisition.
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
         // Mark new GC pointers black only during incremental marking (bug302).
         // Generational barrier should only mark page as dirty, not prevent collection.
@@ -593,15 +599,14 @@ impl<T: ?Sized> GcMutex<T> {
         // marking started while blocked (matches GcThreadSafeCell::borrow_mut).
         let incremental_active = is_incremental_marking_active();
         let generational_active = is_generational_barrier_active();
-        record_satb_old_values_with_state(&*guard, incremental_active);
+        // FIX bug432: Always record SATB OLD values at lock() time.
+        record_satb_old_values_with_state(&*guard, true);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
         // FIX bug302: Only mark GC pointers black during incremental marking, not generational barrier.
         mark_gc_ptrs_immediate(&*guard, incremental_active);
         GcMutexGuard {
             guard,
             _marker: PhantomData,
-            incremental_active,
-            generational_active,
         }
     }
 
@@ -634,15 +639,14 @@ impl<T: ?Sized> GcMutex<T> {
         self.inner.try_lock().map(|guard| {
             let incremental_active = is_incremental_marking_active();
             let generational_active = is_generational_barrier_active();
-            record_satb_old_values_with_state(&*guard, incremental_active);
+            // FIX bug432: Always record SATB OLD values at lock() time.
+            record_satb_old_values_with_state(&*guard, true);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
             // FIX bug302: Only mark GC pointers black during incremental marking, not generational barrier.
             mark_gc_ptrs_immediate(&*guard, incremental_active);
             GcMutexGuard {
                 guard,
                 _marker: PhantomData,
-                incremental_active,
-                generational_active,
             }
         })
     }
@@ -710,8 +714,6 @@ where
 pub struct GcMutexGuard<'a, T: GcCapture + ?Sized> {
     guard: parking_lot::MutexGuard<'a, T>,
     _marker: PhantomData<&'a T>,
-    incremental_active: bool,
-    generational_active: bool,
 }
 
 impl<T: GcCapture + ?Sized> Deref for GcMutexGuard<'_, T> {
@@ -740,11 +742,13 @@ impl<T: GcCapture + ?Sized> DerefMut for GcMutexGuard<'_, T> {
 /// swept between check and mark. No explicit pre-check is needed here.
 impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
     fn drop(&mut self) {
-        let incremental_active = self.incremental_active;
-        let generational_active = self.generational_active;
-
         let mut ptrs = Vec::with_capacity(32);
         self.guard.capture_gc_ptrs_into(&mut ptrs);
+
+        // FIX bug409: Re-check current barrier state instead of using cached values.
+        // The incremental marking phase may have started after lock acquisition.
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
         // FIX bug304: Only mark GC pointers black during incremental marking, not generational barrier.
         if incremental_active {

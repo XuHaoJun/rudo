@@ -384,6 +384,9 @@ pub struct ThreadControlBlock {
 
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for ThreadControlBlock {}
+/// SAFETY: `LocalHeap` and `LocalHandles` are explicitly `Sync` (see their SAFETY
+/// docs). All other fields are `Sync` or protected by mutexes. During STW, all
+/// mutator threads are suspended and the GC holds exclusive &mut access.
 unsafe impl Sync for ThreadControlBlock {}
 
 impl Default for ThreadControlBlock {
@@ -1786,6 +1789,15 @@ pub struct LocalHeap {
     pub(crate) pending_sweep_by_class: [Vec<NonNull<PageHeader>>; 8],
 }
 
+/// SAFETY: The only field that makes `LocalHeap` auto-!Sync is `UnsafeCell<T>` where
+/// `T` is `Tlab` (`tlab_16` through `tlab_2048`). TLABs are thread-local by design
+/// and are only accessed from the owning thread. The GC does not access TLABs during
+/// STW (it only clears marks and sweeps pages). During STW pauses, all mutator threads
+/// are suspended, so there is no concurrent access to any `LocalHeap` field. The GC
+/// accesses `LocalHeap` through `&mut` references exclusively during STW when no other
+/// thread can access it.
+unsafe impl Sync for LocalHeap {}
+
 impl LocalHeap {
     /// Create a new empty heap.
     #[must_use]
@@ -2302,8 +2314,8 @@ impl LocalHeap {
         // SAFETY: Caller guarantees header is valid.
         unsafe { (*header).set_allocated(idx as usize) };
 
-        // Clear DEAD_FLAG, GEN_OLD_FLAG, and UNDER_CONSTRUCTION_FLAG so reused slot is not
-        // incorrectly marked. (UNDER_CONSTRUCTION_FLAG can be set by Gc::new_cyclic_weak.)
+        // Clear DEAD_FLAG, GEN_OLD_FLAG, UNDER_CONSTRUCTION_FLAG, and is_dropping so reused
+        // slot is not incorrectly marked. (UNDER_CONSTRUCTION_FLAG can be set by Gc::new_cyclic_weak.)
         // Also clear dirty bit to prevent minor GC from scanning new objects as dirty (bug122).
         // Increment generation to detect slot reuse (bug347).
         // SAFETY: obj_ptr points to a valid GcBox slot (was in free list).
@@ -2313,6 +2325,7 @@ impl LocalHeap {
             (*gc_box_ptr).clear_dead();
             (*gc_box_ptr).clear_gen_old();
             (*gc_box_ptr).clear_under_construction();
+            (*gc_box_ptr).clear_is_dropping();
             (*gc_box_ptr).increment_generation();
             (*header).clear_dirty(idx as usize);
         }
@@ -2738,12 +2751,13 @@ impl LocalHeap {
                                 unsafe { ((*gc_box_ptr).drop_fn)(obj_ptr) };
                             }
 
-                            // Clear DEAD_FLAG, GEN_OLD_FLAG, and UNDER_CONSTRUCTION_FLAG so reused slots
-                            // don't inherit stale state.
+                            // Clear DEAD_FLAG, GEN_OLD_FLAG, UNDER_CONSTRUCTION_FLAG, and is_dropping so
+                            // reused slots don't inherit stale state.
                             unsafe {
                                 (*gc_box_ptr).clear_dead();
                                 (*gc_box_ptr).clear_gen_old();
                                 (*gc_box_ptr).clear_under_construction();
+                                (*gc_box_ptr).clear_is_dropping();
                             }
 
                             // Add back to free list
@@ -3004,6 +3018,11 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 (header, index)
             };
 
+            // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug364).
+            if !(*h.as_ptr()).is_allocated(index) {
+                return;
+            }
+
             (*h.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(h);
 
@@ -3090,6 +3109,10 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     (h, index)
                 };
 
+            if !(*header.as_ptr()).is_allocated(index) {
+                return;
+            }
+
             (*header.as_ptr()).set_dirty(index);
             heap.add_to_dirty_pages(header);
 
@@ -3131,7 +3154,7 @@ pub fn incremental_write_barrier(ptr: *const u8) {
         unsafe {
             // Tail pages of multi-page large objects have no PageHeader; ptr_to_page_header
             // would yield garbage. Check large_object_map first (see find_gc_box_from_ptr).
-            let (header, _index) =
+            let (header, index) =
                 if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
                     if ptr_addr < head_addr + h_size || ptr_addr >= head_addr + h_size + size {
                         return;
@@ -3148,6 +3171,9 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
+                        return;
+                    }
+                    if !(*h_ptr).is_allocated(0) {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -3185,6 +3211,11 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                     }
                     (h, index)
                 };
+
+            // Skip if slot was swept; avoids corrupting remembered set with reused slot (bug364).
+            if !(*header.as_ptr()).is_allocated(index) {
+                return;
+            }
 
             heap.record_in_remembered_buffer(header);
         }

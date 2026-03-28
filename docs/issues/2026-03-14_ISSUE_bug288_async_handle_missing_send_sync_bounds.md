@@ -1,6 +1,6 @@
 # [Bug]: AsyncHandle/GcScope/AsyncGcHandle implement Send+Sync without requiring T: Send/Sync
 
-**Status:** Verified
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -111,6 +111,24 @@ This is a soundness issue. The unsafe impl of Send/Sync without proper bounds vi
 
 **Geohot (Exploit 觀點):**
 An attacker who finds a way to bypass the runtime thread check could potentially cause data races. The current implementation relies on "defense in depth" but the first line of defense (the type system) is bypassed.
+
+---
+
+## Resolution (2026-03-21)
+
+**Fix:** Changed `AsyncHandle<T>` Send/Sync implementations to require proper bounds in `crates/rudo-gc/src/handles/async.rs:826-827`.
+
+```rust
+// Before (unsound):
+unsafe impl<T: Trace + 'static> Send for AsyncHandle<T> {}
+unsafe impl<T: Trace + 'static> Sync for AsyncHandle<T> {}
+
+// After (sound):
+unsafe impl<T: Trace + Send + 'static> Send for AsyncHandle<T> {}
+unsafe impl<T: Trace + Sync + 'static> Sync for AsyncHandle<T> {}
+```
+
+**Note:** `GcScope` and `AsyncGcHandle` do not have generic `T` parameters (they are type-erased), so unconditional `Send + Sync` impls are appropriate for these types since they only contain raw pointers which are already `Send + Sync`.
 
 ---
 

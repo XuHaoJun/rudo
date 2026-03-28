@@ -363,7 +363,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
         // SAFETY: Caller ensures ptr is valid and allocated.
         let weak_count_ptr = std::ptr::addr_of!((*ptr).weak_count);
         loop {
-            let current = (*weak_count_ptr).load(Ordering::Relaxed);
+            let current = (*weak_count_ptr).load(Ordering::Acquire);
             let flags = current & Self::FLAGS_MASK;
             let count = current & !Self::FLAGS_MASK;
 
@@ -394,7 +394,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// Uses `AcqRel` ordering to synchronize weak count changes.
     pub fn dec_weak(&self) -> bool {
         loop {
-            let current = self.weak_count.load(Ordering::Relaxed);
+            let current = self.weak_count.load(Ordering::Acquire);
             let flags = current & Self::FLAGS_MASK;
             let count = current & !Self::FLAGS_MASK;
 
@@ -452,8 +452,9 @@ impl<T: Trace + ?Sized> GcBox<T> {
     }
 
     /// Mark the value as dropped.
+    /// Uses `Release` ordering to synchronize with `Acquire` loads (e.g. `has_dead_flag`).
     pub(crate) fn set_dead(&self) {
-        self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Relaxed);
+        self.weak_count.fetch_or(Self::DEAD_FLAG, Ordering::Release);
     }
 
     /// Check if this `GcBox` is dead or unrooted (collectible).
@@ -518,6 +519,14 @@ impl<T: Trace + ?Sized> GcBox<T> {
         self.weak_count
             .fetch_and(!Self::UNDER_CONSTRUCTION_FLAG, Ordering::Release);
     }
+
+    /// Clear `is_dropping`. Used when reusing a slot so the new object does not inherit
+    /// a dropping state from the previous object. Must be called before the slot is used
+    /// for a new allocation (bug408).
+    #[inline]
+    pub(crate) fn clear_is_dropping(&self) {
+        self.is_dropping.store(0, Ordering::Release);
+    }
 }
 
 impl<T: Trace> GcBox<T> {
@@ -565,23 +574,28 @@ impl<T: Trace> GcBox<T> {
     pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
         unsafe {
             if self.is_under_construction() || self.has_dead_flag() || self.dropping_state() != 0 {
-                return GcBoxWeakRef {
-                    ptr: AtomicNullable::null(),
-                };
+                return GcBoxWeakRef::null();
             }
 
-            // inc_weak before is_allocated check to avoid TOCTOU with lazy sweep (bug240).
-            // If slot was swept between check and inc_weak, we'd increment the wrong object.
+            // FIX bug400: Get generation BEFORE inc_weak to detect slot reuse.
+            // If slot is swept and reused between flag check and inc_weak,
+            // the generation will be different after inc_weak.
+            let pre_generation = (*NonNull::from(self).as_ptr()).generation();
+
             (*NonNull::from(self).as_ptr()).inc_weak();
+
+            // Verify generation hasn't changed - if slot was reused, undo inc_weak.
+            if pre_generation != (*NonNull::from(self).as_ptr()).generation() {
+                (*NonNull::from(self).as_ptr()).dec_weak();
+                return GcBoxWeakRef::null();
+            }
 
             let self_ptr = NonNull::from(self).as_ptr() as *const u8;
             if let Some(idx) = crate::heap::ptr_to_object_index(self_ptr) {
                 let header = crate::heap::ptr_to_page_header(self_ptr);
                 if !(*header.as_ptr()).is_allocated(idx) {
                     // Don't call dec_weak - slot may be reused (bug133)
-                    return GcBoxWeakRef {
-                        ptr: AtomicNullable::null(),
-                    };
+                    return GcBoxWeakRef::null();
                 }
             }
 
@@ -612,6 +626,7 @@ impl GcBox<()> {
             std::ptr::addr_of_mut!((*ptr).drop_fn).write(Self::no_op_drop);
             std::ptr::addr_of_mut!((*ptr).trace_fn).write(Self::no_op_trace);
             std::ptr::addr_of_mut!((*ptr).is_dropping).write(AtomicUsize::new(0));
+            std::ptr::addr_of_mut!((*ptr).generation).write(AtomicU32::new(1));
         }
     }
 }
@@ -623,13 +638,19 @@ impl GcBox<()> {
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) struct GcBoxWeakRef<T: Trace + 'static> {
     ptr: AtomicNullable<GcBox<T>>,
+    /// Generation of the `GcBox` when this weak ref was created.
+    /// Used to detect slot reuse in `WeakCrossThreadHandle::drop`.
+    generation: u32,
 }
 
 impl<T: Trace + 'static> GcBoxWeakRef<T> {
     /// Create a new weak reference.
+    /// Stores the current generation to detect slot reuse later.
     pub(crate) fn new(ptr: NonNull<GcBox<T>>) -> Self {
+        let generation = unsafe { (*ptr.as_ptr()).generation() };
         Self {
             ptr: AtomicNullable::new(ptr),
+            generation,
         }
     }
 
@@ -637,7 +658,14 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
     pub(crate) const fn null() -> Self {
         Self {
             ptr: AtomicNullable::null(),
+            generation: 0,
         }
+    }
+
+    /// Get the generation stored in this weak reference.
+    #[allow(dead_code)]
+    pub(crate) const fn generation(&self) -> u32 {
+        self.generation
     }
 
     /// Upgrade to a strong reference.
@@ -677,13 +705,30 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return None;
             }
 
+            // FIX bug425: Get generation BEFORE try_inc_ref_from_zero to detect slot reuse.
+            // If slot is swept and reused between pre-check and CAS success,
+            // the generation will be different after the CAS.
+            let pre_resurrection_generation = gc_box.generation();
+
             // Try atomic transition from 0 to 1 (resurrection)
             if gc_box.try_inc_ref_from_zero() {
+                // FIX bug425: Get generation AFTER successful CAS to detect slot reuse.
+                // If slot is swept and reused between CAS success and return,
+                // the generation will be different.
+                let post_resurrection_generation = gc_box.generation();
+
                 // Second check: verify object wasn't dropped between check and CAS
                 if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
                     // Undo the increment and return None. Use undo_inc_ref, not dec_ref:
                     // dec_ref returns early without decrementing when DEAD_FLAG is set.
                     let _ = gc_box;
+                    crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
+                    return None;
+                }
+                // Verify generation hasn't changed - if slot was reused, undo inc_ref.
+                // This is the ONLY check that can detect slot reuse after resurrection.
+                // is_allocated returns true for both old and new object in reused slot.
+                if post_resurrection_generation != pre_resurrection_generation {
                     crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
                 }
@@ -703,7 +748,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
             // ref_count > 0: use atomic try_inc_ref_if_nonzero to avoid TOCTOU with
             // concurrent dec_ref (another thread could drop last ref between check and inc_ref)
+            let pre_generation = gc_box.generation();
             if !gc_box.try_inc_ref_if_nonzero() {
+                return None;
+            }
+            // Verify generation hasn't changed - if slot was reused, undo inc_ref (bug413).
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(ptr.as_ptr());
                 return None;
             }
             // Post-CAS safety check: verify object wasn't dropped between check and CAS
@@ -732,23 +783,17 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
     #[allow(clippy::manual_let_else)]
     pub(crate) fn clone(&self) -> Self {
         let Some(ptr) = self.ptr.load(Ordering::Acquire).as_option() else {
-            return Self {
-                ptr: AtomicNullable::null(),
-            };
+            return Self::null();
         };
 
         let ptr_addr = ptr.as_ptr() as usize;
         let alignment = std::mem::align_of::<GcBox<T>>();
         if ptr_addr % alignment != 0 || ptr_addr < MIN_VALID_HEAP_ADDRESS {
-            return Self {
-                ptr: AtomicNullable::null(),
-            };
+            return Self::null();
         }
 
         if !is_gc_box_pointer_valid(ptr_addr) {
-            return Self {
-                ptr: AtomicNullable::null(),
-            };
+            return Self::null();
         }
 
         unsafe {
@@ -758,15 +803,11 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             // passes a Weak to the closure while the object is under construction;
             // the closure may legitimately clone it (e.g. to store in ref1 and ref2).
             if gc_box.has_dead_flag() {
-                return Self {
-                    ptr: AtomicNullable::null(),
-                };
+                return Self::null();
             }
 
             if gc_box.dropping_state() != 0 {
-                return Self {
-                    ptr: AtomicNullable::null(),
-                };
+                return Self::null();
             }
 
             // Get generation BEFORE inc_weak to detect slot reuse (bug354).
@@ -777,25 +818,23 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             // Verify generation hasn't changed - if slot was reused, undo inc_weak.
             if pre_generation != (*ptr.as_ptr()).generation() {
                 (*ptr.as_ptr()).dec_weak();
-                return Self {
-                    ptr: AtomicNullable::null(),
-                };
+                return Self::null();
             }
 
-            // Check is_allocated BEFORE inc_weak to prevent corrupting another
-            // object's weak_count if this slot has been swept (bug354).
+            // Check is_allocated AFTER inc_weak + generation check.
+            // The generation check above detects slot reuse and undoes inc_weak.
+            // This is_allocated check is a secondary safety net (bug354).
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
                     (*ptr.as_ptr()).dec_weak();
-                    return Self {
-                        ptr: AtomicNullable::null(),
-                    };
+                    return Self::null();
                 }
             }
         }
         Self {
             ptr: AtomicNullable::new(ptr),
+            generation: self.generation,
         }
     }
 
@@ -898,8 +937,18 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return None;
             }
 
+            // FIX bug425: Get generation BEFORE try_inc_ref_from_zero to detect slot reuse.
+            // If slot is swept and reused between pre-check and CAS success,
+            // the generation will be different after the CAS.
+            let pre_resurrection_generation = gc_box.generation();
+
             // Try atomic transition from 0 to 1 (same as regular upgrade)
             if gc_box.try_inc_ref_from_zero() {
+                // FIX bug425: Get generation AFTER successful CAS to detect slot reuse.
+                // If slot is swept and reused between CAS success and return,
+                // the generation will be different.
+                let post_resurrection_generation = gc_box.generation();
+
                 // Second check: verify object wasn't dropped between check and CAS
                 if gc_box.dropping_state() != 0
                     || gc_box.has_dead_flag()
@@ -908,6 +957,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                     // Undo the increment and return None. Use undo_inc_ref, not dec_ref:
                     // dec_ref returns early without decrementing when DEAD_FLAG is set.
                     let _ = gc_box;
+                    crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
+                    return None;
+                }
+                // Verify generation hasn't changed - if slot was reused, undo inc_ref.
+                // This is the ONLY check that can detect slot reuse after resurrection.
+                // is_allocated returns true for both old and new object in reused slot.
+                if post_resurrection_generation != pre_resurrection_generation {
                     crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
                 }
@@ -928,7 +984,13 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
             // ref_count > 0: use atomic try_inc_ref_if_nonzero to avoid TOCTOU with
             // concurrent dec_ref (another thread could drop last ref between check and inc_ref)
+            let pre_generation = gc_box.generation();
             if !gc_box.try_inc_ref_if_nonzero() {
+                return None;
+            }
+            // Verify generation hasn't changed - if slot was reused, undo inc_ref (bug413).
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(ptr.as_ptr());
                 return None;
             }
             // Post-CAS safety check: verify object wasn't dropped between check and CAS
@@ -1812,18 +1874,14 @@ impl<T: Trace> Gc<T> {
     pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
         let ptr = self.ptr.load(Ordering::Acquire);
         let Some(ptr) = ptr.as_option() else {
-            return GcBoxWeakRef {
-                ptr: AtomicNullable::null(),
-            };
+            return GcBoxWeakRef::null();
         };
         unsafe {
             // Check is_allocated before inc_weak to avoid operating on swept-and-reused slot (bug257).
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    return GcBoxWeakRef {
-                        ptr: AtomicNullable::null(),
-                    };
+                    return GcBoxWeakRef::null();
                 }
             }
             let gc_box = &*ptr.as_ptr();
@@ -1831,24 +1889,25 @@ impl<T: Trace> Gc<T> {
                 || gc_box.has_dead_flag()
                 || gc_box.dropping_state() != 0
             {
-                return GcBoxWeakRef {
-                    ptr: AtomicNullable::null(),
-                };
+                return GcBoxWeakRef::null();
             }
+            let pre_generation = gc_box.generation();
             (*ptr.as_ptr()).inc_weak();
+            if pre_generation != (*ptr.as_ptr()).generation() {
+                (*ptr.as_ptr()).dec_weak();
+                return GcBoxWeakRef::null();
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    // Don't call dec_weak - slot may be reused (bug133)
-                    return GcBoxWeakRef {
-                        ptr: AtomicNullable::null(),
-                    };
+                    return GcBoxWeakRef::null();
                 }
             }
-        }
-        GcBoxWeakRef {
-            ptr: AtomicNullable::new(ptr),
+            GcBoxWeakRef {
+                ptr: AtomicNullable::new(ptr),
+                generation: pre_generation,
+            }
         }
     }
 }
@@ -1973,7 +2032,14 @@ impl<T: Trace + 'static> Gc<T> {
                     && !gc_box.is_under_construction(),
                 "Gc::weak_cross_thread_handle: cannot create handle for dead, dropping, or under construction Gc"
             );
+            let pre_generation = gc_box.generation();
             gc_box.inc_weak();
+            if pre_generation != gc_box.generation() {
+                gc_box.dec_weak();
+                panic!(
+                    "Gc::weak_cross_thread_handle: slot was reused between pre-check and inc_weak"
+                );
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
@@ -1998,14 +2064,21 @@ impl<T: Trace + 'static> Gc<T> {
 impl<T: Trace> Deref for Gc<T> {
     type Target = T;
 
-    /// Hot path: only checks `GcBox` flags (same cache line as the value).
-    /// Page header / `is_allocated` lookups are avoided to prevent performance regression.
-    /// Swept slots are caught by `has_dead_flag()` (`set_dead` is called before `clear_allocated`).
+    /// Matches `try_deref`: checks page `is_allocated` (slot not swept/reused) then `GcBox` flags.
     #[inline]
     fn deref(&self) -> &Self::Target {
         let ptr = self.ptr.load(Ordering::Acquire);
         assert!(!ptr.is_null(), "Gc::deref: cannot dereference a null Gc");
         let gc_box_ptr = ptr.as_ptr();
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Gc::deref: slot has been swept and reused"
+                );
+            }
+        }
         unsafe {
             assert!(
                 !(*gc_box_ptr).has_dead_flag()
@@ -2051,7 +2124,19 @@ impl<T: Trace> Clone for Gc<T> {
                 );
             }
 
+            // Get generation BEFORE inc_ref to detect slot reuse (bug387).
+            // If the slot is swept and reused between this check and inc_ref,
+            // the generation will be different after inc_ref.
+            let pre_generation = (*gc_box_ptr).generation();
+
             (*gc_box_ptr).inc_ref();
+
+            // Verify generation hasn't changed - if slot was reused, undo inc_ref.
+            // This prevents inc_ref from operating on the wrong object's ref count.
+            if pre_generation != (*gc_box_ptr).generation() {
+                crate::ptr::GcBox::undo_inc_ref(gc_box_ptr);
+                panic!("Gc::clone: slot was reused during clone (generation mismatch)");
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
@@ -2214,25 +2299,6 @@ impl<T: Trace> Weak<T> {
     ///
     /// assert!(weak.upgrade().is_some());
     /// ```
-    /// Attempt to upgrade to a strong `Gc<T>` reference.
-    ///
-    /// Returns `None` if the value has been collected.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the `Weak` points to a `GcBox` that is currently under construction
-    /// (e.g., during `Gc::new_cyclic_weak`).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use rudo_gc::{Gc, Weak};
-    ///
-    /// let gc = Gc::new(42);
-    /// let weak = Gc::downgrade(&gc);
-    ///
-    /// assert!(weak.upgrade().is_some());
-    /// ```
     pub fn upgrade(&self) -> Option<Gc<T>> {
         let ptr = self.ptr.load(Ordering::Acquire).as_option()?;
 
@@ -2262,12 +2328,11 @@ impl<T: Trace> Weak<T> {
         unsafe {
             let gc_box = &*ptr.as_ptr();
 
-            assert!(
-                !gc_box.is_under_construction(),
-                "Weak::upgrade: cannot upgrade while GcBox is under construction. \
-                 This typically happens if you call upgrade() inside the closure \
-                 passed to Gc::new_cyclic_weak()."
-            );
+            // FIX bug383: Return None instead of panicking when is_under_construction.
+            // This matches Weak::try_upgrade() behavior for consistent API.
+            if gc_box.is_under_construction() {
+                return None;
+            }
 
             let pre_generation = gc_box.generation();
 
@@ -2470,7 +2535,15 @@ impl<T: Trace> Weak<T> {
         let addr = ptr.as_ptr() as usize;
 
         let alignment = std::mem::align_of::<GcBox<T>>();
-        addr >= 4096 && addr % alignment == 0
+        if addr < MIN_VALID_HEAP_ADDRESS || addr % alignment != 0 {
+            return false;
+        }
+
+        if !is_gc_box_pointer_valid(addr) {
+            return false;
+        }
+
+        true
     }
 
     /// Check if the referenced value is still alive.
@@ -2693,7 +2766,19 @@ impl<T: Trace> Clone for Weak<T> {
                     };
                 }
             }
+
+            // Get generation BEFORE inc_weak to detect slot reuse (bug373).
+            let pre_generation = (*ptr.as_ptr()).generation();
+
             (*ptr.as_ptr()).inc_weak();
+
+            // Verify generation hasn't changed - if slot was reused, undo inc_weak.
+            if pre_generation != (*ptr.as_ptr()).generation() {
+                (*ptr.as_ptr()).dec_weak();
+                return Self {
+                    ptr: AtomicNullable::null(),
+                };
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
@@ -2773,7 +2858,7 @@ impl<T: Trace> Drop for Weak<T> {
             // between a pre-check and dec_weak is eliminated by always decrementing.
             let weak_count_ptr = std::ptr::addr_of!((*ptr.as_ptr()).weak_count);
 
-            let mut current = (*weak_count_ptr).load(Ordering::Relaxed);
+            let mut current = (*weak_count_ptr).load(Ordering::Acquire);
             loop {
                 let flags = current & GcBox::<T>::FLAGS_MASK;
                 let count = current & !GcBox::<T>::FLAGS_MASK;

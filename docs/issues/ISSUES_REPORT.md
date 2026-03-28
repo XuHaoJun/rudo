@@ -3,19 +3,25 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 343
-- **Invalid**: 40
+- **Fixed**: 414
+- **Invalid**: 43
+- **Closed**: 7
 - **Resolved**: 1
-- **Unknown**: 2
-- **Verified**: 23
+- **Unknown**: 1
+- **Verified**: 21
 
 ### By Tags
-- **Verified**: 363
-- **Not Verified**: 22
+- **Verified**: 434
+- **Not Verified**: 23
 - **Not Reproduced**: 19
+- **Bug, Fixed**: 1
+- **Bug, GC, Incremental Marking, Slot Reuse, TOCTOU**: 1
+- **Duplicate**: 1
 - **Fixed**: 1
-- **Unknown**: 2
-- **Unverified**: 2
+- **Unknown**: 1
+- **Unverified**: 3
+- **Verified, Fixed**: 2
+- **Verified, Soundness**: 1
 
 ## All Issues
 
@@ -166,6 +172,10 @@
 | [2026-03-16_ISSUE_bug122_gcboxweakref_is_live_missing_dropping_state.md](./2026-03-16_ISSUE_bug122_gcboxweakref_is_live_missing_dropping_state.md) | GcBoxWeakRef::is_live() 缺少 dropping_state 檢查導致不一致行為 | Fixed | Verified |
 | [2026-03-16_ISSUE_bug122_weakcrossthreadhandle_is_valid_origin_terminated.md](./2026-03-16_ISSUE_bug122_weakcrossthreadhandle_is_valid_origin_terminated.md) | WeakCrossThreadHandle::is_valid() 在 Origin Thread 終止後返回 false，但 Weak Reference 本身可能仍然有效 | Invalid | Verified |
 | [2026-03-21_ISSUE_bug122_gchandle_clone_missing_generation_check.md](./2026-03-21_ISSUE_bug122_gchandle_clone_missing_generation_check.md) | GcHandle::clone() 缺少 generation 檢查可能導致 slot reuse 問題 | Fixed | Verified |
+| [2026-03-22_ISSUE_bug122_handle_get_useless_generation_assert.md](./2026-03-22_ISSUE_bug122_handle_get_useless_generation_assert.md) | Handle::get() / AsyncHandle::get() useless generation assertion | Fixed | Verified |
+| [2026-03-23_ISSUE_bug122_tcb_unsafe_sync_unsound.md](./2026-03-23_ISSUE_bug122_tcb_unsafe_sync_unsound.md) | ThreadControlBlock unsafe impl Sync may be unsound due to UnsafeCell<LocalHeap> | Fixed | Verified, Soundness |
+| [2026-03-25_ISSUE_bug122_gchandle_resolve_incorrect_panic_tcb_alive.md](./2026-03-25_ISSUE_bug122_gchandle_resolve_incorrect_panic_tcb_alive.md) | GcHandle::resolve()  incorrect panic when TCB alive and handle removed via unregister | Fixed | Verified |
+| [2026-03-27_ISSUE_bug122_try_steal_work_loss.md](./2026-03-27_ISSUE_bug122_try_steal_work_loss.md) | Work loss in `try_steal_work` when all queues are full | Fixed | Verified |
 | [2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md) | Incremental Marking `mark_root_for_snapshot` 缺少 is_allocated 檢查 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md) | WeakCrossThreadHandle Clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md](./2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md) | GcBox::try_inc_ref_from_zero 內部缺少 dropping_state 檢查 - API 設計潛在問題 | Fixed | Verified |
@@ -176,6 +186,7 @@
 | [2026-02-26_ISSUE_bug127_gchandle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug127_gchandle_clone_missing_thread_check.md) | GcHandle::clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Fixed | Verified |
 | [2026-03-15_ISSUE_bug127_gccell_borrow_mut_incorrect_mark_black.md](./2026-03-15_ISSUE_bug127_gccell_borrow_mut_incorrect_mark_black.md) | GcCell/GcThreadSafeCell borrow_mut 錯誤地在僅有 generational barrier 時標記新指標為黑色 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md](./2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md) | GcHandle::is_valid() 未驗證 Root 存在性 - TOCTOU 導致 Resolve 可能失敗 | Fixed | Verified |
+| [2026-03-23_ISSUE_bug128_incomplete_rendezvous_ack_counter.md](./2026-03-23_ISSUE_bug128_incomplete_rendezvous_ack_counter.md) | `rendezvous_ack_counter` 機制未完成 - 增加後從未被正確使用 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md) | GcVisitorConcurrent::route_reference 缺少 is_allocated 檢查導致錯誤標記 | Fixed | Verified |
 | [2026-03-01_ISSUE_bug129_gchandle_is_valid_missing_gcbox_state_check.md](./2026-03-01_ISSUE_bug129_gchandle_is_valid_missing_gcbox_state_check.md) | GcHandle::is_valid() 未檢查 GcBox 存活狀態 - 導致 False Positive | Invalid | Not Reproduced |
 | [2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md](./2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md) | WeakCrossThreadHandle::drop 缺少有效性檢查可能導致 UAF | Fixed | Verified |
@@ -270,7 +281,7 @@
 | [2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug211_gc_cell_validate_and_barrier_missing_is_allocated_check.md) | gc_cell_validate_and_barrier 缺少 is_allocated 檢查 - 與 bug200 不同 | Fixed | Verified |
 | [2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug212_simple_write_barrier_missing_is_allocated_check.md) | simple_write_barrier 缺少 is_allocated 檢查 - 與 bug200/211 不同的 code path | Fixed | Verified |
 | [2026-03-05_ISSUE_bug213_gcthreadsafecell_generational_barrier_large_object_missing_is_allocated_check.md](./2026-03-05_ISSUE_bug213_gcthreadsafecell_generational_barrier_large_object_missing_is_allocated_check.md) | GcThreadSafeCell::generational_write_barrier 大型物件路徑缺少 is_allocated 檢查 | Invalid | Not Verified |
-| [2026-03-05_ISSUE_bug214_weak_may_be_valid_missing_is_gc_box_pointer_valid_check.md](./2026-03-05_ISSUE_bug214_weak_may_be_valid_missing_is_gc_box_pointer_valid_check.md) | Weak::may_be_valid() 缺少 is_gc_box_pointer_valid 檢查 | Verified | Verified |
+| [2026-03-05_ISSUE_bug214_weak_may_be_valid_missing_is_gc_box_pointer_valid_check.md](./2026-03-05_ISSUE_bug214_weak_may_be_valid_missing_is_gc_box_pointer_valid_check.md) | Weak::may_be_valid() 缺少 is_gc_box_pointer_valid 檢查 | Fixed | Verified |
 | [2026-03-06_ISSUE_bug215_mark_page_dirty_for_ptr_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug215_mark_page_dirty_for_ptr_missing_is_allocated_check.md) | mark_page_dirty_for_ptr 缺少 is_allocated 檢查 - 與 bug200/213 不同的code path | Verified | Verified |
 | [2026-03-06_ISSUE_bug216_gcboxweakref_may_be_valid_missing_is_gc_box_pointer_valid_check.md](./2026-03-06_ISSUE_bug216_gcboxweakref_may_be_valid_missing_is_gc_box_pointer_valid_check.md) | GcBoxWeakRef::may_be_valid() 缺少 is_gc_box_pointer_valid 檢查 | Fixed | Verified |
 | [2026-03-06_ISSUE_bug217_weak_clone_inc_weak_missing_is_allocated_check.md](./2026-03-06_ISSUE_bug217_weak_clone_inc_weak_missing_is_allocated_check.md) | Weak::clone 缺少 inc_weak 後的 is_allocated 檢查導致 TOCTOU | Fixed | Verified |
@@ -325,7 +336,7 @@
 | [2026-03-11_ISSUE_bug264_weak_upgrade_missing_pointer_validation.md](./2026-03-11_ISSUE_bug264_weak_upgrade_missing_pointer_validation.md) | Weak::upgrade 缺少指標位址驗證導致潛在 UB，與 Weak::try_upgrade 行為不一致 | Fixed | Verified |
 | [2026-03-11_ISSUE_bug265_weak_drop_toctou_check_dec_weak.md](./2026-03-11_ISSUE_bug265_weak_drop_toctou_check_dec_weak.md) | Weak::drop 與 WeakCrossThreadHandle::drop 存在 TOCTOU Race - 檢查與 dec_weak 之間的狀態變化 | Fixed | Verified |
 | [2026-03-11_ISSUE_bug266_async_handle_to_gc_missing_is_allocated_check.md](./2026-03-11_ISSUE_bug266_async_handle_to_gc_missing_is_allocated_check.md) | AsyncHandle::to_gc() Missing is_allocated Check After Reference Count Increment | Invalid | Not Verified |
-| [2026-03-11_ISSUE_bug267_gcrootguard_duplicate_registration.md](./2026-03-11_ISSUE_bug267_gcrootguard_duplicate_registration.md) | <no title> | Unknown | Unknown |
+| [2026-03-11_ISSUE_bug267_gcrootguard_duplicate_registration.md](./2026-03-11_ISSUE_bug267_gcrootguard_duplicate_registration.md) | <no title> | Fixed | Verified |
 | [2026-03-11_ISSUE_bug268_push_cross_thread_satb_drops_old_value_on_overflow.md](./2026-03-11_ISSUE_bug268_push_cross_thread_satb_drops_old_value_on_overflow.md) | push_cross_thread_satb 緩衝區溢位時丟棄舊值導致潛在 Use-After-Free | Invalid | Not Verified |
 | [2026-03-11_ISSUE_bug269_request_gc_handshake_active_count_toctou.md](./2026-03-11_ISSUE_bug269_request_gc_handshake_active_count_toctou.md) | request_gc_handshake active_count load 有 TOCTOU race condition | Invalid | Not Verified |
 | [2026-03-11_ISSUE_bug270_push_cross_thread_satb_unbounded_growth.md](./2026-03-11_ISSUE_bug270_push_cross_thread_satb_unbounded_growth.md) | push_cross_thread_satb 緩衝區溢位時仍然 push 導致無上限 growth | Fixed | Verified |
@@ -347,7 +358,7 @@
 | [2026-03-13_ISSUE_bug285_gcthreadsafecell_capture_gc_ptrs_try_lock_inconsistent.md](./2026-03-13_ISSUE_bug285_gcthreadsafecell_capture_gc_ptrs_try_lock_inconsistent.md) | GcThreadSafeCell::capture_gc_ptrs_into 使用 try_lock 與 GcRwLock/GcMutex 行為不一致 | Fixed | Verified |
 | [2026-03-13_ISSUE_bug286_barrier_functions_gen_old_flag_missing_is_allocated_check.md](./2026-03-13_ISSUE_bug286_barrier_functions_gen_old_flag_missing_is_allocated_check.md) | Multiple barrier functions read has_gen_old_flag before is_allocated check | Fixed | Verified |
 | [2026-03-13_ISSUE_bug287_try_inc_ref_from_zero_separate_atomic_loads.md](./2026-03-13_ISSUE_bug287_try_inc_ref_from_zero_separate_atomic_loads.md) | try_inc_ref_from_zero 分离加载 ref_count 和 weak_count 导致 TOCTOU 竞争条件 | Fixed | Verified |
-| [2026-03-14_ISSUE_bug288_async_handle_missing_send_sync_bounds.md](./2026-03-14_ISSUE_bug288_async_handle_missing_send_sync_bounds.md) | AsyncHandle/GcScope/AsyncGcHandle implement Send+Sync without requiring T: Send/Sync | Verified | Verified |
+| [2026-03-14_ISSUE_bug288_async_handle_missing_send_sync_bounds.md](./2026-03-14_ISSUE_bug288_async_handle_missing_send_sync_bounds.md) | AsyncHandle/GcScope/AsyncGcHandle implement Send+Sync without requiring T: Send/Sync | Fixed | Verified |
 | [2026-03-14_ISSUE_bug289_gc_clone_incomplete_toctou_fix.md](./2026-03-14_ISSUE_bug289_gc_clone_incomplete_toctou_fix.md) | Gc::clone has incomplete TOCTOU fix - missing is_allocated check BEFORE inc_ref | Fixed | Verified |
 | [2026-03-14_ISSUE_bug290_gcrwlock_try_write_barrier_state_caching.md](./2026-03-14_ISSUE_bug290_gcrwlock_try_write_barrier_state_caching.md) | GcRwLock::try_write caches barrier states AFTER lock acquisition, inconsistent with write() | Fixed | Verified |
 | [2026-03-14_ISSUE_bug291_mark_object_black_toctou_missing_is_allocated_check.md](./2026-03-14_ISSUE_bug291_mark_object_black_toctou_missing_is_allocated_check.md) | mark_object_black TOCTOU - 已在其他地方修復但未同步 | Fixed | Verified |
@@ -430,3 +441,76 @@
 | [2026-03-21_ISSUE_bug361_clear_registers_rbx_not_cleared.md](./2026-03-21_ISSUE_bug361_clear_registers_rbx_not_cleared.md) | clear_registers 未清除 RBX 導致虛假Roots | Invalid | Verified |
 | [2026-03-21_ISSUE_bug362_gcvisitorconcurrent_route_reference_missing_generation_check.md](./2026-03-21_ISSUE_bug362_gcvisitorconcurrent_route_reference_missing_generation_check.md) | GcVisitorConcurrent::route_reference missing generation check after set_mark | Fixed | Verified |
 | [2026-03-21_ISSUE_bug363_scan_page_for_unmarked_refs_missing_generation_check.md](./2026-03-21_ISSUE_bug363_scan_page_for_unmarked_refs_missing_generation_check.md) | scan_page_for_unmarked_refs clears mark without generation check when is_allocated is false | Fixed | Verified |
+| [2026-03-21_ISSUE_bug364_incremental_write_barrier_missing_second_is_allocated_check.md](./2026-03-21_ISSUE_bug364_incremental_write_barrier_missing_second_is_allocated_check.md) | incremental_write_barrier missing second is_allocated check before record_in_remembered_buffer | Fixed | Verified |
+| [2026-03-21_ISSUE_bug364_unified_write_barrier_missing_second_is_allocated_check.md](./2026-03-21_ISSUE_bug364_unified_write_barrier_missing_second_is_allocated_check.md) | unified_write_barrier 缺少 second is_allocated check (bug364) | Fixed | Verified |
+| [2026-03-21_ISSUE_bug365_set_dead_relaxed_has_dead_flag_acquire.md](./2026-03-21_ISSUE_bug365_set_dead_relaxed_has_dead_flag_acquire.md) | GcBox::set_dead uses Relaxed ordering but has_dead_flag uses Acquire - Synchronization Bug | Fixed | Verified |
+| [2026-03-21_ISSUE_bug366_gc_weak_cross_thread_handle_missing_generation_check.md](./2026-03-21_ISSUE_bug366_gc_weak_cross_thread_handle_missing_generation_check.md) | Gc::weak_cross_thread_handle Missing Generation Check Before inc_weak (TOCTOU) | Fixed | Verified |
+| [2026-03-21_ISSUE_bug367_gc_as_weak_missing_generation_check.md](./2026-03-21_ISSUE_bug367_gc_as_weak_missing_generation_check.md) | Gc::as_weak Missing Generation Check Before inc_weak (TOCTOU) | Fixed | Verified |
+| [2026-03-22_ISSUE_bug368_trace_and_mark_object_missing_is_under_construction_check.md](./2026-03-22_ISSUE_bug368_trace_and_mark_object_missing_is_under_construction_check.md) | trace_and_mark_object missing is_under_construction check | Fixed | Verified |
+| [2026-03-22_ISSUE_bug369_async_handle_get_value_read_before_generation_check.md](./2026-03-22_ISSUE_bug369_async_handle_get_value_read_before_generation_check.md) | AsyncHandle::get() Value Read BEFORE Generation Check (TOCTOU) | Fixed | Verified |
+| [2026-03-22_ISSUE_bug370_scan_page_for_unmarked_refs_set_mark_toctou.md](./2026-03-22_ISSUE_bug370_scan_page_for_unmarked_refs_set_mark_toctou.md) | scan_page_for_unmarked_refs uses unsafe set_mark instead of atomic try_mark | Fixed | Verified |
+| [2026-03-22_ISSUE_bug371_async_handle_get_unchecked_useless_generation_assertion.md](./2026-03-22_ISSUE_bug371_async_handle_get_unchecked_useless_generation_assertion.md) | AsyncHandle::get_unchecked() Generation Assertion is Useless - No Operation Between Reads | Fixed | Verified |
+| [2026-03-22_ISSUE_bug372_handle_get_missing_second_is_allocated_check.md](./2026-03-22_ISSUE_bug372_handle_get_missing_second_is_allocated_check.md) | Handle::get() Missing Second is_allocated Check After dec_ref() | Fixed | Verified |
+| [2026-03-22_ISSUE_bug373_weak_clone_missing_generation_check.md](./2026-03-22_ISSUE_bug373_weak_clone_missing_generation_check.md) | Weak::clone 缺少 Generation 檢查 - 落後於其他類似函數 | Fixed | Verified |
+| [2026-03-22_ISSUE_bug374_mark_new_object_black_returns_true_without_clearing_stale_mark.md](./2026-03-22_ISSUE_bug374_mark_new_object_black_returns_true_without_clearing_stale_mark.md) | mark_new_object_black 返回 true 時未清除已回收 slot 的 mark | Fixed | Verified |
+| [2026-03-22_ISSUE_bug375_mark_new_object_black_returns_false_without_clearing_stale_mark.md](./2026-03-22_ISSUE_bug375_mark_new_object_black_returns_false_without_clearing_stale_mark.md) | mark_new_object_black 返回 false 時未清除已回收 slot 的 stale mark | Fixed | Verified |
+| [2026-03-23_ISSUE_bug376_gcthreadsafecell_barrier_toctou.md](./2026-03-23_ISSUE_bug376_gcthreadsafecell_barrier_toctou.md) | GcThreadSafeCell barriers missing second is_allocated check - TOCTOU race | Fixed | Verified |
+| [2026-03-23_ISSUE_bug377_asynchandle_get_missing_second_is_allocated_check.md](./2026-03-23_ISSUE_bug377_asynchandle_get_missing_second_is_allocated_check.md) | AsyncHandle::get / get_unchecked Missing Second is_allocated Check After Generation Assertion | Fixed | Verified |
+| [2026-03-23_ISSUE_bug378_dec_ref_used_instead_of_undo_inc_ref_for_rollback.md](./2026-03-23_ISSUE_bug378_dec_ref_used_instead_of_undo_inc_ref_for_rollback.md) | dec_ref used instead of undo_inc_ref for rollback after try_inc_ref_if_nonzero | Fixed | Verified |
+| [2026-03-23_ISSUE_bug379_asynchandle_get_missing_second_is_allocated_check.md](./2026-03-23_ISSUE_bug379_asynchandle_get_missing_second_is_allocated_check.md) | AsyncHandle::get() Missing is_allocated Check Between dec_ref and value() | Fixed | Verified |
+| [2026-03-23_ISSUE_bug380_scan_page_unmarked_refs_incorrect_mark_clear.md](./2026-03-23_ISSUE_bug380_scan_page_unmarked_refs_incorrect_mark_clear.md) | scan_page_for_unmarked_refs incorrectly clears mark when slot is reused | Fixed | Verified |
+| [2026-03-23_ISSUE_bug381_scan_page_under_construction_clears_mark.md](./2026-03-23_ISSUE_bug381_scan_page_under_construction_clears_mark.md) | scan_page_for_*_refs clears mark when is_under_construction, inconsistent with mark_object_black | Fixed | Verified |
+| [2026-03-23_ISSUE_bug382_gchandle_resolve_impl_dereference_before_allocated_check.md](./2026-03-23_ISSUE_bug382_gchandle_resolve_impl_dereference_before_allocated_check.md) | GcHandle::resolve_impl dereferences before is_allocated check - TOCTOU | Fixed | Verified |
+| [2026-03-23_ISSUE_bug383_gchandle_clone_dereference_before_allocated_check.md](./2026-03-23_ISSUE_bug383_gchandle_clone_dereference_before_allocated_check.md) | GcHandle::clone dereferences before is_allocated check - TOCTOU type confusion | Fixed | Verified |
+| [2026-03-28_ISSUE_bug383_weak_upgrade_panic_vs_try_upgrade_none.md](./2026-03-28_ISSUE_bug383_weak_upgrade_panic_vs_try_upgrade_none.md) | Weak::upgrade() panics when try_upgrade() returns None - inconsistent behavior | Closed | Verified, Fixed |
+| [2026-03-23_ISSUE_bug384_handle_as_ptr_missing_is_allocated_check.md](./2026-03-23_ISSUE_bug384_handle_as_ptr_missing_is_allocated_check.md) | Handle::as_ptr() missing is_allocated check before dereference | Fixed | Verified |
+| [2026-03-24_ISSUE_bug385_handle_get_bug372_fix_misplaced.md](./2026-03-24_ISSUE_bug385_handle_get_bug372_fix_misplaced.md) | Handle::get() bug372 fix incorrectly applied - checks positioned BEFORE dec_ref instead of AFTER | Fixed | Verified |
+| [2026-03-23_ISSUE_bug386_gcthreadsafecell_barrier_large_object_missing_second_check.md](./2026-03-23_ISSUE_bug386_gcthreadsafecell_barrier_large_object_missing_second_check.md) | GcThreadSafeCell barrier large object path missing second is_allocated check - TOCTOU race | Fixed | Verified |
+| [2026-03-23_ISSUE_bug387_gc_clone_missing_generation_check.md](./2026-03-23_ISSUE_bug387_gc_clone_missing_generation_check.md) | Gc::clone 缺少 generation 檢查，導致 slot reuse TOCTOU | Fixed | Verified |
+| [2026-03-23_ISSUE_bug388_gchandle_try_resolve_impl_missing_is_allocated_check.md](./2026-03-23_ISSUE_bug388_gchandle_try_resolve_impl_missing_is_allocated_check.md) | GcHandle::try_resolve_impl missing is_allocated check before dereference (type confusion risk) | Fixed | Verified |
+| [2026-03-23_ISSUE_bug398_mark_and_trace_incremental_missing_generation_check.md](./2026-03-23_ISSUE_bug398_mark_and_trace_incremental_missing_generation_check.md) | mark_object and mark_and_trace_incremental missing generation check after try_mark | Fixed | Bug, GC, Incremental Marking, Slot Reuse, TOCTOU |
+| [2026-03-23_ISSUE_bug399_mark_object_black_is_allocated_toctou.md](./2026-03-23_ISSUE_bug399_mark_object_black_is_allocated_toctou.md) | mark_object_black TOCTOU when is_allocated returns true | Fixed | Verified |
+| [2026-03-23_ISSUE_bug400_gcbox_as_weak_missing_generation_check.md](./2026-03-23_ISSUE_bug400_gcbox_as_weak_missing_generation_check.md) | GcBox::as_weak Missing Generation Check Before inc_weak (TOCTOU) | Fixed | Verified |
+| [2026-03-23_ISSUE_bug401_gchandle_resolve_migration_race.md](./2026-03-23_ISSUE_bug401_gchandle_resolve_migration_race.md) | GcHandle::resolve panic during cross-thread handle migration (bug313) | Fixed | Verified |
+| [2026-03-24_ISSUE_bug402_weak_cross_thread_handle_drop_leak.md](./2026-03-24_ISSUE_bug402_weak_cross_thread_handle_drop_leak.md) | WeakCrossThreadHandle::drop Weak Reference Leak After bug231 Fix | Fixed | Verified |
+| [2026-03-24_ISSUE_bug403_mark_object_minor_missing_generation_check.md](./2026-03-24_ISSUE_bug403_mark_object_minor_missing_generation_check.md) | mark_object_minor 缺少 generation 檢查導致可能錯誤清除標記 | Fixed | Verified |
+| [2026-03-24_ISSUE_bug403_weak_cross_thread_handle_resolve_panic_on_terminated.md](./2026-03-24_ISSUE_bug403_weak_cross_thread_handle_resolve_panic_on_terminated.md) | WeakCrossThreadHandle::resolve() panics when origin thread terminates instead of returning None | Fixed | Verified |
+| [2026-03-24_ISSUE_bug404_mark_and_trace_deref_before_allocated_check.md](./2026-03-24_ISSUE_bug404_mark_and_trace_deref_before_allocated_check.md) | mark_and_trace_incremental dereferences before is_allocated check | Fixed | Verified |
+| [2026-03-24_ISSUE_bug405_stop_all_mutators_deadlock.md](./2026-03-24_ISSUE_bug405_stop_all_mutators_deadlock.md) | stop_all_mutators_for_snapshot busy-wait loop without timeout can cause GC deadlock | Fixed | Verified |
+| [2026-03-24_ISSUE_bug406_sweep_phase2_reclaim_missing_clear_under_construction.md](./2026-03-24_ISSUE_bug406_sweep_phase2_reclaim_missing_clear_under_construction.md) | sweep_phase2_reclaim 回收 slot 時未清除 UNDER_CONSTRUCTION_FLAG | Fixed | Verified |
+| [2026-03-24_ISSUE_bug407_gchandle_drop_missing_generation_check.md](./2026-03-24_ISSUE_bug407_gchandle_drop_missing_generation_check.md) | GcHandle::drop 缺少 generation 檢查可能導致 ref_count 損壞 | Fixed | Verified |
+| [2026-03-24_ISSUE_bug408_slot_reuse_is_dropping_not_cleared.md](./2026-03-24_ISSUE_bug408_slot_reuse_is_dropping_not_cleared.md) | Slot reuse does not clear is_dropping, causing dropped objects to be skipped in dec_ref | Fixed | Verified |
+| [2026-03-24_ISSUE_bug409_gcrwlock_guard_drop_stale_incremental_active.md](./2026-03-24_ISSUE_bug409_gcrwlock_guard_drop_stale_incremental_active.md) | GcRwLockWriteGuard/GcMutexGuard Drop uses stale cached incremental_active value | Fixed | Verified |
+| [2026-03-24_ISSUE_bug410_collect_full_missing_gc_mark_in_progress.md](./2026-03-24_ISSUE_bug410_collect_full_missing_gc_mark_in_progress.md) | collect_full Paths Missing GC_MARK_IN_PROGRESS Flag | Fixed | Bug, Fixed |
+| [2026-03-24_ISSUE_bug411_gcthreadsaferefmut_drop_stale_incremental_active.md](./2026-03-24_ISSUE_bug411_gcthreadsaferefmut_drop_stale_incremental_active.md) | GcThreadSafeRefMut::drop() uses stale cached incremental_active value (bug409 pattern) | Fixed | Verified |
+| [2026-03-24_ISSUE_bug412_mark_new_object_black_missing_generation_check.md](./2026-03-24_ISSUE_bug412_mark_new_object_black_missing_generation_check.md) | mark_new_object_black 缺少 generation check（bug358 修復未合併） | Fixed | Verified |
+| [2026-03-24_ISSUE_bug413_gcboxweakref_upgrade_missing_generation_check.md](./2026-03-24_ISSUE_bug413_gcboxweakref_upgrade_missing_generation_check.md) | GcBoxWeakRef::upgrade() missing generation check in try_inc_ref_if_nonzero path | Fixed | Verified |
+| [2026-03-25_ISSUE_bug414_mark_new_object_black_missing_is_allocated_recheck.md](./2026-03-25_ISSUE_bug414_mark_new_object_black_missing_is_allocated_recheck.md) | mark_new_object_black returns true without re-checking is_allocated when generations mismatch | Fixed | Verified |
+| [2026-03-25_ISSUE_bug415_weak_cross_thread_handle_resolve_bypasses_thread_check.md](./2026-03-25_ISSUE_bug415_weak_cross_thread_handle_resolve_bypasses_thread_check.md) | <no title> | Fixed | Verified |
+| [2026-03-25_ISSUE_bug416_sweep_phase2_reclaim_unused_pending_parameter.md](./2026-03-25_ISSUE_bug416_sweep_phase2_reclaim_unused_pending_parameter.md) | sweep_phase2_reclaim unused _pending parameter - dead code after P1-001 optimization | Fixed | Verified |
+| [2026-03-25_ISSUE_bug417_borrow_mut_simple_satb_fallback_inverted_logic.md](./2026-03-25_ISSUE_bug417_borrow_mut_simple_satb_fallback_inverted_logic.md) | GcThreadSafeCell::borrow_mut_simple SATB fallback uses inverted logic - cross-thread buffer never triggered | Fixed | Verified |
+| [2026-03-25_ISSUE_bug422_gcthreadsafecell_borrow_mut_simple_missing_mark_object_black.md](./2026-03-25_ISSUE_bug422_gcthreadsafecell_borrow_mut_simple_missing_mark_object_black.md) | GcThreadSafeCell::borrow_mut_simple 缺少 mark_object_black 導致增量 GC 遺漏新指標 | Fixed | Verified |
+| [2026-03-25_ISSUE_bug423_dec_weak_relaxed_ordering.md](./2026-03-25_ISSUE_bug423_dec_weak_relaxed_ordering.md) | dec_weak uses Relaxed ordering causing stale weak_count reads | Invalid | Not Verified |
+| [2026-03-25_ISSUE_bug424_lazy_sweep_cas_rollback_orphaned_slot.md](./2026-03-25_ISSUE_bug424_lazy_sweep_cas_rollback_orphaned_slot.md) | Lazy Sweep CAS 回滾後 Slot 遺留 allocated 標記導致記憶體洩漏 | Closed | Verified |
+| [2026-03-26_ISSUE_bug425_gcboxweakref_upgrade_resurrection_missing_generation_check.md](./2026-03-26_ISSUE_bug425_gcboxweakref_upgrade_resurrection_missing_generation_check.md) | GcBoxWeakRef::upgrade() missing generation check in try_inc_ref_from_zero path | Fixed | Verified |
+| [2026-03-26_ISSUE_bug426_trace_and_mark_object_missing_generation_check_trace_fn.md](./2026-03-26_ISSUE_bug426_trace_and_mark_object_missing_generation_check_trace_fn.md) | trace_and_mark_object missing generation check before trace_fn - slot reuse TOCTOU | Fixed | Verified |
+| [2026-03-26_ISSUE_bug427_worker_mark_loop_missing_generation_check.md](./2026-03-26_ISSUE_bug427_worker_mark_loop_missing_generation_check.md) | worker_mark_loop missing generation check before trace_fn - slot reuse TOCTOU | Fixed | Verified |
+| [2026-03-26_ISSUE_bug428_sweep_phase2_reclaim_missing_clear_is_dropping.md](./2026-03-26_ISSUE_bug428_sweep_phase2_reclaim_missing_clear_is_dropping.md) | sweep_phase2_reclaim missing clear_is_dropping causes memory leak on slot reuse | Fixed | Verified |
+| [2026-03-26_ISSUE_bug429_stack_regs_shadow.md](./2026-03-26_ISSUE_bug429_stack_regs_shadow.md) | stack.rs x86_64 寄存器溢出值被 fallback 数组遮蔽导致 GC 指针遗漏扫描 | Fixed | Verified |
+| [2026-03-26_ISSUE_bug430_dealloc_missing_clear_is_dropping.md](./2026-03-26_ISSUE_bug430_dealloc_missing_clear_is_dropping.md) | dealloc missing clear_is_dropping causes dropping state leak on slot reuse | Fixed | Verified |
+| [2026-03-27_ISSUE_bug430_incremental_write_barrier_large_object_missing_is_allocated_check.md](./2026-03-27_ISSUE_bug430_incremental_write_barrier_large_object_missing_is_allocated_check.md) | incremental_write_barrier large object path missing second is_allocated check (TOCTOU) | Fixed | Verified |
+| [2026-03-26_ISSUE_bug431_mark_and_trace_incremental_missing_generation_check.md](./2026-03-26_ISSUE_bug431_mark_and_trace_incremental_missing_generation_check.md) | mark_and_trace_incremental missing generation check before trace_fn after slot reuse TOCTOU | Fixed | Verified |
+| [2026-03-26_ISSUE_bug432_gcrwlock_writeguard_drop_captures_new_values_satb.md](./2026-03-26_ISSUE_bug432_gcrwlock_writeguard_drop_captures_new_values_satb.md) | GcRwLockWriteGuard::drop() captures NEW values instead of OLD for SATB barrier | Fixed | Verified |
+| [2026-03-26_ISSUE_bug433_init_header_at_missing_generation.md](./2026-03-26_ISSUE_bug433_init_header_at_missing_generation.md) | GcBox::init_header_at Does Not Initialize generation Field | Closed | Verified |
+| [2026-03-26_ISSUE_bug434_trace_and_mark_object_missing_second_is_allocated_check.md](./2026-03-26_ISSUE_bug434_trace_and_mark_object_missing_second_is_allocated_check.md) | trace_and_mark_object missing second is_allocated check after generation verification - inconsistent with mark_object_black | Closed | Verified |
+| [2026-03-27_ISSUE_bug435_process_worklist_missing_generation_check_trace_fn.md](./2026-03-27_ISSUE_bug435_process_worklist_missing_generation_check_trace_fn.md) | process_worklist missing generation check before trace_fn - trace_fn called on wrong object after slot reuse | Closed | Verified |
+| [2026-03-27_ISSUE_bug436_spill_registers_cfg_shadow.md](./2026-03-27_ISSUE_bug436_spill_registers_cfg_shadow.md) | spill_registers_and_scan fallback cfg shadows x86_64 regs array - GC pointers not scanned | Fixed | Verified |
+| [2026-03-27_ISSUE_bug437_mark_new_object_black_returns_true_on_generation_mismatch.md](./2026-03-27_ISSUE_bug437_mark_new_object_black_returns_true_on_generation_mismatch.md) | mark_new_object_black returns true on generation mismatch - wrong object marked after slot reuse | Fixed | Verified |
+| [2026-03-27_ISSUE_bug438_gc_deref_missing_is_allocated_check.md](./2026-03-27_ISSUE_bug438_gc_deref_missing_is_allocated_check.md) | Gc::deref 缺少 is_allocated 檢查導致 Slot Reuse 後存取錯誤物件 | Fixed | Verified |
+| [2026-03-27_ISSUE_bug439_dec_weak_raw_weak_drop_relaxed_ordering.md](./2026-03-27_ISSUE_bug439_dec_weak_raw_weak_drop_relaxed_ordering.md) | dec_weak_raw and Weak::drop use Relaxed ordering for weak_count load (inconsistent with dec_weak) | Invalid | Unverified |
+| [2026-03-28_ISSUE_bug442_GcThreadSafeCell_borrow_mut_simple_missing_mark_object_black.md](./2026-03-28_ISSUE_bug442_GcThreadSafeCell_borrow_mut_simple_missing_mark_object_black.md) | GcThreadSafeCell::borrow_mut_simple 缺少 mark_object_black 導致新指標在增量標記時未被標記 | Invalid | Duplicate |
+| [2026-03-28_ISSUE_bug443_try_steal_work_fallback_work_loss.md](./2026-03-28_ISSUE_bug443_try_steal_work_fallback_work_loss.md) | Work loss in `try_steal_work` fallback when overflow clearing is in progress | Fixed | Verified |
+| [2026-03-28_ISSUE_bug444_process_worklist_generation_check_ineffective.md](./2026-03-28_ISSUE_bug444_process_worklist_generation_check_ineffective.md) | process_worklist generation check is ineffective - compares same value twice | Closed | Verified |
+| [2026-03-28_ISSUE_bug445_GcThreadSafeCell_borrow_mut_gen_only_lock_order.md](./2026-03-28_ISSUE_bug445_GcThreadSafeCell_borrow_mut_gen_only_lock_order.md) | GcThreadSafeCell::borrow_mut_gen_only triggers write barrier before acquiring lock (inconsistent API) | Fixed | Verified |
+| [2026-03-28_ISSUE_bug446_GcCell_borrow_mut_gen_only_inconsistent.md](./2026-03-28_ISSUE_bug446_GcCell_borrow_mut_gen_only_inconsistent.md) | GcCell::borrow_mut_gen_only inconsistent with GcThreadSafeCell - always triggers barrier | Closed | Verified, Fixed |
+| [2026-03-28_ISSUE_bug447_promote_pages_bitmap_bounds.md](./2026-03-28_ISSUE_bug447_promote_pages_bitmap_bounds.md) | promote_young_pages and promote_all_pages use BITMAP_SIZE instead of obj_count - buffer overrun | Fixed | Verified |

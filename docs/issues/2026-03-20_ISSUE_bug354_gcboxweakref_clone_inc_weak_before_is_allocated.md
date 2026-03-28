@@ -147,7 +147,7 @@ The TOCTOU window is relatively small (between validity checks and inc_weak), bu
 
 ## Resolution (2026-03-20)
 
-**Outcome:** Fixed.
+**Outcome:** Code Fixed, Comment Still Wrong.
 
 Applied fix in `ptr.rs:729-798` following the pattern from `GcHandle::downgrade()`:
 
@@ -157,3 +157,9 @@ Applied fix in `ptr.rs:729-798` following the pattern from `GcHandle::downgrade(
 4. Check `is_allocated` - if slot was swept, undo with `dec_weak()` and return null
 
 This prevents corrupting another object's weak_count when the slot is swept and reused between validity checks and `inc_weak()`.
+
+## Follow-up (2026-03-24): Misleading comment — resolved (2026-03-28)
+
+The outdated "BEFORE inc_weak" wording was removed from `GcBoxWeakRef::clone`; comments now state that `is_allocated` runs **after** `inc_weak`, with the generation check as the primary slot-reuse guard. A stale line-number reference in that comment block was replaced with "above" to avoid drift.
+
+**Status:** (sub-issue closed; main issue remains **Fixed** / **Verified**)

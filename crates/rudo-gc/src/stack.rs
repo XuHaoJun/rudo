@@ -225,11 +225,18 @@ where
     #[cfg(all(target_arch = "aarch64", not(miri)))]
     std::hint::black_box(&regs);
 
-    // For other architectures or Miri, we might need different implementations.
-    // As a fallback, we can use a large enough dummy array and black_box.
-    #[cfg(any(not(target_arch = "x86_64"), not(target_arch = "aarch64"), miri))]
+    // For other architectures (not x86_64 or aarch64), non-miri: use a zeroed fallback.
+    #[cfg(all(not(target_arch = "x86_64"), not(target_arch = "aarch64"), not(miri)))]
     let regs = [0usize; 32];
-    #[cfg(any(not(target_arch = "x86_64"), not(target_arch = "aarch64"), miri))]
+    #[cfg(all(not(target_arch = "x86_64"), not(target_arch = "aarch64"), not(miri)))]
+    std::hint::black_box(&regs);
+
+    // Miri does not support inline assembly, so x86_64/aarch64 asm paths are
+    // excluded under miri (via not(miri)). Provide a zeroed fallback for miri
+    // on any architecture so that `regs` is always defined.
+    #[cfg(miri)]
+    let regs = [0usize; 32];
+    #[cfg(miri)]
     std::hint::black_box(&regs);
 
     // Scan spilled registers explicitly as "Registers"

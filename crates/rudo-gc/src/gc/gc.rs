@@ -30,17 +30,6 @@ use crate::tracing::internal::{
     trace_phase, GcId, GcPhase,
 };
 
-/// Information about an object pending deallocation.
-/// Used in two-phase sweep: phase 1 drops, phase 2 reclaims.
-///
-/// Note: This struct is deprecated as of P1-001 optimization.
-/// The sweep phase now uses bitmap checks instead of `PendingDrop` tracking.
-#[allow(dead_code)]
-struct PendingDrop {
-    page: NonNull<PageHeader>,
-    index: usize,
-}
-
 // ============================================================================
 // Collection statistics
 // ============================================================================
@@ -942,6 +931,7 @@ fn perform_multi_threaded_collect_full() {
     log_phase_start(GcPhase::Mark, before_bytes);
 
     let mark_start = Instant::now();
+    super::sync::GC_MARK_IN_PROGRESS.store(true, std::sync::atomic::Ordering::Release);
     for tcb in &tcbs {
         unsafe {
             total_objects_marked = total_objects_marked.saturating_add(mark_major_roots_multi(
@@ -950,6 +940,7 @@ fn perform_multi_threaded_collect_full() {
             ));
         }
     }
+    super::sync::GC_MARK_IN_PROGRESS.store(false, std::sync::atomic::Ordering::Release);
     mark_duration = mark_start.elapsed();
 
     #[cfg(feature = "tracing")]
@@ -1204,11 +1195,7 @@ fn mark_minor_roots_multi(
         }
     }
     heap.clear_dirty_pages_snapshot();
-    while let Some(ptr) = visitor.worklist.pop() {
-        unsafe {
-            ((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), &mut visitor);
-        }
-    }
+    visitor.process_worklist();
 }
 
 #[inline]
@@ -1497,12 +1484,7 @@ fn mark_major_roots_multi(
         }
     }
 
-    while let Some(ptr) = visitor.worklist.pop() {
-        unsafe {
-            ((*ptr.as_ptr()).trace_fn)(ptr.as_ptr().cast(), &mut visitor);
-        }
-    }
-
+    visitor.process_worklist();
     visitor.objects_marked()
 }
 
@@ -1714,6 +1696,7 @@ fn promote_young_pages(heap: &mut LocalHeap) {
                     let block_size = (*header).block_size as usize;
                     let header_size = crate::heap::PageHeader::header_size(block_size);
                     let page_addr = header as usize;
+                    let obj_count = (*header).obj_count as usize;
 
                     // Set GEN_OLD_FLAG on each surviving object for barrier early-exit
                     for word_idx in 0..crate::heap::BITMAP_SIZE {
@@ -1722,6 +1705,10 @@ fn promote_young_pages(heap: &mut LocalHeap) {
                         while b != 0 {
                             let bit_idx = b.trailing_zeros() as usize;
                             let obj_idx = word_idx * 64 + bit_idx;
+                            if obj_idx >= obj_count {
+                                b &= b - 1;
+                                continue;
+                            }
                             let gc_box_addr = (page_addr + header_size + obj_idx * block_size)
                                 as *const crate::ptr::GcBox<()>;
                             (*gc_box_addr).set_gen_old();
@@ -2102,7 +2089,12 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
                     return; // Already marked by another thread, slot valid
                 }
                 Ok(true) => {
+                    let marked_generation = (*ptr.as_ptr()).generation();
                     if !(*header.as_ptr()).is_allocated(index) {
+                        let current_generation = (*ptr.as_ptr()).generation();
+                        if current_generation != marked_generation {
+                            return;
+                        }
                         (*header.as_ptr()).clear_mark_atomic(index);
                         return;
                     }
@@ -2117,7 +2109,8 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
             return;
         }
 
-        visitor.worklist.push(ptr);
+        let enqueue_generation = (*ptr.as_ptr()).generation();
+        visitor.worklist.push((ptr, enqueue_generation));
     }
 }
 
@@ -2130,8 +2123,8 @@ fn sweep_segment_pages(heap: &mut LocalHeap, only_young: bool) -> usize {
     #[cfg(feature = "tracing")]
     tracing::debug!(heap_bytes = heap.total_allocated(), "sweep_start");
 
-    let pending = sweep_phase1_finalize(heap, only_young);
-    let reclaimed = sweep_phase2_reclaim(heap, pending, only_young);
+    sweep_phase1_finalize(heap, only_young);
+    let reclaimed = sweep_phase2_reclaim(heap, only_young);
 
     #[cfg(feature = "tracing")]
     tracing::debug!(objects_freed = reclaimed, "sweep_end");
@@ -2156,9 +2149,7 @@ fn sweep_segment_pages(heap: &mut LocalHeap, only_young: bool) -> usize {
 /// ```
 ///
 /// See `docs/reentrant-alloc-rules.md` for safety guidelines.
-fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop> {
-    let mut pending = Vec::new();
-
+fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) {
     // Snapshot pages to prevent iterator invalidation if drop_fn allocates memory
     // (which could trigger heap.pages.push() and invalidate the iterator)
     let pages_snapshot: Vec<_> = heap.all_pages().collect();
@@ -2230,18 +2221,11 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
                         // objects are never reclaimed, and the next GC cycle will
                         // try to drop them again - use-after-free!
                         (*gc_box_ptr).set_dead();
-
-                        pending.push(PendingDrop {
-                            page: page_ptr,
-                            index: i,
-                        });
                     }
                 }
             }
         }
     }
-
-    pending
 }
 
 /// Phase 2: Reclaim memory and rebuild free lists.
@@ -2263,11 +2247,7 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) -> Vec<PendingDrop>
     clippy::if_not_else,
     clippy::doc_markdown
 )]
-fn sweep_phase2_reclaim(
-    heap: &mut LocalHeap,
-    _pending: Vec<PendingDrop>,
-    only_young: bool,
-) -> usize {
+fn sweep_phase2_reclaim(heap: &mut LocalHeap, only_young: bool) -> usize {
     let mut reclaimed = 0;
 
     let pages_snapshot: Vec<_> = heap.all_pages().collect();
@@ -2314,6 +2294,8 @@ fn sweep_phase2_reclaim(
 
                         (*header).clear_allocated(i);
                         (*gc_box_ptr).clear_gen_old();
+                        (*gc_box_ptr).clear_under_construction();
+                        (*gc_box_ptr).clear_is_dropping();
                         reclaimed += 1;
                         is_alloc = false;
                         continue;
@@ -2364,6 +2346,7 @@ fn promote_all_pages(heap: &LocalHeap) {
             let block_size = (*header).block_size as usize;
             let header_size = crate::heap::PageHeader::header_size(block_size);
             let page_addr = header as usize;
+            let obj_count = (*header).obj_count as usize;
 
             for word_idx in 0..crate::heap::BITMAP_SIZE {
                 let bits = (*header).allocated_bitmap[word_idx].load(Ordering::Acquire);
@@ -2371,6 +2354,10 @@ fn promote_all_pages(heap: &LocalHeap) {
                 while b != 0 {
                     let bit_idx = b.trailing_zeros() as usize;
                     let obj_idx = word_idx * 64 + bit_idx;
+                    if obj_idx >= obj_count {
+                        b &= b - 1;
+                        continue;
+                    }
                     let gc_box_addr = (page_addr + header_size + obj_idx * block_size)
                         as *const crate::ptr::GcBox<()>;
                     (*gc_box_addr).set_gen_old();
@@ -2411,7 +2398,12 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
                         return; // Already marked by another thread, no push needed
                     }
                     Ok(true) => {
+                        let marked_generation = (*ptr.as_ptr()).generation();
                         if !(*header.as_ptr()).is_allocated(idx) {
+                            let current_generation = (*ptr.as_ptr()).generation();
+                            if current_generation != marked_generation {
+                                return;
+                            }
                             (*header.as_ptr()).clear_mark_atomic(idx);
                             return;
                         }
@@ -2425,7 +2417,8 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
             return;
         }
 
-        visitor.worklist.push(ptr);
+        let enqueue_generation = (*ptr.as_ptr()).generation();
+        visitor.worklist.push((ptr, enqueue_generation));
     }
 }
 
@@ -2462,7 +2455,18 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
                 }
                 Ok(true) => {
                     if !(*header.as_ptr()).is_allocated(idx) {
+                        return;
+                    }
+                    let marked_generation = (*ptr.as_ptr()).generation();
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        let current_generation = (*ptr.as_ptr()).generation();
+                        if current_generation != marked_generation {
+                            return;
+                        }
                         (*header.as_ptr()).clear_mark_atomic(idx);
+                        return;
+                    }
+                    if (*ptr.as_ptr()).generation() != marked_generation {
                         return;
                     }
                     visitor.objects_marked += 1;
@@ -2475,7 +2479,8 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
         return;
     }
 
-    visitor.worklist.push(ptr);
+    let enqueue_generation = (*ptr.as_ptr()).generation();
+    visitor.worklist.push((ptr, enqueue_generation));
 }
 
 /// Sweep Large Object Space.
@@ -2584,6 +2589,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
 /// - `header_size` must be correctly calculated for the block size
 /// - The page must not be concurrently accessed by other threads during sweep
 /// - Caller must ensure no new allocations occur on this page during sweep
+#[allow(clippy::too_many_lines)]
 unsafe fn lazy_sweep_page(
     page_ptr: NonNull<PageHeader>,
     block_size: usize,
@@ -2667,6 +2673,8 @@ unsafe fn lazy_sweep_page(
                                 } else {
                                     current_free = next_head;
                                 }
+                                all_dead = false;
+                                did_reclaim = true;
                                 break; // Slot was concurrently allocated; skip to next slot
                             }
                             did_reclaim = true;
@@ -2678,6 +2686,9 @@ unsafe fn lazy_sweep_page(
                             } else {
                                 Some(actual)
                             };
+                            if current_free == Some(u16::try_from(i).unwrap()) {
+                                break;
+                            }
                             obj_cast.write_unaligned(current_free);
                         }
                     }
@@ -2791,6 +2802,7 @@ unsafe fn lazy_sweep_page_all_dead(
                                 } else {
                                     current_free = next_head;
                                 }
+                                did_reclaim = true;
                                 break; // Slot was concurrently allocated; skip to next slot
                             }
                             did_reclaim = true;
@@ -2802,6 +2814,9 @@ unsafe fn lazy_sweep_page_all_dead(
                             } else {
                                 Some(actual)
                             };
+                            if current_free == Some(u16::try_from(i).unwrap()) {
+                                break;
+                            }
                             obj_cast.write_unaligned(current_free);
                         }
                     }
@@ -3011,7 +3026,7 @@ impl GcVisitor {
 
     #[inline]
     pub fn process_worklist(&mut self) {
-        while let Some(ptr) = self.worklist.pop() {
+        while let Some((ptr, enqueue_generation)) = self.worklist.pop() {
             unsafe {
                 let ptr_addr = ptr.as_ptr() as *const u8;
                 let header = crate::heap::ptr_to_page_header(ptr_addr);
@@ -3022,15 +3037,26 @@ impl GcVisitor {
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
                     // Skip freed slots (lazy sweep may have reclaimed this between enqueue and
-                    // processing) and already-marked objects to avoid double-counting.
+                    // processing).
                     if !(*header.as_ptr()).is_allocated(idx) {
                         continue;
                     }
-                    if (*header.as_ptr()).is_marked(idx) {
+
+                    // FIX bug444: Verify generation matches enqueue-time generation.
+                    // If slot was reused between enqueue and processing, generation would differ
+                    // and calling trace_fn on the wrong object data could cause memory corruption.
+                    let current_generation = (*ptr.as_ptr()).generation();
+                    if current_generation != enqueue_generation {
                         continue;
                     }
-                    (*header.as_ptr()).set_mark(idx);
-                    self.objects_marked += 1;
+
+                    // Objects may already be marked (pre-marked by mark_object() before push).
+                    // Only set mark and count if not already marked, but ALWAYS call trace_fn
+                    // so children are visited regardless of who set the mark bit.
+                    if !(*header.as_ptr()).is_marked(idx) {
+                        (*header.as_ptr()).set_mark(idx);
+                        self.objects_marked += 1;
+                    }
                 } else {
                     continue;
                 }
@@ -3085,7 +3111,9 @@ impl Visitor for GcVisitor {
                     return;
                 }
 
-                self.worklist.push(std::ptr::NonNull::new_unchecked(ptr));
+                let enqueue_generation = (*ptr).generation();
+                self.worklist
+                    .push((std::ptr::NonNull::new_unchecked(ptr), enqueue_generation));
             }
         }
     }

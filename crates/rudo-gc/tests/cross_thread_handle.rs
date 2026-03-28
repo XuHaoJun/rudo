@@ -645,3 +645,47 @@ fn test_weak_try_upgrade_returns_none_after_origin_terminated() {
         "try_upgrade() should return None when origin thread has terminated"
     );
 }
+
+/// `WeakCrossThreadHandle::resolve` does not panic when origin thread has terminated (bug403);
+/// returns `None` when origin TCB is gone (same as `try_resolve()`; bug415).
+#[test]
+fn test_weak_resolve_no_panic_after_origin_terminated() {
+    let (sender, receiver) = mpsc::channel();
+
+    let origin = thread::spawn(move || {
+        let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+        let weak = gc.weak_cross_thread_handle();
+        sender.send(weak).unwrap();
+    });
+
+    let weak = receiver.recv().unwrap();
+    origin.join().unwrap();
+
+    // Gc dropped with the thread; underlying weak cannot upgrade.
+    let result = weak.resolve();
+    assert!(
+        result.is_none(),
+        "resolve() should return None when object is gone (no panic on dead origin)"
+    );
+}
+
+/// Origin thread terminated but object still alive on another thread: `resolve` must be `None`
+/// so a recycled `ThreadId` cannot yield `Gc<T>` on the wrong thread (bug415).
+#[test]
+fn test_weak_resolve_none_when_origin_dead_but_object_alive() {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let gc: Gc<TestData> = Gc::new(TestData { value: 42 });
+        let weak = gc.weak_cross_thread_handle();
+        tx.send((weak, gc)).unwrap();
+    })
+    .join()
+    .unwrap();
+
+    let (weak, _keep_alive) = rx.recv().unwrap();
+    assert!(
+        weak.resolve().is_none(),
+        "resolve() must not return Some when origin TCB is dead, even if object is alive"
+    );
+    assert!(weak.try_resolve().is_none());
+}

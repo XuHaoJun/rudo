@@ -9,6 +9,7 @@
 //! This module provides [`GcRootSet`], a process-level singleton that maintains
 //! the collection of active GC roots across all tokio tasks and runtimes.
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -27,7 +28,7 @@ use std::sync::{Mutex, OnceLock};
 /// the core GC lock hierarchy (`LocalHeap`, `GlobalMarkState`, `GcRequest`).
 #[derive(Debug)]
 pub struct GcRootSet {
-    roots: Mutex<Vec<usize>>,
+    roots: Mutex<HashMap<usize, usize>>,
     dirty: AtomicBool,
 }
 
@@ -42,9 +43,9 @@ impl GcRootSet {
     }
 
     /// Creates a new `GcRootSet`.
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
-            roots: Mutex::new(Vec::new()),
+            roots: Mutex::new(HashMap::default()),
             dirty: AtomicBool::new(false),
         }
     }
@@ -63,10 +64,9 @@ impl GcRootSet {
     #[allow(clippy::significant_drop_tightening)]
     pub fn register(&self, ptr: usize) {
         let mut roots = self.roots.lock().unwrap();
-        if !roots.contains(&ptr) {
-            roots.push(ptr);
-            self.dirty.store(true, Ordering::Release);
-        }
+        let count = roots.entry(ptr).or_insert(0);
+        *count += 1;
+        self.dirty.store(true, Ordering::Release);
     }
 
     /// Unregisters a pointer from the GC root set.
@@ -82,15 +82,14 @@ impl GcRootSet {
     /// * `ptr` - The raw pointer address to unregister
     pub fn unregister(&self, ptr: usize) {
         let mut roots = self.roots.lock().unwrap();
-        let was_present = roots.contains(&ptr);
-        if was_present {
-            roots.retain(|&p| p != ptr);
-        }
-        drop(roots);
-
-        if was_present {
+        if let Some(count) = roots.get_mut(&ptr) {
+            *count -= 1;
+            if *count == 0 {
+                roots.remove(&ptr);
+            }
             self.dirty.store(true, Ordering::Release);
         }
+        drop(roots);
     }
 
     /// Returns the number of currently registered roots.
@@ -127,7 +126,7 @@ impl GcRootSet {
     pub fn snapshot(&self, heap: &crate::heap::LocalHeap) -> Vec<usize> {
         let roots = self.roots.lock().unwrap();
         let valid_roots: Vec<usize> = roots
-            .iter()
+            .keys()
             .filter(|&&ptr| {
                 // SAFETY: find_gc_box_from_ptr performs range and alignment checks.
                 // If it returns Some, ptr is a valid GcBox.
@@ -194,7 +193,7 @@ impl GcRootSet {
     #[inline]
     pub unsafe fn is_registered(&self, ptr: usize) -> bool {
         let roots = self.roots.lock().unwrap();
-        roots.contains(&ptr)
+        roots.contains_key(&ptr)
     }
 
     /// Clears all registered roots.
@@ -252,11 +251,14 @@ mod tests {
         assert!(unsafe { set.is_registered(0x1234) });
         assert!(set.is_dirty());
 
-        set.register(0x1234); // Duplicate - should not increment
-        assert_eq!(set.len(), 1);
+        set.register(0x1234); // Duplicate - increments ref count to 2
+        assert_eq!(set.len(), 1); // Still 1 unique key
 
-        set.unregister(0x1234);
-        assert!(set.is_empty());
+        set.unregister(0x1234); // Decrements count to 1, not removed yet
+        assert!(!set.is_empty()); // Count is 1
+
+        set.unregister(0x1234); // Decrements count to 0, removes key
+        assert!(set.is_empty()); // Now empty
         assert!(!unsafe { set.is_registered(0x1234) });
     }
 

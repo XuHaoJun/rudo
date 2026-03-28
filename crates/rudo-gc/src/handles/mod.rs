@@ -322,12 +322,38 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
                 "Handle::get: cannot access a dead, dropping, or under construction Gc"
             );
             let pre_generation = gc_box.generation();
-            let value = gc_box.value();
+            if !gc_box.try_inc_ref_if_nonzero() {
+                panic!("Handle::get: object is being dropped");
+            }
             assert_eq!(
                 pre_generation,
                 gc_box.generation(),
-                "Handle::get: slot was reused between pre-check and value read (generation mismatch)"
+                "Handle::get: slot was reused before value read (generation mismatch)"
             );
+
+            crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
+
+            // Second is_allocated check after dec_ref to fix TOCTOU with lazy sweep (bug372/bug385).
+            // If slot was swept between dec_ref and value read, we could
+            // access a dropped value.
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Handle::get: object slot was swept after dec_ref"
+                );
+            }
+
+            // Recheck flags after dec_ref before reading value.
+            // If object became dead/dropping after dec_ref, panic before reading value.
+            if gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+                || gc_box.is_under_construction()
+            {
+                panic!("Handle::get: object became dead/dropping after dec_ref");
+            }
+
+            let value = gc_box.value();
             value
         }
     }
@@ -404,7 +430,10 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
                 || gc_box.dropping_state() != 0
                 || gc_box.is_under_construction()
             {
-                GcBox::dec_ref(gc_box_ptr.cast_mut());
+                // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+                // decrementing when DEAD_FLAG is set or is_under_construction is true,
+                // but we need to actually rollback the try_inc_ref_if_nonzero increment.
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
                 panic!("Handle::to_gc: object became dead/dropping after ref increment");
             }
             Gc::from_raw(gc_box_ptr as *const u8)
@@ -423,8 +452,18 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
     /// is only used while the handle scope is active.
     #[inline]
     pub unsafe fn as_ptr(&self) -> *const GcBox<T> {
-        let slot = unsafe { &*self.slot };
-        slot.as_ptr() as *const GcBox<T>
+        unsafe {
+            let slot_ref = &*self.slot;
+            let gc_box_ptr = slot_ref.as_ptr() as *const GcBox<T>;
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "Handle::as_ptr: slot has been swept and reused"
+                );
+            }
+            gc_box_ptr
+        }
     }
 }
 

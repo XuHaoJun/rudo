@@ -632,12 +632,47 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                 "AsyncHandle::get: cannot access a dead, dropping, or under construction Gc"
             );
             let pre_generation = gc_box.generation();
-            let value = gc_box.value();
+            if !gc_box.try_inc_ref_if_nonzero() {
+                panic!("AsyncHandle::get: object is being dropped");
+            }
             assert_eq!(
                 pre_generation,
                 gc_box.generation(),
-                "AsyncHandle::get: slot was reused between pre-check and value read (generation mismatch)"
+                "AsyncHandle::get: slot was reused before value read (generation mismatch)"
             );
+
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "AsyncHandle::get: object slot was swept after dec_ref"
+                );
+            }
+
+            if gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+                || gc_box.is_under_construction()
+            {
+                // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+                // decrementing when DEAD_FLAG is set or is_under_construction is true,
+                // but we need to actually rollback the try_inc_ref_if_nonzero increment.
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("AsyncHandle::get: object became dead/dropping after inc_ref");
+            }
+
+            crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
+
+            // Second is_allocated check after dec_ref (bug379 fix).
+            // If slot was swept after dec_ref, we could read from a freed object.
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                assert!(
+                    (*header.as_ptr()).is_allocated(idx),
+                    "AsyncHandle::get: object slot was swept after dec_ref"
+                );
+            }
+
+            let value = gc_box.value();
             value
         }
     }
@@ -676,6 +711,7 @@ impl<T: Trace + 'static> AsyncHandle<T> {
     /// ```
     #[inline]
     #[track_caller]
+    #[allow(unsafe_op_in_unsafe_fn)]
     pub unsafe fn get_unchecked(&self) -> &T {
         let slot = unsafe { &*self.slot };
         let gc_box_ptr = slot.as_ptr() as *const GcBox<T>;
@@ -702,12 +738,45 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             "AsyncHandle::get_unchecked: cannot access a dead, dropping, or under construction Gc"
         );
         let pre_generation = gc_box.generation();
-        let value = gc_box.value();
+        if !gc_box.try_inc_ref_if_nonzero() {
+            panic!("AsyncHandle::get_unchecked: object is being dropped");
+        }
         assert_eq!(
             pre_generation,
             gc_box.generation(),
-            "AsyncHandle::get_unchecked: slot was reused between pre-check and value read (generation mismatch)"
+            "AsyncHandle::get_unchecked: slot was reused before value read (generation mismatch)"
         );
+
+        if let Some(idx) = unsafe { crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) } {
+            let header = unsafe { crate::heap::ptr_to_page_header(gc_box_ptr as *const u8) };
+            assert!(
+                unsafe { (*header.as_ptr()).is_allocated(idx) },
+                "AsyncHandle::get_unchecked: object slot was swept after dec_ref"
+            );
+        }
+
+        if gc_box.has_dead_flag() || gc_box.dropping_state() != 0 || gc_box.is_under_construction()
+        {
+            // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+            // decrementing when DEAD_FLAG is set or is_under_construction is true,
+            // but we need to actually rollback the try_inc_ref_if_nonzero increment.
+            unsafe { GcBox::undo_inc_ref(gc_box_ptr.cast_mut()) };
+            panic!("AsyncHandle::get_unchecked: object became dead/dropping after inc_ref");
+        }
+
+        crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
+
+        // Second is_allocated check after dec_ref (bug379 fix).
+        // If slot was swept after dec_ref, we could read from a freed object.
+        if let Some(idx) = unsafe { crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) } {
+            let header = unsafe { crate::heap::ptr_to_page_header(gc_box_ptr as *const u8) };
+            assert!(
+                unsafe { (*header.as_ptr()).is_allocated(idx) },
+                "AsyncHandle::get_unchecked: object slot was swept after dec_ref"
+            );
+        }
+
+        let value = gc_box.value();
         value
     }
 
@@ -803,7 +872,10 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                 || gc_box.dropping_state() != 0
                 || gc_box.is_under_construction()
             {
-                GcBox::dec_ref(gc_box_ptr.cast_mut());
+                // Use undo_inc_ref, not dec_ref: dec_ref returns early without
+                // decrementing when DEAD_FLAG is set or is_under_construction is true,
+                // but we need to actually rollback the try_inc_ref_if_nonzero increment.
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
                 panic!("AsyncHandle::to_gc: object became dead/dropping after ref increment");
             }
             Gc::from_raw(gc_box_ptr as *const u8)
@@ -823,8 +895,8 @@ impl<T: Trace + 'static> Clone for AsyncHandle<T> {
 
 impl<T: Trace + 'static> Copy for AsyncHandle<T> {}
 
-unsafe impl<T: Trace + 'static> Send for AsyncHandle<T> {}
-unsafe impl<T: Trace + 'static> Sync for AsyncHandle<T> {}
+unsafe impl<T: Trace + Send + 'static> Send for AsyncHandle<T> {}
+unsafe impl<T: Trace + Sync + 'static> Sync for AsyncHandle<T> {}
 
 /// Spawns an async task with automatic GC root tracking.
 ///
