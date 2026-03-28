@@ -929,11 +929,11 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return None;
             }
 
-            if gc_box.is_dead_or_unrooted() {
+            if gc_box.dropping_state() != 0 {
                 return None;
             }
 
-            if gc_box.dropping_state() != 0 {
+            if gc_box.is_dead_or_unrooted() {
                 return None;
             }
 
