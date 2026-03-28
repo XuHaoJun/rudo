@@ -419,11 +419,16 @@ unsafe impl<T: Trace + Copy> Trace for Cell<T> {
 unsafe impl<T: Trace + ?Sized> Trace for RefCell<T> {
     #[inline]
     fn trace(&self, visitor: &mut impl Visitor) {
-        // Try to borrow; if already borrowed mutably, skip
-        // (the borrower is responsible for tracing)
-        if let Ok(inner) = self.try_borrow() {
-            inner.trace(visitor);
-        }
+        // IMPORTANT: keep this as `borrow()`, not `try_borrow()`.
+        //
+        // Why: returning early on borrow failure would silently skip tracing live edges inside
+        // RefCell, which can violate GC liveness invariants under incremental/interleaved marking.
+        // This project already hit that "panic vs silent-skip" loop in GcCapture (bug85/86/223):
+        // - `borrow()` can panic when mutably borrowed
+        // - `try_borrow()` avoids panic but can silently lose edges
+        // For GC correctness, fail-fast panic is the safer trade-off than silent edge loss.
+        let inner = self.borrow();
+        inner.trace(visitor);
     }
 }
 
