@@ -1965,7 +1965,12 @@ impl<T: Trace + 'static> Gc<T> {
                     && !(*ptr.as_ptr()).is_under_construction(),
                 "Gc::cross_thread_handle: cannot create handle for dead, dropping, or under construction Gc"
             );
+            let pre_generation = (*ptr.as_ptr()).generation();
             (*ptr.as_ptr()).inc_ref();
+            if pre_generation != (*ptr.as_ptr()).generation() {
+                crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
+                panic!("Gc::cross_thread_handle: slot was reused during handle creation (generation mismatch)");
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
