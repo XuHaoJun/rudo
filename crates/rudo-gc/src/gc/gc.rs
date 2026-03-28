@@ -3038,11 +3038,8 @@ impl GcVisitor {
 
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
                     // Skip freed slots (lazy sweep may have reclaimed this between enqueue and
-                    // processing) and already-marked objects to avoid double-counting.
+                    // processing).
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        continue;
-                    }
-                    if (*header.as_ptr()).is_marked(idx) {
                         continue;
                     }
 
@@ -3054,8 +3051,13 @@ impl GcVisitor {
                         continue;
                     }
 
-                    (*header.as_ptr()).set_mark(idx);
-                    self.objects_marked += 1;
+                    // Objects may already be marked (pre-marked by mark_object() before push).
+                    // Only set mark and count if not already marked, but ALWAYS call trace_fn
+                    // so children are visited regardless of who set the mark bit.
+                    if !(*header.as_ptr()).is_marked(idx) {
+                        (*header.as_ptr()).set_mark(idx);
+                        self.objects_marked += 1;
+                    }
                 } else {
                     continue;
                 }
