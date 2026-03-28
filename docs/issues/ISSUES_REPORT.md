@@ -3,7 +3,7 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 365
+- **Fixed**: 366
 - **Invalid**: 40
 - **Resolved**: 1
 - **Unknown**: 1
@@ -450,3 +450,4 @@
 | [2026-03-23_ISSUE_bug379_asynchandle_get_missing_second_is_allocated_check.md](./2026-03-23_ISSUE_bug379_asynchandle_get_missing_second_is_allocated_check.md) | AsyncHandle::get() Missing is_allocated Check Between dec_ref and value() | Fixed | Verified |
 | [2026-03-23_ISSUE_bug380_scan_page_unmarked_refs_incorrect_mark_clear.md](./2026-03-23_ISSUE_bug380_scan_page_unmarked_refs_incorrect_mark_clear.md) | scan_page_for_unmarked_refs incorrectly clears mark when slot is reused | Fixed | Verified |
 | [2026-03-28_ISSUE_bug383_weak_upgrade_panic_vs_try_upgrade_none.md](./2026-03-28_ISSUE_bug383_weak_upgrade_panic_vs_try_upgrade_none.md) | Weak::upgrade() panics when try_upgrade() returns None - inconsistent behavior | Open | Unverified |
+| [2026-03-28_ISSUE_bug446_GcCell_borrow_mut_gen_only_inconsistent.md](./2026-03-28_ISSUE_bug446_GcCell_borrow_mut_gen_only_inconsistent.md) | GcCell::borrow_mut_gen_only inconsistent with GcThreadSafeCell - always triggers barrier | Closed | Verified, Fixed |
