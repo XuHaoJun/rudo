@@ -1,6 +1,6 @@
 # [Bug]: scan_page_for_*_refs clears mark when is_under_construction, inconsistent with mark_object_black
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -117,3 +117,11 @@ While this doesn't directly cause UAF (the object is still allocated), it violat
 
 **Geohot (Exploit 觀點):**
 This could be chained with a TOCTOU in the sweep phase. If timing allows the sweep to run between the mark clear and the `is_under_construction` flip, you could get a use-after-free on a partially constructed object. Low probability but high impact if achieved.
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Fixed in `gc/incremental.rs`.
+
+`scan_page_for_marked_refs` and `scan_page_for_unmarked_refs` now break out of the `try_mark` success path when `is_under_construction()` is true **without** calling `clear_mark_atomic`, matching `mark_object_black` / `mark_new_object_black`. Verified with `./test.sh`.

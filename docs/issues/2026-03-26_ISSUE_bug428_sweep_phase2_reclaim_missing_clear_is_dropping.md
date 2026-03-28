@@ -1,6 +1,6 @@
 # [Bug]: sweep_phase2_reclaim missing clear_is_dropping causes memory leak on slot reuse
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -105,3 +105,9 @@ This is not a safety violation (no UB), but a memory leak. The `drop_fn` not bei
 
 **Geohot (Exploit 觀點):**
 While not directly exploitable for memory corruption, uncontrolled resource leaks could lead to denial-of-service in long-running GC applications.
+
+---
+
+## Resolution (2026-03-28)
+
+**Verified in code:** `sweep_phase2_reclaim` in `crates/rudo-gc/src/gc/gc.rs` clears `is_dropping` when reclaiming a dead slot (`(*gc_box_ptr).clear_is_dropping()` immediately after `clear_under_construction()`), matching `pop_from_free_list` in `heap.rs`. No further source change required for this issue.

@@ -1,6 +1,6 @@
 # [Bug]: GcBoxWeakRef::upgrade() missing generation check in try_inc_ref_if_nonzero path
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -168,3 +168,13 @@ if pre_generation != gc_box.generation() {
 ```
 
 Both `upgrade()` and `try_upgrade()` need this fix.
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Fixed in tree.
+
+`GcBoxWeakRef::upgrade()` and `GcBoxWeakRef::try_upgrade()` both capture `pre_generation` immediately before `try_inc_ref_if_nonzero()`, then after a successful increment compare it to `gc_box.generation()` and call `GcBox::undo_inc_ref` on mismatch (`crates/rudo-gc/src/ptr.rs`, `try_inc_ref_if_nonzero` paths; comments reference bug413).
+
+**Verification:** `cargo test -p rudo-gc --test cross_thread_handle -- --test-threads=1` (30 tests) passed.

@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell barrier large object path missing second is_allocated check - TOCTOU race
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -155,3 +155,9 @@ Large objects with interior pointers are already complex (see bug190). The missi
 ## 🔗 相關 Issue
 
 - bug376: GcThreadSafeCell barriers missing second is_allocated check (fixed for normal path only, large object path incomplete)
+
+---
+
+## Resolution (2026-03-28)
+
+**Verified fixed in code:** `GcThreadSafeCell::incremental_write_barrier` and `generational_write_barrier` large-object branches now match the normal-path bug376 pattern: after `has_gen_old` / generation early-exit logic, a second `is_allocated(0)` runs before `record_in_remembered_buffer` / `set_dirty` (see `cell.rs` large-object arms). No further code change required.

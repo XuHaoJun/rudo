@@ -822,7 +822,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             }
 
             // Check is_allocated AFTER inc_weak + generation check.
-            // The generation check (lines 794-798) detects slot reuse and undoes inc_weak.
+            // The generation check above detects slot reuse and undoes inc_weak.
             // This is_allocated check is a secondary safety net (bug354).
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
@@ -2064,9 +2064,7 @@ impl<T: Trace + 'static> Gc<T> {
 impl<T: Trace> Deref for Gc<T> {
     type Target = T;
 
-    /// Hot path: only checks `GcBox` flags (same cache line as the value).
-    /// Page header / `is_allocated` lookups are avoided to prevent performance regression.
-    /// Swept slots are caught by `has_dead_flag()` (`set_dead` is called before `clear_allocated`).
+    /// Matches `try_deref`: checks page `is_allocated` (slot not swept/reused) then `GcBox` flags.
     #[inline]
     fn deref(&self) -> &Self::Target {
         let ptr = self.ptr.load(Ordering::Acquire);

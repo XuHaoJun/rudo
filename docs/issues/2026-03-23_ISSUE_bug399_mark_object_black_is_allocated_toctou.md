@@ -1,7 +1,7 @@
 # [Bug]: mark_object_black TOCTOU when is_allocated returns true
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -120,3 +120,9 @@ This doesn't cause immediate UB (memory is valid), but can lead to incorrect GC 
 
 **Geohot (Exploit 觀點):**
 In a concurrent scenario, an attacker might influence allocation patterns and GC timing to cause mark confusion between objects. While not a direct UAF, this could lead to subtle memory corruption in long-running GC-intensive workloads.
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Fixed in `gc/incremental.rs` `mark_object_black`: on `try_mark` success, when `is_allocated(idx)` is true, the code compares `marked_generation` to `current_generation` and returns `None` on mismatch (comment `bug399 fix`).

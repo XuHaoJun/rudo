@@ -1,6 +1,6 @@
 # [Bug]: Work loss in `try_steal_work` when all queues are full
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -121,3 +121,9 @@ This is a memory safety issue. If objects are not marked as live during GC, they
 
 **Geohot (Exploit 觀點):**
 A sophisticated attacker could trigger high contention scenarios to cause work loss, potentially leading to use-after-free exploits. Even without explicit triggering, natural contention could cause sporadic memory corruption.
+
+---
+
+## Resolution (2026-03-28)
+
+Verified in `crates/rudo-gc/src/gc/marker.rs` `try_steal_work`: both the overflow-pop path and the steal-from-remote path fall back with a retry loop on `push_overflow_work` until it succeeds, matching the first-branch pattern so stolen work is not dropped when local and remote `push` attempts fail.

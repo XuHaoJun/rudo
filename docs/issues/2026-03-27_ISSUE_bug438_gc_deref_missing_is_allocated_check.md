@@ -1,6 +1,6 @@
 # [Bug]: Gc::deref 缺少 is_allocated 檢查導致 Slot Reuse 後存取錯誤物件
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -168,3 +168,11 @@ Slot reuse 會導致舊指標指向新物件，這是經典的記憶體安全問
 - bug207: Gc::deref 缺少 is_allocated 檢查 (本 issue)
 - bug197: Gc 核心方法缺少 is_allocated 檢查
 - try_deref(): 已有 is_allocated 檢查 (正確的實作)
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Fixed.
+
+`Gc::deref()` in `ptr.rs` asserts `PageHeader::is_allocated` when `ptr_to_object_index` applies, matching `try_deref()` / `try_clone()`. The prior module comment that claimed `is_allocated` was skipped was updated to match the implementation.

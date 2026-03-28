@@ -30,17 +30,6 @@ use crate::tracing::internal::{
     trace_phase, GcId, GcPhase,
 };
 
-/// Information about an object pending deallocation.
-/// Used in two-phase sweep: phase 1 drops, phase 2 reclaims.
-///
-/// Note: This struct is deprecated as of P1-001 optimization.
-/// The sweep phase now uses bitmap checks instead of `PendingDrop` tracking.
-#[allow(dead_code)]
-struct PendingDrop {
-    page: NonNull<PageHeader>,
-    index: usize,
-}
-
 // ============================================================================
 // Collection statistics
 // ============================================================================

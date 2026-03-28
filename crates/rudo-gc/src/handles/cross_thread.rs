@@ -810,19 +810,23 @@ impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     ///
     /// # Safety
     ///
-    /// Must be called from the origin thread. `T` may be `!Send`.
+    /// While the origin thread's TCB is alive, must be called from that thread.
+    /// `T` may be `!Send`.
     ///
     /// # Panics
     ///
-    /// Panics if called from a thread other than the origin thread (including
-    /// when the origin thread has terminated). Use [`try_resolve()`] for
-    /// fallible resolution.
+    /// Panics if called from a thread other than the origin thread while the
+    /// origin thread is still alive.
+    ///
+    /// If the origin thread has already terminated, returns `None` (same as
+    /// [`try_resolve()`]). `ThreadId` can be reused after thread exit, so we
+    /// must not upgrade the weak ref when the origin TCB is gone — that would
+    /// bypass the origin-thread check and could expose `T` on the wrong thread
+    /// when `T: !Send`.
     #[track_caller]
     pub fn resolve(&self) -> Option<Gc<T>> {
-        if self.origin_tcb.upgrade().is_none() {
-            panic!("WeakCrossThreadHandle::resolve() cannot be called after origin thread terminated. \
-                    Use try_resolve() instead.");
-        }
+        // TCB liveness before ThreadId check — matches try_resolve / try_upgrade (bug415).
+        self.origin_tcb.upgrade()?;
         assert_eq!(
             std::thread::current().id(),
             self.origin_thread,

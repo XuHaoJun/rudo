@@ -1,6 +1,6 @@
 # [Bug]: Gc::clone 缺少 generation 檢查，導致 slot reuse TOCTOU
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -137,3 +137,9 @@ if pre_generation != (*gc_box_ptr).generation() {
 - 雖然這個 bug 不直接造成安全漏洞，但錯誤的 ref count 可能被利用
 - 如果攻擊者能控制 allocation timing，可能誘發這個 race condition
 - 複雜的及時攻擊，但理論上可行
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Already fixed in `ptr.rs` `Gc::clone`: `pre_generation` is captured before `inc_ref`, then compared to `generation()` after `inc_ref`; on mismatch `undo_inc_ref` runs and the function panics. Matches the suggested remediation.

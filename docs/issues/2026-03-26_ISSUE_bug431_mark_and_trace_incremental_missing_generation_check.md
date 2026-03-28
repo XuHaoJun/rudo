@@ -1,6 +1,6 @@
 # [Bug]: mark_and_trace_incremental missing generation check before trace_fn after slot reuse TOCTOU
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 威脅模型評估 (Threat Model Assessment)
@@ -155,3 +155,7 @@ In a concurrent scenario, an attacker could influence allocation patterns to cau
 - bug398: mark_and_trace_incremental TOCTOU - original issue that was partially fixed
 - bug295: TOCTOU between is_allocated check and set_mark - root cause pattern
 - bug336: incremental marking TOCTOU with lazy sweep reallocation - similar pattern
+
+---
+
+**Resolution (2026-03-28):** Verified in `gc.rs`: after `Ok(true)` from `try_mark`, when both `is_allocated` checks pass, the code compares `(*ptr.as_ptr()).generation()` to `marked_generation` and returns early on mismatch (lines ~2469–2471), matching the `worker_mark_loop` / bug427 pattern. No further code change required. `./test.sh` passed.

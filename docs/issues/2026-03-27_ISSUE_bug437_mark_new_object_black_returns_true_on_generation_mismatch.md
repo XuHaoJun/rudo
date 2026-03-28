@@ -1,6 +1,6 @@
 # [Bug]: mark_new_object_black returns true on generation mismatch - wrong object marked after slot reuse
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 威脅模型評估 (Threat Model Assessment)
@@ -145,3 +145,13 @@ If an attacker can control the timing of lazy sweep and object allocation, they 
 - bug426: trace_and_mark_object missing generation check - similar generation handling issue
 - bug336: Generation check to detect slot reuse
 - bug311: Lazy sweep TOCTOU
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Already fixed in current `crates/rudo-gc/src/gc/incremental.rs`.
+
+`mark_new_object_black` now clears the mark and returns `false` when `current_generation != marked_generation` after `set_mark` (see `clear_mark_atomic` + `return false` immediately after the generation check). This matches the suggested remediation: on slot reuse, do not report success.
+
+**Verification:** Static review of `mark_new_object_black` (lines ~1075–1087); `cargo test -p rudo-gc --test incremental_marking -- --test-threads=1` passed.

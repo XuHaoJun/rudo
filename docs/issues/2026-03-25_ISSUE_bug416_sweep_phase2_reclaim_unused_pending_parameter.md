@@ -1,6 +1,6 @@
 # [Bug]: sweep_phase2_reclaim unused _pending parameter - dead code after P1-001 optimization
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -77,3 +77,11 @@ No soundness issue - the code is correct. The `_pending` being unused is a lint 
 
 **Geohot (Exploit 觀點):**
 No security impact. This is pure dead code elimination. The allocation of `Vec<PendingDrop>` in phase 1 is wasted CPU/memory but does not create any exploitable condition.
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Already implemented; closed with small cleanup.
+
+`sweep_phase2_reclaim` no longer takes `_pending`; `sweep_phase1_finalize` returns `()` and does not build a `Vec<PendingDrop>`. Removed the unused deprecated `PendingDrop` struct from `gc/gc.rs` (it had no remaining references).

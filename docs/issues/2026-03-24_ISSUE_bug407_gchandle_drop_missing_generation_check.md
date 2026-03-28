@@ -1,6 +1,6 @@
 # [Bug]: GcHandle::drop 缺少 generation 檢查可能導致 ref_count 損壞
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -151,3 +151,13 @@ impl<T: Trace + 'static> Drop for GcHandle<T> {
 
 **Geohot (Exploit 攻擊觀點):**
 如果攻擊者能控制 GC 時序，可能利用此 bug 導致特定物件被提前 drop，進一步利用 drop callback 中的指標操作。
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Fixed in codebase (no additional patch required for this session).
+
+`GcHandle::drop` in `handles/cross_thread.rs` now captures `pre_generation` before removing the handle from roots, then after `is_allocated` re-checks compares `(*self.ptr.as_ptr()).generation()` to `pre_generation` and panics on mismatch before `GcBox::dec_ref`, matching the intent of `resolve_impl`.
+
+Verification: `cargo test -p rudo-gc --test cross_thread_handle -- --test-threads=1` (30 tests passed).

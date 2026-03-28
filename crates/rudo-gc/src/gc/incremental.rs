@@ -159,7 +159,6 @@ pub struct IncrementalMarkState {
     max_worklist_size: AtomicUsize,
     slice_start_time: Mutex<Option<Instant>>,
     slice_counter: AtomicUsize,
-    rendezvous_ack_counter: AtomicUsize,
     #[cfg(feature = "tracing")]
     gc_id: Mutex<Option<crate::tracing::GcId>>,
 }
@@ -256,7 +255,6 @@ impl IncrementalMarkState {
             max_worklist_size: AtomicUsize::new(0),
             slice_start_time: Mutex::new(None),
             slice_counter: AtomicUsize::new(0),
-            rendezvous_ack_counter: AtomicUsize::new(0),
             #[cfg(feature = "tracing")]
             gc_id: Mutex::new(None),
         }
@@ -466,19 +464,6 @@ impl IncrementalMarkState {
         self.stats().reset();
         *self.slice_start_time.lock() = None;
         self.root_count.store(0, Ordering::SeqCst);
-        self.rendezvous_ack_counter.store(0, Ordering::SeqCst);
-    }
-
-    pub fn increment_rendezvous_ack(&self) -> usize {
-        self.rendezvous_ack_counter.fetch_add(1, Ordering::AcqRel)
-    }
-
-    pub fn rendezvous_ack_count(&self) -> usize {
-        self.rendezvous_ack_counter.load(Ordering::Acquire)
-    }
-
-    pub fn reset_rendezvous_ack(&self) {
-        self.rendezvous_ack_counter.store(0, Ordering::Release);
     }
 }
 
@@ -520,8 +505,6 @@ fn stop_all_mutators_for_snapshot() {
             .store(true, std::sync::atomic::Ordering::Release);
     }
 
-    state.increment_rendezvous_ack();
-
     drop(registry);
 
     let start_time = std::time::Instant::now();
@@ -556,7 +539,6 @@ fn stop_all_mutators_for_snapshot() {
 }
 
 fn resume_all_mutators() {
-    let state = IncrementalMarkState::global();
     let registry = crate::heap::thread_registry().lock().unwrap();
     for tcb in &registry.threads {
         tcb.gc_requested
@@ -565,7 +547,6 @@ fn resume_all_mutators() {
     }
     drop(registry);
     crate::heap::GC_REQUESTED.store(false, std::sync::atomic::Ordering::Release);
-    state.reset_rendezvous_ack();
 }
 
 #[inline]

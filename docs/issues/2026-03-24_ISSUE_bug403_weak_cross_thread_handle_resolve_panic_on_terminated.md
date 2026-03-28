@@ -1,6 +1,6 @@
 # [Bug]: WeakCrossThreadHandle::resolve() panics when origin thread terminates instead of returning None
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -133,3 +133,13 @@ pub fn resolve(&self) -> Option<Gc<T>> {
 **Geohot (Exploit 觀點):**
 - No exploit potential - just API inconsistency
 - Panic is safe behavior, just not consistent with similar APIs
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Fixed.
+
+`WeakCrossThreadHandle::resolve()` in `handles/cross_thread.rs` no longer panics when `origin_tcb.upgrade()` fails. It returns `self.weak.upgrade()` in that case (same as the issue’s suggested fix). Documentation for `# Panics`, `# Safety`, and behavior when the origin TCB is gone was updated.
+
+**Verification:** `test_weak_resolve_no_panic_after_origin_terminated` in `crates/rudo-gc/tests/cross_thread_handle.rs`; full suite via `./test.sh`.

@@ -1,7 +1,7 @@
 # [Bug]: `rendezvous_ack_counter` 機制未完成 - 增加後從未被正確使用
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -164,3 +164,9 @@ loop {
 ## Status History
 
 - 2026-03-23: Bug reported
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Applied **Option 2** from the issue: removed the unfinished `rendezvous_ack_counter` field and the `increment_rendezvous_ack` / `rendezvous_ack_count` / `reset_rendezvous_ack` API from `IncrementalMarkState`, plus the collector-only increment in `stop_all_mutators_for_snapshot` and reset in `resume_all_mutators`. Safepoint completion remains governed by `thread_registry.active_count` (`active == 1` after mutators enter `enter_rendezvous`), which was already the effective protocol; the counter added no signal and was misleading for maintenance.

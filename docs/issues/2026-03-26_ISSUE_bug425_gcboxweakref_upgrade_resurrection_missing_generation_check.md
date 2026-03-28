@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::upgrade() missing generation check in try_inc_ref_from_zero path
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -154,3 +154,11 @@ if gc_box.try_inc_ref_from_zero() {
 ## Additional Note
 
 bug413 addresses the `try_inc_ref_if_nonzero()` path. This issue specifically addresses the `try_inc_ref_from_zero()` path which was NOT covered by bug413. Both paths in `upgrade()` and `try_upgrade()` need the generation check fix.
+
+## Resolution (2026-03-28)
+
+**Outcome:** Already fixed in current `ptr.rs`.
+
+`GcBoxWeakRef::upgrade()` and `GcBoxWeakRef::try_upgrade()` both capture `pre_resurrection_generation` before `try_inc_ref_from_zero()`, then `post_resurrection_generation` after a successful CAS. If `post_resurrection_generation != pre_resurrection_generation`, the code calls `GcBox::undo_inc_ref()` and returns `None`, matching the `try_inc_ref_if_nonzero` path and the suggested fix in this issue.
+
+No code change was required; issue closed as verified by code inspection.

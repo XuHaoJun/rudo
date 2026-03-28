@@ -1,6 +1,6 @@
 # [Bug]: sweep_phase2_reclaim 回收 slot 時未清除 UNDER_CONSTRUCTION_FLAG
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -103,4 +103,8 @@ sweep 階段應與 dealloc 和分配路徑保持一致的狀態清理。`UNDER_C
 **Geohot (Exploit 觀點):**
 如果攻擊者能控制 GC 時序，可能利用此不一致狀態。當物件被回收並重新分配後，舊的 `UNDER_CONSTRUCTION_FLAG` 可能導致新物件被錯誤處理。
 
-(End of file - total 100 lines)
+---
+
+## Resolution (2026-03-28)
+
+**Verified in code:** `sweep_phase2_reclaim` in `crates/rudo-gc/src/gc/gc.rs` now calls `(*gc_box_ptr).clear_under_construction()` (and `clear_is_dropping()`) when reclaiming a dead slot with `weak_count == 0 && dead_flag`, matching dealloc / `try_pop_from_page` cleanup. No additional code change required; issue was Open while implementation had already landed. `cargo test -p rudo-gc --lib --tests --all-features -- --test-threads=1` passed.

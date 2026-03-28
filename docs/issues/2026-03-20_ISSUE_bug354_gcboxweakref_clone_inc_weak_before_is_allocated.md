@@ -158,24 +158,8 @@ Applied fix in `ptr.rs:729-798` following the pattern from `GcHandle::downgrade(
 
 This prevents corrupting another object's weak_count when the slot is swept and reused between validity checks and `inc_weak()`.
 
-## Follow-up (2026-03-24): Comment Still Incorrect
+## Follow-up (2026-03-24): Misleading comment — resolved (2026-03-28)
 
-**Status:** Open
-**Tags:** Verified
+The outdated "BEFORE inc_weak" wording was removed from `GcBoxWeakRef::clone`; comments now state that `is_allocated` runs **after** `inc_weak`, with the generation check as the primary slot-reuse guard. A stale line-number reference in that comment block was replaced with "above" to avoid drift.
 
-The code fix is correct, but the comment at line 800-801 is STILL incorrect:
-
-```rust
-// Check is_allocated BEFORE inc_weak to prevent corrupting another
-// object's weak_count if this slot has been swept (bug354).
-```
-
-The actual code order is:
-1. Line 792: `inc_weak()` is called
-2. Lines 802-808: `is_allocated` check happens AFTER `inc_weak`
-
-The comment says "BEFORE inc_weak" but the check is clearly AFTER. The generation check (lines 794-798) provides protection against slot reuse, but the comment is misleading and should be corrected.
-
-**Root Cause:** The comment was written before the fix was applied, describing the intended behavior, but was never updated to match the actual implementation which uses generation checking instead of moving is_allocated before inc_weak.
-
-**Impact:** Low - The generation check provides adequate protection, but the misleading comment could confuse future maintainers about the actual protection mechanism.
+**Status:** (sub-issue closed; main issue remains **Fixed** / **Verified**)

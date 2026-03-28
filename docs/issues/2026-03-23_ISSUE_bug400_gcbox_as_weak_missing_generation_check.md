@@ -1,7 +1,7 @@
 # [Bug]: GcBox::as_weak Missing Generation Check Before inc_weak (TOCTOU)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -147,3 +147,9 @@ pub(crate) fn as_weak(&self) -> GcBoxWeakRef<T> {
 - bug366: Gc::weak_cross_thread_handle missing generation check before inc_weak (Fixed)
 - bug356: Gc::downgrade missing generation check before inc_weak (Fixed)
 - bug354: GcBoxWeakRef::clone inc_weak before is_allocated (Fixed)
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Fixed in `ptr.rs` `GcBox::as_weak`: `pre_generation` before `inc_weak`, compare after `inc_weak`, `dec_weak` and return null on mismatch (comment `FIX bug400`).

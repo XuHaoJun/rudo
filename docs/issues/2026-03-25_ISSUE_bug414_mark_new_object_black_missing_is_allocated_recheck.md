@@ -1,7 +1,7 @@
 # [Bug]: mark_new_object_black returns true without re-checking is_allocated when generations mismatch
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -144,3 +144,11 @@ if current_generation != marked_generation {
 - bug358: Similar mark_new_object_black generation check issue
 - bug412: mark_new_object_black missing generation check (mentioned fix not merged)
 - mark_object_black: Proper pattern for generation + is_allocated check
+
+---
+
+## Resolution (2026-03-28)
+
+**Verified fixed in current `crates/rudo-gc/src/gc/incremental.rs`.** After `set_mark`, the code re-checks `is_allocated`, then compares `current_generation` to `marked_generation`. On mismatch it calls `clear_mark_atomic(idx)` and returns `false` (no longer returns `true` without validation). This matches the safe pattern: a generation change after `set_mark` means the mark must not be treated as success for the original object identity.
+
+**Tests:** `cargo test -p rudo-gc --all-features --test incremental_marking -- --test-threads=1` (22 passed).

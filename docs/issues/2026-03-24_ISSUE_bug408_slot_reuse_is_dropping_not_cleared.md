@@ -1,6 +1,6 @@
 # [Bug]: Slot reuse does not clear is_dropping, causing dropped objects to be skipped in dec_ref
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -105,3 +105,11 @@ This is not a safety violation (no UB), but a memory leak. The `drop_fn` not bei
 
 **Geohot (Exploit 觀點):**
 While not directly exploitable for memory corruption, uncontrolled resource leaks could lead to denial-of-service in long-running GC applications. The generation check in `dec_ref` provides some protection but doesn't fix the root cause.
+
+---
+
+## Resolution (2026-03-28)
+
+**Verified fixed in tree:** `GcBox::clear_is_dropping()` exists in `crates/rudo-gc/src/ptr.rs` and is invoked when a slot is taken from the free list in `LocalHeap::try_pop_from_page` (alongside `clear_dead`, `clear_gen_old`, `clear_under_construction`, `increment_generation`). The small-object dealloc path that returns a slot to the free list also calls `clear_is_dropping()` so stale dropping state is not left on reclaimed memory. No further code change was required for this issue.
+
+**Check:** `cargo test -p rudo-gc test_free_slot_reuse --all-features -- --test-threads=1` (exercises collect + reuse); passed.

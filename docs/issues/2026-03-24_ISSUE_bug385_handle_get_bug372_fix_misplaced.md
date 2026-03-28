@@ -1,6 +1,6 @@
 # [Bug]: Handle::get() bug372 fix incorrectly applied - checks positioned BEFORE dec_ref instead of AFTER
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -169,3 +169,9 @@ Lazy sweep 和 handle access 的並發是一個已知的 race window。如果 de
 - 確認: 註釋在 line 334 說 "after dec_ref" 但檢查在 lines 337-352（dec_ref 之前）
 - 對比 bug372 的建議修復顯示檢查應該在 dec_ref 之後
 - 確認這是 bug372 修復的錯誤應用，而非新的 bug
+
+## Resolution (2026-03-28)
+
+**Outcome:** Already fixed in current `handles/mod.rs`.
+
+`Handle::get()` now calls `GcBox::dec_ref` first (line 334), then performs the second `is_allocated` check and flag rechecks (lines 336–354) before `gc_box.value()`. This matches the ordering described in this issue; the misplaced ordering from the 2026-03-24 review is no longer present. No code change required.

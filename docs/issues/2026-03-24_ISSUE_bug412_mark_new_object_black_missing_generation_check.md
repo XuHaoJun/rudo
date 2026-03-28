@@ -1,6 +1,6 @@
 # [Bug]: mark_new_object_black 缺少 generation check（bug358 修復未合併）
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -134,3 +134,9 @@ git merge-base --is-ancestor b118877 HEAD && echo "In HEAD" || echo "NOT in HEAD
 ```
 
 commit b118877 的修复未合并到当前 HEAD。
+
+---
+
+## Resolution (2026-03-28)
+
+**Verified in `crates/rudo-gc/src/gc/incremental.rs`:** `mark_new_object_black` now captures `marked_generation` before `set_mark`, then compares `current_generation` after `set_mark` and the `is_allocated` recheck. If generations differ (slot reuse / TOCTOU with lazy sweep), it calls `clear_mark_atomic` and returns `false`. This matches the intent of aligning with `mark_object_black`’s slot-reuse detection; the early issue text that suggested `return true` on mismatch is superseded by the stricter semantics documented in bug437 (do not report success when the marked slot no longer represents the same object generation). No further code change required for bug412. Targeted `incremental_marking` tests pass with `--all-features`.

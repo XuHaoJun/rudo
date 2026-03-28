@@ -194,41 +194,9 @@ Slot reuse + 引用計數操作錯誤是經典的記憶體腐敗向量。攻擊�
 
 ---
 
-## Re-Opened (2026-03-22)
+## Re-Opened (2026-03-22) — Closed (2026-03-28)
 
-**Status:** Open
-**Tags:** Verified
-
-**Finding:** The fix described below was NOT properly implemented.
-
-Upon code inspection of `handles/mod.rs:324-330`, the generation check still occurs AFTER the value read:
-
-```rust
-let pre_generation = gc_box.generation();  // Line 324
-let value = gc_box.value();                 // Line 325 - VALUE READ FIRST!
-assert_eq!(                                // Lines 326-330
-    pre_generation,
-    gc_box.generation(),
-    "Handle::get: slot was reused between pre-check and value read (generation mismatch)"
-);
-```
-
-The issue's own "Expected Behavior" states:
-> `Handle::get()` 應該在讀取 `gc_box.value()` 前檢查 generation
-
-But the suggested fix doesn't move the generation check before the value read - it keeps the same order (pre_generation → value → assert).
-
-**Correct fix should be:**
-```rust
-let pre_generation = gc_box.generation();
-// Verify generation BEFORE reading value
-assert_eq!(
-    pre_generation,
-    gc_box.generation(),
-    "Handle::get: slot was reused before value read (generation mismatch)"
-);
-let value = gc_box.value();  // NOW read value AFTER generation check
-```
+The concern was that `Handle::get` read `gc_box.value()` before verifying generation. **Current code** (`handles/mod.rs` `Handle::get`, and `handles/async.rs` `AsyncHandle::get` / `get_unchecked`) uses this order: `pre_generation` → `try_inc_ref_if_nonzero` → `assert_eq!(pre_generation, gc_box.generation(), …)` → `dec_ref` and post-checks → **`gc_box.value()` last**. Generation is therefore asserted before the payload read. Same pattern applies to `AsyncHandle::get` and `get_unchecked`.
 
 ---
 

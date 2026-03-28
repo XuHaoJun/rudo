@@ -1,7 +1,7 @@
 # [Bug]: incremental_write_barrier large object path missing second is_allocated check (TOCTOU)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -167,3 +167,16 @@ TOCTOU 竞争条件在 GC 中特别危险，因为 slot 回收和引用追踪之
 3. `incremental_write_barrier`: 第二次檢查位於 line 3212-3215，但 large object 路徑在 line 3176 直接返回，**不會執行**第二次檢查
 
 **Status: Open** - 需要修復。
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Already fixed in `crates/rudo-gc/src/heap.rs` `incremental_write_barrier`.
+
+**Verification:** Static review of current `incremental_write_barrier` (approx. lines 3157–3221):
+
+1. **Large-object branch:** After the generational early-exit (`generation == 0 && !has_gen_old`), a **second** `is_allocated(0)` runs before building `(header, index)` (lines 3176–3177), matching the suggested fix in this issue.
+2. **Merged path:** After both branches, `is_allocated(index)` runs again before `record_in_remembered_buffer` (lines 3215–3218), so the large-object path is not exempt from the final check.
+
+This aligns with bug364 (common second check) and the large-object-specific second check. `cargo test -p rudo-gc --test incremental_marking --test incremental_integration -- --test-threads=1` passed.

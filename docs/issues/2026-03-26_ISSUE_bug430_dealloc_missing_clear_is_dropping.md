@@ -1,6 +1,6 @@
 # [Bug]: dealloc missing clear_is_dropping causes dropping state leak on slot reuse
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -115,3 +115,9 @@ This is a memory leak, not a safety violation. The `drop_fn` not being called me
 
 **Geohot (Exploit 觀點):**
 Resource leaks can lead to denial-of-service in long-running GC applications.
+
+---
+
+## Resolution (2026-03-28)
+
+**Verified in code:** `LocalHeap::dealloc` in `crates/rudo-gc/src/heap.rs` already clears `is_dropping` together with the other slot flags before returning the slot to the free list (`clear_dead`, `clear_gen_old`, `clear_under_construction`, `clear_is_dropping`). No additional code change was required. `cargo test -p rudo-gc --lib --tests --all-features -- --test-threads=1` passed.

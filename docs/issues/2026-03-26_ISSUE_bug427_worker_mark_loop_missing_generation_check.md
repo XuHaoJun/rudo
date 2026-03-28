@@ -1,6 +1,6 @@
 # [Bug]: worker_mark_loop missing generation check before trace_fn - slot reuse TOCTOU
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -119,3 +119,13 @@ Calling `trace_fn` on the wrong object's data is undefined behavior - we're trea
 
 **Geohot (Exploit 觀點):**
 If an attacker can influence the timing of lazy sweep relative to incremental marking, they could potentially cause `trace_fn` to be called on attacker-controlled data, leading to memory corruption or information disclosure. The generation mechanism exists specifically to detect this slot reuse - not using it is a critical oversight.
+
+---
+
+## Resolution (2026-03-28)
+
+**Outcome:** Fixed in tree.
+
+`gc/marker.rs` implements the bug426-style pattern in both `worker_mark_loop` and `worker_mark_loop_with_registry`: after `try_mark(Ok(true))`, the code captures `marked_generation`, re-checks `is_allocated` with generation comparison before clearing the mark, verifies generation again immediately before `trace_fn`, and skips tracing when the slot was reused.
+
+Verification: `bash test.sh` (workspace, `--all-features`, `--test-threads=1`) passed.

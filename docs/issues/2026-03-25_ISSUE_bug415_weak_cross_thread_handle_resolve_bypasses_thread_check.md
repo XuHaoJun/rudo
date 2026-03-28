@@ -1,6 +1,6 @@
 # Issue: WeakCrossThreadHandle::resolve() Bypasses Thread Check When TCB is Dead
 
-**Status:** Open  
+**Status:** Fixed  
 **Tags:** Verified  
 **Date:** 2026-03-25
 
@@ -126,3 +126,11 @@ This is a soundness violation. The `resolve()` method documents that it panics w
 
 ### Geohot
 The TOCTOU race here is subtle: the check `origin_tcb.upgrade().is_none()` followed by `self.weak.upgrade()` has a window where state can change. More critically, when TCB is dead, the thread identity check is completely bypassed. This could allow cross-thread access to `!Send` types.
+
+---
+
+## Resolution (2026-03-28)
+
+**Fix:** `resolve()` now calls `self.origin_tcb.upgrade()?` before the `ThreadId` check (same order as `try_resolve()` / `try_upgrade()`). When the origin TCB is gone, the method returns `None` and never upgrades the weak ref, so a recycled `ThreadId` cannot receive `Some(Gc<T>)` while the object remains alive elsewhere.
+
+**Tests:** `test_weak_resolve_none_when_origin_dead_but_object_alive` in `crates/rudo-gc/tests/cross_thread_handle.rs`.

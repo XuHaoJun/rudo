@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::resolve()  incorrect panic when TCB alive and handle removed via unregister
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -190,3 +190,19 @@ fn main() {
 
 **Geohot (Exploit 觀點):**
 攻擊者可能濫用這個不正確的 panic 來進行 denial of service。雖然不是傳統的記憶體安全漏洞，但能夠觸發 panic 可能在某些上下文中有利用價值。
+
+---
+
+## Resolution (2026-03-28)
+
+Verified against current `crates/rudo-gc/src/handles/cross_thread.rs`.
+
+1. **`GcHandle::clone`** allocates a **new** `handle_id` and inserts a separate TCB root entry per clone. Unregistering one clone removes only that id; another clone’s id remains registered, so the “not in TCB roots and not in orphan while TCB is alive” case from sibling unregistration does not apply the way the issue assumed for shared `handle_id`.
+
+2. **`try_resolve`** returns `None` after re-checking TCB roots and the orphan table (no panic on the orphan-miss path).
+
+3. **`resolve`** re-checks TCB roots after the orphan lookup and re-checks orphan if the TCB still upgrades, narrowing the migration / ordering window between empty roots and orphan insertion.
+
+4. Integration tests in `crates/rudo-gc/tests/cross_thread_handle.rs` (including `test_clone_then_unregister_cloned_keeps_alive`) pass with `--test-threads=1`.
+
+Callers who must not panic should use `try_resolve()`; the final `resolve()` panic after all checks remains a defensive invariant failure when no root entry exists for this handle id.
