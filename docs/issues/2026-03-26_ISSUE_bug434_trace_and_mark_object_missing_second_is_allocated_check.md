@@ -1,7 +1,7 @@
 # [Bug]: trace_and_mark_object missing second is_allocated check after generation verification - inconsistent with mark_object_black
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Closed
+**Tags:** Verified
 
 ## 威脅模型評估 (Threat Model Assessment)
 
