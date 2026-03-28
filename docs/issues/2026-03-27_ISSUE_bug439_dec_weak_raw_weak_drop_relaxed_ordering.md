@@ -1,6 +1,6 @@
 # [Bug]: dec_weak_raw and Weak::drop use Relaxed ordering for weak_count load (inconsistent with dec_weak)
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Unverified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -79,3 +79,9 @@ Relaxed ordering 可能在特定編譯器優化下導致非預期的行為。
 ## 相關 Issue
 
 - bug423: dec_weak 使用 Relaxed ordering (已修復 dec_weak，但 dec_weak_raw 和 Weak::drop 未修復)
+
+---
+
+## Resolution (2026-03-28)
+
+**Invalid — already fixed in current tree.** In `crates/rudo-gc/src/ptr.rs`, `GcBox::dec_weak_raw` loads `weak_count` with `Ordering::Acquire` (line ~366), and `Weak<T>::drop` uses `Ordering::Acquire` for the initial load in its CAS loop (line ~2861), matching `dec_weak()`. No code change required.

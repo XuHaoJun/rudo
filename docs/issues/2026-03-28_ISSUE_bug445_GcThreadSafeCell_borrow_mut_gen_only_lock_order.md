@@ -1,6 +1,6 @@
 # [Bug]: GcThreadSafeCell::borrow_mut_gen_only triggers write barrier before acquiring lock (inconsistent API)
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 威脅模型評估 (Threat Model Assessment)
@@ -100,3 +100,9 @@ The barrier-before-lock pattern could theoretically allow another thread to obse
 
 - bug116: trigger_write_barrier TOCTOU
 - bug153: GcCell generational barrier not cached
+
+---
+
+## Resolution (2026-03-28)
+
+`GcThreadSafeCell::borrow_mut_gen_only` in `cell.rs` acquires `self.inner.lock()` before `trigger_write_barrier_with_incremental`, matching `borrow_mut` / `borrow_mut_simple`. No further code change required; issue closed as already fixed in tree.

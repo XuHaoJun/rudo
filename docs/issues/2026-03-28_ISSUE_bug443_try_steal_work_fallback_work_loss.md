@@ -1,6 +1,6 @@
 # [Bug]: Work loss in `try_steal_work` fallback when overflow clearing is in progress
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -91,3 +91,9 @@ Silent error discarding in unsafe GC code is dangerous. The `let _ =` pattern hi
 
 **Geohot (Exploit 觀點):**
 An attacker could time clearing operations to cause work loss, leading to use-after-free vulnerabilities.
+
+---
+
+## Resolution (2026-03-28)
+
+**Fixed in code:** `try_steal_work` no longer discards `Err` from `push_overflow_work`. Both fallback sites (after pop from overflow and after steal) use `while push_overflow_work(obj).is_err() { spin_loop(); }` so work is retried until the push succeeds after `clear_overflow_queue` finishes. Matches suggested remediation (busy-wait until push succeeds). `test_try_steal_work_checks_overflow_queue` passes (`cargo test -p rudo-gc --all-features try_steal --lib`).

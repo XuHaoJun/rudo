@@ -3,9 +3,8 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 411
-- **Open**: 4
-- **Invalid**: 42
+- **Fixed**: 414
+- **Invalid**: 43
 - **Closed**: 7
 - **Resolved**: 1
 - **Unknown**: 1
@@ -508,10 +507,10 @@
 | [2026-03-27_ISSUE_bug436_spill_registers_cfg_shadow.md](./2026-03-27_ISSUE_bug436_spill_registers_cfg_shadow.md) | spill_registers_and_scan fallback cfg shadows x86_64 regs array - GC pointers not scanned | Fixed | Verified |
 | [2026-03-27_ISSUE_bug437_mark_new_object_black_returns_true_on_generation_mismatch.md](./2026-03-27_ISSUE_bug437_mark_new_object_black_returns_true_on_generation_mismatch.md) | mark_new_object_black returns true on generation mismatch - wrong object marked after slot reuse | Fixed | Verified |
 | [2026-03-27_ISSUE_bug438_gc_deref_missing_is_allocated_check.md](./2026-03-27_ISSUE_bug438_gc_deref_missing_is_allocated_check.md) | Gc::deref 缺少 is_allocated 檢查導致 Slot Reuse 後存取錯誤物件 | Fixed | Verified |
-| [2026-03-27_ISSUE_bug439_dec_weak_raw_weak_drop_relaxed_ordering.md](./2026-03-27_ISSUE_bug439_dec_weak_raw_weak_drop_relaxed_ordering.md) | dec_weak_raw and Weak::drop use Relaxed ordering for weak_count load (inconsistent with dec_weak) | Open | Unverified |
+| [2026-03-27_ISSUE_bug439_dec_weak_raw_weak_drop_relaxed_ordering.md](./2026-03-27_ISSUE_bug439_dec_weak_raw_weak_drop_relaxed_ordering.md) | dec_weak_raw and Weak::drop use Relaxed ordering for weak_count load (inconsistent with dec_weak) | Invalid | Unverified |
 | [2026-03-28_ISSUE_bug442_GcThreadSafeCell_borrow_mut_simple_missing_mark_object_black.md](./2026-03-28_ISSUE_bug442_GcThreadSafeCell_borrow_mut_simple_missing_mark_object_black.md) | GcThreadSafeCell::borrow_mut_simple 缺少 mark_object_black 導致新指標在增量標記時未被標記 | Invalid | Duplicate |
-| [2026-03-28_ISSUE_bug443_try_steal_work_fallback_work_loss.md](./2026-03-28_ISSUE_bug443_try_steal_work_fallback_work_loss.md) | Work loss in `try_steal_work` fallback when overflow clearing is in progress | Open | Verified |
+| [2026-03-28_ISSUE_bug443_try_steal_work_fallback_work_loss.md](./2026-03-28_ISSUE_bug443_try_steal_work_fallback_work_loss.md) | Work loss in `try_steal_work` fallback when overflow clearing is in progress | Fixed | Verified |
 | [2026-03-28_ISSUE_bug444_process_worklist_generation_check_ineffective.md](./2026-03-28_ISSUE_bug444_process_worklist_generation_check_ineffective.md) | process_worklist generation check is ineffective - compares same value twice | Closed | Verified |
-| [2026-03-28_ISSUE_bug445_GcThreadSafeCell_borrow_mut_gen_only_lock_order.md](./2026-03-28_ISSUE_bug445_GcThreadSafeCell_borrow_mut_gen_only_lock_order.md) | GcThreadSafeCell::borrow_mut_gen_only triggers write barrier before acquiring lock (inconsistent API) | Open | Verified |
+| [2026-03-28_ISSUE_bug445_GcThreadSafeCell_borrow_mut_gen_only_lock_order.md](./2026-03-28_ISSUE_bug445_GcThreadSafeCell_borrow_mut_gen_only_lock_order.md) | GcThreadSafeCell::borrow_mut_gen_only triggers write barrier before acquiring lock (inconsistent API) | Fixed | Verified |
 | [2026-03-28_ISSUE_bug446_GcCell_borrow_mut_gen_only_inconsistent.md](./2026-03-28_ISSUE_bug446_GcCell_borrow_mut_gen_only_inconsistent.md) | GcCell::borrow_mut_gen_only inconsistent with GcThreadSafeCell - always triggers barrier | Closed | Verified, Fixed |
-| [2026-03-28_ISSUE_bug447_promote_pages_bitmap_bounds.md](./2026-03-28_ISSUE_bug447_promote_pages_bitmap_bounds.md) | promote_young_pages and promote_all_pages use BITMAP_SIZE instead of obj_count - buffer overrun | Open | Verified |
+| [2026-03-28_ISSUE_bug447_promote_pages_bitmap_bounds.md](./2026-03-28_ISSUE_bug447_promote_pages_bitmap_bounds.md) | promote_young_pages and promote_all_pages use BITMAP_SIZE instead of obj_count - buffer overrun | Fixed | Verified |
