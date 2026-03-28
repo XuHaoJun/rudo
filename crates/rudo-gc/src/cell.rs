@@ -1226,8 +1226,9 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     pub fn borrow_mut_gen_only(&self) -> parking_lot::MutexGuard<'_, T> {
         let incremental_active = false;
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        let guard = self.inner.lock();
         self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
-        self.inner.lock()
+        guard
     }
 
     /// Barrier with cached incremental and generational state. Used by `borrow_mut` to avoid
