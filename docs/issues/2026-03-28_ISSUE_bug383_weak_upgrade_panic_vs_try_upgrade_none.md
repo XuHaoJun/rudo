@@ -1,7 +1,7 @@
 # [Bug]: Weak::upgrade() panics when try_upgrade() returns None - inconsistent behavior
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Closed
+**Tags:** Verified, Fixed
 
 ## 威脅模型評估 (Threat Model Assessment)
 
@@ -132,3 +132,17 @@ Using `assert!` for a runtime condition (rather than a true invariant) is proble
 
 **Geohot (Exploit 觀點):**
 Panics in cleanup/drop paths can cause unexpected process termination. In GC systems with weak references, graceful degradation (returning None) is preferred over crashes when possible.
+
+---
+
+## 修復紀錄 (Fix Applied)
+
+**Date:** 2026-03-28
+
+**Fix:** Changed `Weak::upgrade()` to return `None` instead of panicking when `is_under_construction()` is true.
+
+**File Changed:** `crates/rudo-gc/src/ptr.rs`
+
+**Changes:**
+1. Line 2333-2337: Replaced `assert!(!gc_box.is_under_construction(), ...)` with `if gc_box.is_under_construction() { return None; }`
+2. Removed the "# Panics" section from the doc comment that documented the panic behavior

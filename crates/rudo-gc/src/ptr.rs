@@ -2301,25 +2301,6 @@ impl<T: Trace> Weak<T> {
     ///
     /// assert!(weak.upgrade().is_some());
     /// ```
-    /// Attempt to upgrade to a strong `Gc<T>` reference.
-    ///
-    /// Returns `None` if the value has been collected.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the `Weak` points to a `GcBox` that is currently under construction
-    /// (e.g., during `Gc::new_cyclic_weak`).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use rudo_gc::{Gc, Weak};
-    ///
-    /// let gc = Gc::new(42);
-    /// let weak = Gc::downgrade(&gc);
-    ///
-    /// assert!(weak.upgrade().is_some());
-    /// ```
     pub fn upgrade(&self) -> Option<Gc<T>> {
         let ptr = self.ptr.load(Ordering::Acquire).as_option()?;
 
@@ -2349,12 +2330,11 @@ impl<T: Trace> Weak<T> {
         unsafe {
             let gc_box = &*ptr.as_ptr();
 
-            assert!(
-                !gc_box.is_under_construction(),
-                "Weak::upgrade: cannot upgrade while GcBox is under construction. \
-                 This typically happens if you call upgrade() inside the closure \
-                 passed to Gc::new_cyclic_weak()."
-            );
+            // FIX bug383: Return None instead of panicking when is_under_construction.
+            // This matches Weak::try_upgrade() behavior for consistent API.
+            if gc_box.is_under_construction() {
+                return None;
+            }
 
             let pre_generation = gc_box.generation();
 
