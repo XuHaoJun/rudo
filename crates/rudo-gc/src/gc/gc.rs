@@ -1707,6 +1707,7 @@ fn promote_young_pages(heap: &mut LocalHeap) {
                     let block_size = (*header).block_size as usize;
                     let header_size = crate::heap::PageHeader::header_size(block_size);
                     let page_addr = header as usize;
+                    let obj_count = (*header).obj_count as usize;
 
                     // Set GEN_OLD_FLAG on each surviving object for barrier early-exit
                     for word_idx in 0..crate::heap::BITMAP_SIZE {
@@ -1715,6 +1716,10 @@ fn promote_young_pages(heap: &mut LocalHeap) {
                         while b != 0 {
                             let bit_idx = b.trailing_zeros() as usize;
                             let obj_idx = word_idx * 64 + bit_idx;
+                            if obj_idx >= obj_count {
+                                b &= b - 1;
+                                continue;
+                            }
                             let gc_box_addr = (page_addr + header_size + obj_idx * block_size)
                                 as *const crate::ptr::GcBox<()>;
                             (*gc_box_addr).set_gen_old();
@@ -2352,6 +2357,7 @@ fn promote_all_pages(heap: &LocalHeap) {
             let block_size = (*header).block_size as usize;
             let header_size = crate::heap::PageHeader::header_size(block_size);
             let page_addr = header as usize;
+            let obj_count = (*header).obj_count as usize;
 
             for word_idx in 0..crate::heap::BITMAP_SIZE {
                 let bits = (*header).allocated_bitmap[word_idx].load(Ordering::Acquire);
@@ -2359,6 +2365,10 @@ fn promote_all_pages(heap: &LocalHeap) {
                 while b != 0 {
                     let bit_idx = b.trailing_zeros() as usize;
                     let obj_idx = word_idx * 64 + bit_idx;
+                    if obj_idx >= obj_count {
+                        b &= b - 1;
+                        continue;
+                    }
                     let gc_box_addr = (page_addr + header_size + obj_idx * block_size)
                         as *const crate::ptr::GcBox<()>;
                     (*gc_box_addr).set_gen_old();
