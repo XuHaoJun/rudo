@@ -326,9 +326,6 @@ pub unsafe fn clear_registers() {
     std::hint::black_box(());
 
     // Miri/Other arch: Rely on optimization barrier or dummy work.
-    #[cfg(any(
-        all(not(target_arch = "x86_64"), not(target_arch = "aarch64")),
-        miri
-    ))]
+    #[cfg(any(all(not(target_arch = "x86_64"), not(target_arch = "aarch64")), miri))]
     std::hint::black_box(());
 }
