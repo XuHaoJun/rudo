@@ -26,6 +26,25 @@ use crate::ptr::GcBox;
 /// Prevents unbounded memory growth when many threads mutate shared GC objects.
 const MAX_CROSS_THREAD_SATB_SIZE: usize = 1024 * 1024;
 
+/// Test-only override for `MAX_CROSS_THREAD_SATB_SIZE`.
+/// When non-zero, this value replaces the constant. Allows tests to saturate
+/// the buffers with far fewer entries. Reset to 0 after use.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) static CROSS_THREAD_SATB_SIZE_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[inline]
+fn max_cross_thread_satb_size() -> usize {
+    #[cfg(any(test, feature = "test-util"))]
+    {
+        let ov = CROSS_THREAD_SATB_SIZE_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+        if ov > 0 {
+            return ov;
+        }
+    }
+    MAX_CROSS_THREAD_SATB_SIZE
+}
+
 /// Global SATB buffer for cross-thread mutations.
 /// When a mutation occurs on a different thread than the allocating thread,
 /// the SATB old value is recorded here instead of the thread-local buffer.
@@ -41,6 +60,19 @@ static CROSS_THREAD_SATB_BUFFER: parking_lot::Mutex<Vec<usize>> =
 /// Retains pointers until fallback completes, preventing premature collection
 /// during the race window between overflow and fallback (bug122).
 static CROSS_THREAD_SATB_OVERFLOW_BUFFER: parking_lot::Mutex<Vec<usize>> =
+    parking_lot::Mutex::new(Vec::new());
+
+/// Emergency buffer for cross-thread SATB when both main and overflow are full.
+///
+/// When the main buffer AND overflow buffer are both at capacity the entry was
+/// previously silently dropped, breaking the SATB snapshot guarantee.
+/// This buffer captures those entries so they are never lost.
+///
+/// The buffer is unbounded by design: correctness (no premature collection) takes
+/// priority over memory pressure.  A fallback STW is always requested at the same
+/// time, so the window during which this buffer can grow is bounded by the time
+/// the collector takes to observe the fallback flag and begin a STW sweep.
+static CROSS_THREAD_SATB_EMERGENCY_BUFFER: parking_lot::Mutex<Vec<usize>> =
     parking_lot::Mutex::new(Vec::new());
 
 // Thread-local storage for the current thread's stable ID.
@@ -2029,30 +2061,47 @@ impl LocalHeap {
         }
     }
 
-    /// Flush the cross-thread SATB buffer (main + overflow).
+    /// Flush the cross-thread SATB buffers (main + overflow + emergency).
     /// Called during GC to process cross-thread mutations.
     #[must_use]
     pub fn flush_cross_thread_satb_buffer() -> Vec<NonNull<GcBox<()>>> {
         let mut main = std::mem::take(&mut *CROSS_THREAD_SATB_BUFFER.lock());
         let overflow = std::mem::take(&mut *CROSS_THREAD_SATB_OVERFLOW_BUFFER.lock());
+        let emergency = std::mem::take(&mut *CROSS_THREAD_SATB_EMERGENCY_BUFFER.lock());
         main.extend(overflow);
+        main.extend(emergency);
         main.into_iter()
             .filter_map(|addr| NonNull::new(addr as *mut GcBox<()>))
             .collect()
     }
 
     /// Push a GC pointer to the cross-thread SATB buffer.
-    /// Used when recording SATB old values from threads without a GC heap.
-    /// When main buffer is full, records to overflow buffer instead of dropping (bug122).
-    /// When overflow is also full, skips push to prevent unbounded growth (bug270).
     ///
-    /// Returns `true` if the value was stored successfully, `false` if the buffer
-    /// overflowed and fallback was requested.
+    /// Used when recording SATB old values from threads without a GC heap.
+    ///
+    /// Tier order on saturation:
+    /// 1. Main buffer — normal path.
+    /// 2. Overflow buffer — when main is full (bug122).
+    /// 3. Emergency buffer — when both main and overflow are full.
+    ///    Previously entries were silently dropped here, breaking the SATB
+    ///    snapshot guarantee (P5 / bug270-successor).  The emergency buffer is
+    ///    unbounded; a fallback STW is requested immediately so the window
+    ///    during which it can grow is bounded by collector latency.
+    ///
+    /// Returns `true` if the value landed in the main buffer (no pressure),
+    /// `false` if it was stored under overflow/emergency pressure and a STW
+    /// fallback was requested.
     pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) -> bool {
+        let limit = max_cross_thread_satb_size();
         let mut buffer = CROSS_THREAD_SATB_BUFFER.lock();
-        if buffer.len() >= MAX_CROSS_THREAD_SATB_SIZE {
+        if buffer.len() >= limit {
             let mut overflow = CROSS_THREAD_SATB_OVERFLOW_BUFFER.lock();
-            if overflow.len() >= MAX_CROSS_THREAD_SATB_SIZE {
+            if overflow.len() >= limit {
+                // Both main and overflow are full.  Use the emergency buffer so
+                // the entry is never silently dropped.
+                CROSS_THREAD_SATB_EMERGENCY_BUFFER
+                    .lock()
+                    .push(gc_ptr.as_ptr() as usize);
                 crate::gc::incremental::IncrementalMarkState::global()
                     .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
                 return false;

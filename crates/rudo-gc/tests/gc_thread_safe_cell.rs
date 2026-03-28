@@ -433,3 +433,74 @@ fn test_cross_thread_satb_during_active_gc() {
 
     // Test passes if we reach here without memory corruption
 }
+
+/// Regression test for the P5 / dual-overflow SATB bug.
+///
+/// Previously, when both the main cross-thread SATB buffer and its overflow
+/// buffer were full, any additional SATB entry was silently dropped, breaking
+/// the SATB snapshot guarantee and potentially causing premature collection.
+///
+/// This test:
+/// 1. Configures a tiny per-buffer limit (1 entry each) so the emergency
+///    buffer is reachable with only 3 pushes.
+/// 2. Pushes three synthetic cross-thread SATB entries (one per tier).
+/// 3. Asserts that flushing recovers all three entries — none were dropped.
+#[test]
+fn test_cross_thread_satb_dual_overflow_no_entry_loss() {
+    use rudo_gc::GcBox;
+    use std::ptr::NonNull;
+
+    rudo_gc::test_util::reset();
+
+    // Use a buffer limit of 1: main holds 1, overflow holds 1, the 3rd must
+    // land in the emergency buffer rather than being discarded.
+    rudo_gc::test_util::set_cross_thread_satb_capacity(1);
+
+    // Allocate three objects that will serve as SATB old-value entries.
+    // They must remain allocated for the duration of the test so we have
+    // valid (non-null, in-heap) addresses to push.
+    let gc1 = Gc::new(1u64);
+    let gc2 = Gc::new(2u64);
+    let gc3 = Gc::new(3u64);
+
+    // SAFETY: These raw pointers are valid GcBox addresses owned by gc1/gc2/gc3,
+    // which remain live for the entire test body.
+    // GcBox<T> is always allocated at the correct alignment by the GC allocator;
+    // the u8 alias is only for pointer arithmetic convenience.
+    #[allow(clippy::cast_ptr_alignment)]
+    let ptr1 = unsafe { NonNull::new_unchecked(Gc::internal_ptr(&gc1) as *mut GcBox<()>) };
+    #[allow(clippy::cast_ptr_alignment)]
+    let ptr2 = unsafe { NonNull::new_unchecked(Gc::internal_ptr(&gc2) as *mut GcBox<()>) };
+    #[allow(clippy::cast_ptr_alignment)]
+    let ptr3 = unsafe { NonNull::new_unchecked(Gc::internal_ptr(&gc3) as *mut GcBox<()>) };
+
+    // Push 3 entries:
+    //   push 1 -> main buffer (len 0 → 1, limit 1; accepted)
+    //   push 2 -> overflow (main full, overflow len 0 → 1)
+    //   push 3 -> emergency (main full, overflow full)
+    let r1 = rudo_gc::heap::LocalHeap::push_cross_thread_satb(ptr1);
+    let r2 = rudo_gc::heap::LocalHeap::push_cross_thread_satb(ptr2);
+    let r3 = rudo_gc::heap::LocalHeap::push_cross_thread_satb(ptr3);
+
+    // r1 true (main path); r2 and r3 false (overflow/emergency with fallback requested).
+    assert!(r1, "first push should succeed in main buffer");
+    assert!(
+        !r2,
+        "second push should report overflow (overflow buffer used)"
+    );
+    assert!(
+        !r3,
+        "third push should report overflow (emergency buffer used)"
+    );
+
+    // Flush and count — all three must be present; previously ptr3 was lost.
+    let flushed = rudo_gc::test_util::flush_cross_thread_satb();
+    assert_eq!(
+        flushed, 3,
+        "all 3 SATB entries must be recovered after flush; \
+         if this is 2, the dual-overflow bug regressed"
+    );
+
+    // Restore state so subsequent tests are unaffected.
+    rudo_gc::test_util::reset();
+}
