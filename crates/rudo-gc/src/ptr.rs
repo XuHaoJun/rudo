@@ -462,6 +462,7 @@ impl<T: Trace + ?Sized> GcBox<T> {
     /// Returns true if the `DEAD_FLAG` is set OR if there are no strong references
     /// (`ref_count` == 0). An object is collectible when either condition holds.
     /// Use [`has_dead_flag()`] to check only the `DEAD_FLAG`.
+    #[allow(dead_code)]
     pub(crate) fn is_dead_or_unrooted(&self) -> bool {
         (self.weak_count.load(Ordering::Acquire) & Self::DEAD_FLAG) != 0
             || self.ref_count.load(Ordering::Acquire) == 0
@@ -933,7 +934,11 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return None;
             }
 
-            if gc_box.is_dead_or_unrooted() {
+            // FIX bug452: Use has_dead_flag() instead of is_dead_or_unrooted().
+            // is_dead_or_unrooted() returns true when ref_count == 0, which blocks
+            // try_inc_ref_from_zero() resurrection - a design bug.
+            // Only block resurrection if DEAD_FLAG is set (value was dropped).
+            if gc_box.has_dead_flag() {
                 return None;
             }
 
