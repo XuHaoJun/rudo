@@ -286,14 +286,16 @@ pub unsafe fn clear_registers() {
         );
     }
     // On aarch64, `spill_registers_and_scan` captures x19–x28 (callee-saved GPRs),
-    // x29 (frame pointer), and x30 (link register).  We must NOT zero x29/x30 because
+    // x29 (frame pointer), and x30 (link register). We must NOT zero x29/x30 because
     // clearing the frame pointer corrupts stack unwinding and clearing the link register
-    // makes returning from this function impossible.  Zero only x19–x28.
+    // makes returning from this function impossible. Zero only x19–x28.
     //
     // The previous implementation incorrectly cleared x0–x18 (caller-saved / scratch
     // registers), which are disjoint from the set the spill function reads — providing
     // no protection against false roots at all.
-    #[cfg(all(target_arch = "aarch64", not(miri)))]
+    // NOTE: On aarch64-apple-darwin, LLVM reserves x19 internally and rejects it as
+    // an inline-asm operand, so this exact sequence does not compile there.
+    #[cfg(all(target_arch = "aarch64", not(target_os = "macos"), not(miri)))]
     unsafe {
         std::arch::asm!(
             "mov x19, xzr",
@@ -318,7 +320,15 @@ pub unsafe fn clear_registers() {
             out("x28") _,
         );
     }
-    // Miri/Other arch: Rely on optimization barrier or dummy work
-    #[cfg(any(not(target_arch = "x86_64"), not(target_arch = "aarch64"), miri))]
+    // aarch64 macOS fallback: keep this a no-op for now to avoid LLVM's reserved
+    // register restriction on fixed x19..x28 operands.
+    #[cfg(all(target_arch = "aarch64", target_os = "macos", not(miri)))]
+    std::hint::black_box(());
+
+    // Miri/Other arch: Rely on optimization barrier or dummy work.
+    #[cfg(any(
+        all(not(target_arch = "x86_64"), not(target_arch = "aarch64")),
+        miri
+    ))]
     std::hint::black_box(());
 }
