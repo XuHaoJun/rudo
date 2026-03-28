@@ -17,7 +17,6 @@
 
 use crossbeam::queue::SegQueue;
 use parking_lot::Mutex;
-use std::cell::UnsafeCell;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::LazyLock;
@@ -128,18 +127,12 @@ impl Default for IncrementalConfig {
 ///
 /// # Thread Safety
 ///
-/// This type is currently designed for single-threaded access during GC mark slices.
-/// The `worklist` field is reserved for future parallel marking coordination and
-/// is currently unused.
+/// This type is accessed as a process-level singleton via `global()`.
+/// Its `worklist` uses `SegQueue`, so queue operations are synchronized without
+/// requiring interior-mutable unsafe code.
 ///
-/// **Important**: The `unsafe impl Sync` declaration was previously removed but has been
-/// restored with proper safety justification. The worklist field is accessed single-threaded
-/// from the GC thread during synchronized mark slices, and proper safety rationale is provided
-/// at the impl site (see lines 219-232).
-///
-/// When parallel marking is implemented:
-/// 1. The `worklist` field MUST be protected with proper synchronization
-/// 2. Concurrent access without synchronization is undefined behavior
+/// GC phase/state transitions are still logically coordinated by the collector;
+/// this documentation is about memory safety, not algorithmic correctness.
 ///
 /// # Usage
 ///
@@ -150,7 +143,7 @@ impl Default for IncrementalConfig {
 #[allow(dead_code)]
 pub struct IncrementalMarkState {
     phase: AtomicUsize,
-    worklist: UnsafeCell<SegQueue<*const GcBox<()>>>,
+    worklist: SegQueue<usize>,
     config: Mutex<IncrementalConfig>,
     enabled: AtomicBool,
     stats: MarkStats,
@@ -214,26 +207,6 @@ impl MarkStats {
     }
 }
 
-/// SAFETY: `IncrementalMarkState` is currently accessed only from the GC thread.
-/// If parallel marking is implemented, proper synchronization must be added.
-unsafe impl Send for IncrementalMarkState {}
-
-/// SAFETY: `IncrementalMarkState` is accessed as a process-level singleton via `global()`.
-///
-/// The `UnsafeCell<SegQueue>` in the `worklist` field is accessed single-threaded from the
-/// GC thread during mark slices via `push_work()` and `pop_work()`. All other fields are
-/// either atomic or protected by Mutex.
-///
-/// The blanket `unsafe impl Sync` is justified because:
-/// 1. All access to `worklist` occurs from the GC thread during synchronized mark slices
-/// 2. No concurrent access from mutator threads
-/// 3. Atomic fields use proper ordering (`SeqCst` for writes, default for reads)
-///
-/// When parallel marking is implemented:
-/// 1. The `worklist` field MUST be protected with proper synchronization
-/// 2. Concurrent access without synchronization is undefined behavior
-unsafe impl Sync for IncrementalMarkState {}
-
 impl Default for IncrementalMarkState {
     fn default() -> Self {
         Self::new()
@@ -246,7 +219,7 @@ impl IncrementalMarkState {
     pub fn new() -> Self {
         Self {
             phase: AtomicUsize::new(MarkPhase::Idle as usize),
-            worklist: UnsafeCell::new(SegQueue::new()),
+            worklist: SegQueue::new(),
             config: Mutex::new(IncrementalConfig::default()),
             enabled: AtomicBool::new(true),
             stats: MarkStats::new(),
@@ -351,24 +324,19 @@ impl IncrementalMarkState {
         )
     }
 
-    fn worklist(&self) -> &SegQueue<*const GcBox<()>> {
-        unsafe { &*self.worklist.get() }
-    }
-
-    #[allow(clippy::mut_from_ref)]
-    fn worklist_mut(&self) -> &mut SegQueue<*const GcBox<()>> {
-        unsafe { &mut *self.worklist.get() }
+    fn worklist(&self) -> &SegQueue<usize> {
+        &self.worklist
     }
 
     pub fn push_work(&self, ptr: NonNull<GcBox<()>>) {
-        self.worklist().push(ptr.as_ptr());
+        self.worklist().push(ptr.as_ptr() as usize);
     }
 
     #[allow(clippy::missing_panics_doc)]
     pub fn pop_work(&self) -> Option<NonNull<GcBox<()>>> {
         self.worklist()
             .pop()
-            .map(|p| NonNull::new(p as *mut GcBox<()>).unwrap())
+            .map(|addr| NonNull::new(addr as *mut GcBox<()>).unwrap())
     }
 
     pub fn worklist_is_empty(&self) -> bool {
@@ -380,7 +348,7 @@ impl IncrementalMarkState {
     }
 
     pub fn reset_worklist(&self) {
-        *self.worklist_mut() = SegQueue::new();
+        while self.worklist().pop().is_some() {}
     }
 
     pub fn request_fallback(&self, reason: FallbackReason) {

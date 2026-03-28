@@ -28,7 +28,7 @@ unsafe impl Trace for TraceCounter {
 #[should_panic(expected = "already mutably borrowed")]
 fn test_refcell_trace_panics_when_mutably_borrowed() {
     let hits = Rc::new(Cell::new(0));
-    let cell = RefCell::new(TraceCounter { hits: hits.clone() });
+    let cell = RefCell::new(TraceCounter { hits });
     let mut visitor = NoopVisitor;
 
     let _borrow = cell.borrow_mut();
