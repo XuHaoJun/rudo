@@ -543,12 +543,13 @@ unsafe fn mark_root_for_snapshot(ptr: NonNull<GcBox<()>>, visitor: &mut crate::t
 }
 
 pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
+    let state = IncrementalMarkState::global();
+    state.reset_fallback();
+
     stop_all_mutators_for_snapshot();
 
-    let state = IncrementalMarkState::global();
     state.set_phase(MarkPhase::Snapshot);
     state.stats().reset();
-    state.reset_fallback();
     state.reset_worklist();
 
     let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
