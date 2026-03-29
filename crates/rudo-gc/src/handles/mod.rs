@@ -325,11 +325,10 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("Handle::get: object is being dropped");
             }
-            assert_eq!(
-                pre_generation,
-                gc_box.generation(),
-                "Handle::get: slot was reused before value read (generation mismatch)"
-            );
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("Handle::get: slot was reused before value read (generation mismatch)");
+            }
 
             crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
 

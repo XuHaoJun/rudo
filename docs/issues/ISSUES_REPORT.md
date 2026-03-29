@@ -9,6 +9,7 @@
 - **Resolved**: 1
 - **Unknown**: 1
 - **Verified**: 21
+- **Open**: 1
 
 ### By Tags
 - **Verified**: 434
@@ -514,3 +515,4 @@
 | [2026-03-28_ISSUE_bug445_GcThreadSafeCell_borrow_mut_gen_only_lock_order.md](./2026-03-28_ISSUE_bug445_GcThreadSafeCell_borrow_mut_gen_only_lock_order.md) | GcThreadSafeCell::borrow_mut_gen_only triggers write barrier before acquiring lock (inconsistent API) | Fixed | Verified |
 | [2026-03-28_ISSUE_bug446_GcCell_borrow_mut_gen_only_inconsistent.md](./2026-03-28_ISSUE_bug446_GcCell_borrow_mut_gen_only_inconsistent.md) | GcCell::borrow_mut_gen_only inconsistent with GcThreadSafeCell - always triggers barrier | Closed | Verified, Fixed |
 | [2026-03-28_ISSUE_bug447_promote_pages_bitmap_bounds.md](./2026-03-28_ISSUE_bug447_promote_pages_bitmap_bounds.md) | promote_young_pages and promote_all_pages use BITMAP_SIZE instead of obj_count - buffer overrun | Fixed | Verified |
+| [2026-03-29_ISSUE_bug454_handle_get_gen_mismatch_ref_count_leak.md](./2026-03-29_ISSUE_bug454_handle_get_gen_mismatch_ref_count_leak.md) | Handle::get generation mismatch panic does not undo ref_count increment (ref_count leak) | Open | Unverified |
