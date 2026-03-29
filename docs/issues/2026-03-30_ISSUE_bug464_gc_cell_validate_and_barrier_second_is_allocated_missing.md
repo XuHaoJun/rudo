@@ -1,7 +1,7 @@
 # [Bug]: gc_cell_validate_and_barrier missing second is_allocated check before has_gen_old read
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## Threat Model Assessment
 
