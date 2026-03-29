@@ -1608,8 +1608,13 @@ impl<T: Trace> Gc<T> {
             {
                 return None;
             }
-            // Avoid TOCTOU with concurrent drop: atomically increment only when ref_count > 0.
+            // Capture generation before inc_ref to detect slot reuse (bug456).
+            let pre_generation = (*gc_box_ptr).generation();
             if !(*gc_box_ptr).try_inc_ref_if_nonzero() {
+                return None;
+            }
+            if pre_generation != (*gc_box_ptr).generation() {
+                GcBox::undo_inc_ref(gc_box_ptr);
                 return None;
             }
             // Post-increment safety check: dropping/dead may flip between pre-check and ref bump.
