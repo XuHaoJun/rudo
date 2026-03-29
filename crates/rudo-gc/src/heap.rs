@@ -3218,11 +3218,13 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                         return;
                     }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
-                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
-                    if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
+                    // Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug457).
+                    // Must verify slot is still allocated before reading any GcBox fields.
+                    if !(*h_ptr).is_allocated(0) {
                         return;
                     }
-                    if !(*h_ptr).is_allocated(0) {
+                    let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+                    if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
