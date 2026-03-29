@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::resolve_impl generation mismatch panic does not undo inc_ref (ref_count leak)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Fixed
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

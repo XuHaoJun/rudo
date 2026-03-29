@@ -265,13 +265,13 @@ impl<T: Trace + 'static> GcHandle<T> {
 
             gc_box.inc_ref();
 
-            // Verify generation hasn't changed - if slot was reused, this will panic.
-            // This prevents inc_ref from operating on the wrong object's ref count.
-            assert_eq!(
-                pre_generation,
-                gc_box.generation(),
-                "GcHandle::resolve: slot was reused between pre-check and inc_ref (generation mismatch)"
-            );
+            // FIX bug461: If generation changed, undo the increment to prevent ref_count leak.
+            // This matches the pattern used in Handle::get (bug454), Handle::to_gc (bug455),
+            // and AsyncHandle::to_gc (bug453).
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(self.ptr.as_ptr());
+                panic!("GcHandle::resolve: slot was reused between pre-check and inc_ref (generation mismatch)");
+            }
 
             // Post-increment safety check (TOCTOU: object may have been dropped between
             // pre-check and inc_ref). Same pattern as Weak::upgrade.
