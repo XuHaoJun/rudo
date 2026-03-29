@@ -413,11 +413,10 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("Handle::to_gc: object is being dropped by another thread");
             }
-            assert_eq!(
-                pre_generation,
-                gc_box.generation(),
-                "Handle::to_gc: slot was reused between pre-check and inc_ref (generation mismatch)"
-            );
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("Handle::to_gc: slot was reused between pre-check and inc_ref (generation mismatch)");
+            }
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
                 assert!(

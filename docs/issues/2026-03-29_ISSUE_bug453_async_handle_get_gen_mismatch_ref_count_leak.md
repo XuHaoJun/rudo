@@ -1,7 +1,25 @@
 # [Bug]: AsyncHandle::get generation mismatch panic does not undo ref_count increment (ref_count leak)
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
+
+## 驗證記錄
+
+**驗證日期:** 2026-03-29
+**驗證人員:** opencode
+
+### 驗證結果
+
+代碼確認修復已套用 (`handles/async.rs:638-643`)：
+```rust
+// FIX bug453: If generation changed, undo the increment to prevent ref_count leak.
+if pre_generation != gc_box.generation() {
+    GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+    panic!("AsyncHandle::get: slot was reused before value read (generation mismatch)");
+}
+```
+
+**Status: Fixed** - 修復已套用於程式碼。
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
