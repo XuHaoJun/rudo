@@ -1295,12 +1295,14 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     if !(*h_ptr).is_allocated(0) {
                         return;
                     }
+                    // Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug459).
+                    // Must verify slot is still allocated before reading any GcBox fields.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
-                        return;
-                    }
-                    if !(*h_ptr).is_allocated(0) {
                         return;
                     }
                     NonNull::new_unchecked(h_ptr)
