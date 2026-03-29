@@ -2982,6 +2982,10 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 if !(*h_ptr).is_allocated(0) {
                     return;
                 }
+                // Second is_allocated check before reading has_gen_old - prevents TOCTOU (bug459, bug464)
+                if !(*h_ptr).is_allocated(0) {
+                    return;
+                }
                 let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                 // Skip barrier only if page is young AND object has no gen_old_flag (bug71).
                 // Cache flag to avoid TOCTOU between check and barrier (bug114).
@@ -3056,6 +3060,10 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
 
                 // GEN_OLD early-exit: skip only if page young AND object has no gen_old_flag (bug71).
                 // Cache flag to avoid TOCTOU between check and barrier (bug114).
+                // Second is_allocated check before reading has_gen_old - prevents TOCTOU (bug459, bug464)
+                if !(*h).is_allocated(index) {
+                    return;
+                }
                 let gc_box_addr =
                     (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                 let has_gen_old = (*gc_box_addr).has_gen_old_flag();
