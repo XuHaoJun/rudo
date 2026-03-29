@@ -3251,7 +3251,11 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                     if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
-                    // Cache flag to avoid TOCTOU between check and barrier (bug133).
+                    // Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug462).
+                    // Must verify slot is still allocated before reading any GcBox fields.
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
