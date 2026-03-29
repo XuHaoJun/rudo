@@ -1,7 +1,8 @@
 # [Bug]: migrate_roots_to_orphan drains before lock risking data loss on panic
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
+**Fixed By:** commit b66c932 - fix(heap): prevent data loss in migrate_roots_to_orphan on panic
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
