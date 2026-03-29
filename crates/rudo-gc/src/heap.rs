@@ -213,17 +213,15 @@ pub fn migrate_roots_to_orphan(tcb: &ThreadControlBlock, thread_id: ThreadId) {
     if roots.strong.is_empty() {
         return;
     }
-    let drained: Vec<_> = roots
-        .strong
-        .drain()
-        .map(|(k, v)| (k, v.as_ptr() as usize))
-        .collect();
 
     // Acquire orphan lock BEFORE releasing TCB roots lock to prevent race (bug325).
     // This ensures handle is either in TCB roots or orphan table at all times.
     let mut orphan = orphaned_cross_thread_roots().lock();
-    for (handle_id, ptr) in drained {
-        orphan.insert((thread_id, handle_id), ptr);
+
+    // Drain and insert one at a time while holding both locks.
+    // If insert panics, entries remain in roots (not lost).
+    for (handle_id, v) in roots.strong.drain() {
+        orphan.insert((thread_id, handle_id), v.as_ptr() as usize);
     }
 }
 
