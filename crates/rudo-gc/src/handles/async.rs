@@ -635,11 +635,12 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("AsyncHandle::get: object is being dropped");
             }
-            assert_eq!(
-                pre_generation,
-                gc_box.generation(),
-                "AsyncHandle::get: slot was reused before value read (generation mismatch)"
-            );
+            // FIX bug453: If generation changed, undo the increment to prevent ref_count leak.
+            // This matches the pattern used in GcBoxWeakRef::upgrade (bug413 fix).
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("AsyncHandle::get: slot was reused before value read (generation mismatch)");
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
@@ -741,11 +742,11 @@ impl<T: Trace + 'static> AsyncHandle<T> {
         if !gc_box.try_inc_ref_if_nonzero() {
             panic!("AsyncHandle::get_unchecked: object is being dropped");
         }
-        assert_eq!(
-            pre_generation,
-            gc_box.generation(),
-            "AsyncHandle::get_unchecked: slot was reused before value read (generation mismatch)"
-        );
+        // FIX bug453: If generation changed, undo the increment to prevent ref_count leak.
+        if pre_generation != gc_box.generation() {
+            GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+            panic!("AsyncHandle::get_unchecked: slot was reused before value read (generation mismatch)");
+        }
 
         if let Some(idx) = unsafe { crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) } {
             let header = unsafe { crate::heap::ptr_to_page_header(gc_box_ptr as *const u8) };
@@ -856,11 +857,11 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("AsyncHandle::to_gc: object is being dropped by another thread");
             }
-            assert_eq!(
-                pre_generation,
-                gc_box.generation(),
-                "AsyncHandle::to_gc: slot was reused between pre-check and inc_ref (generation mismatch)"
-            );
+            // FIX bug453: If generation changed, undo the increment to prevent ref_count leak.
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("AsyncHandle::to_gc: slot was reused between pre-check and inc_ref (generation mismatch)");
+            }
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
                 assert!(
