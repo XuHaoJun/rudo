@@ -1,7 +1,26 @@
 # [Bug]: Handle::get generation mismatch panic does not undo ref_count increment (ref_count leak)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
+
+## Resolution (2026-03-30)
+
+**Outcome:** Already fixed in `crates/rudo-gc/src/handles/mod.rs` `Handle::get`.
+
+**Verification:** Static review of current code (lines 324-331):
+
+```rust
+let pre_generation = gc_box.generation();
+if !gc_box.try_inc_ref_if_nonzero() {
+    panic!("Handle::get: object is being dropped");
+}
+if pre_generation != gc_box.generation() {
+    GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+    panic!("Handle::get: slot was reused before value read (generation mismatch)");
+}
+```
+
+Applied via commit: `121a58a fix(handles): Handle::get generation mismatch must undo ref_count increment`
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

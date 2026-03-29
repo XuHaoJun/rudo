@@ -1,7 +1,18 @@
 # [Bug]: unified_write_barrier TOCTOU - missing second is_allocated check before has_gen_old read
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
+
+## Resolution (2026-03-30)
+
+**Outcome:** Already fixed in `crates/rudo-gc/src/heap.rs` `unified_write_barrier` both paths.
+
+**Verification:** Static review of current code (lines 3125-3175):
+
+- Large object path (lines 3125-3140): Second `is_allocated(0)` check at line 3132 BEFORE reading `has_gen_old` at line 3136
+- Small object path (lines 3158-3174): Second `is_allocated(index)` check at line 3164 BEFORE reading `has_gen_old` at line 3170
+
+Applied via commit: `17498ef fix(heap): add second is_allocated check before has_gen_old read in unified_write_barrier`
 
 ## Threat Model Assessment
 

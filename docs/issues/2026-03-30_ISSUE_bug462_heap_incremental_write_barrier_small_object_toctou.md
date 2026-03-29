@@ -1,7 +1,31 @@
 # [Bug]: heap.rs incremental_write_barrier small object path missing second is_allocated check
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
+
+## Resolution (2026-03-30)
+
+**Outcome:** Already fixed in `crates/rudo-gc/src/heap.rs` `incremental_write_barrier` small object path.
+
+**Verification:** Static review of current code (lines 3267-3283):
+
+```rust
+// GEN_OLD early-exit: skip only if page young AND object has no gen_old_flag (bug71).
+// Skip if slot was swept; avoids corrupting remembered set with reused slot (bug286).
+if !(*h.as_ptr()).is_allocated(index) {
+    return;
+}
+// Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug462).
+// Must verify slot is still allocated before reading any GcBox fields.
+if !(*h.as_ptr()).is_allocated(index) {
+    return;
+}
+let gc_box_addr =
+    (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+```
+
+Applied via commit: `0f61eb4 fix(heap): add second is_allocated check before has_gen_old read in incremental_write_barrier`
 
 ## Threat Model Assessment
 
