@@ -1569,7 +1569,8 @@ unsafe impl<T: Trace + Send + ?Sized> Send for GcThreadSafeCell<T> {}
 
 // SAFETY: GcThreadSafeCell uses parking_lot::Mutex internally, which is Send + Sync.
 // Concurrent access is protected by the mutex, and GC tracing is safe during STW pauses.
-unsafe impl<T: Trace + ?Sized> Sync for GcThreadSafeCell<T> {}
+// T: Send is required to match GcRwLock and GcMutex consistency (bug440).
+unsafe impl<T: Trace + Send + ?Sized> Sync for GcThreadSafeCell<T> {}
 
 #[cfg(test)]
 mod tests {
