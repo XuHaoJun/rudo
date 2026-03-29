@@ -3119,6 +3119,11 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                         return;
                     }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    // Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug463).
+                    // Must verify slot is still allocated before reading any GcBox fields.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     // Cache flag to avoid TOCTOU between check and barrier (bug133).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
@@ -3143,6 +3148,11 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                         return;
                     }
                     // Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247).
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
+                    // Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug463).
+                    // Must verify slot is still allocated before reading any GcBox fields.
                     if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
