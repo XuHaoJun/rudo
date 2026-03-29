@@ -1330,14 +1330,14 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
+                    // Second is_allocated check - prevents TOCTOU race (bug376, bug459)
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
-                        return;
-                    }
-                    // Second is_allocated check - prevents TOCTOU race (bug376)
-                    if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
                     h
@@ -1375,14 +1375,15 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                         if !(*header).is_allocated(0) {
                             return;
                         }
+                        // Second is_allocated check - prevents TOCTOU race (bug459)
+                        if !(*header).is_allocated(0) {
+                            return;
+                        }
                         // GEN_OLD early-exit: skip if page young AND object has no gen_old_flag
                         // (bug202, matches unified_write_barrier).
                         let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                         let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                         if (*header).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
-                            return;
-                        }
-                        if !(*header).is_allocated(0) {
                             return;
                         }
                         (*header).set_dirty(0);
@@ -1407,6 +1408,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                             if !(*header.as_ptr()).is_allocated(index) {
                                 return;
                             }
+                            // Second is_allocated check - prevents TOCTOU race (bug459)
+                            if !(*header.as_ptr()).is_allocated(index) {
+                                return;
+                            }
                             // GEN_OLD early-exit: skip if page young AND object has no gen_old_flag
                             // (bug202, matches unified_write_barrier).
                             let gc_box_addr = (header_page_addr + header_size + index * block_size)
@@ -1415,10 +1420,6 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                             if (*header.as_ptr()).generation.load(Ordering::Acquire) == 0
                                 && !has_gen_old
                             {
-                                return;
-                            }
-                            // Second is_allocated check - prevents TOCTOU race (bug376)
-                            if !(*header.as_ptr()).is_allocated(index) {
                                 return;
                             }
                             (*header.as_ptr()).set_dirty(index);
