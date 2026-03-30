@@ -3519,9 +3519,16 @@ impl Drop for ThreadLocalHeap {
         let mut registry = thread_registry()
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if self.tcb.state.load(Ordering::SeqCst) == THREAD_STATE_EXECUTING {
+
+        if self.tcb.state.load(Ordering::SeqCst) == THREAD_STATE_SAFEPOINT {
+            self.tcb.park_cond.notify_all();
+            self.tcb
+                .state
+                .store(THREAD_STATE_EXECUTING, Ordering::Release);
+        } else if self.tcb.state.load(Ordering::SeqCst) == THREAD_STATE_EXECUTING {
             registry.active_count.fetch_sub(1, Ordering::SeqCst);
         }
+
         registry.unregister_thread(&self.tcb);
     }
 }
