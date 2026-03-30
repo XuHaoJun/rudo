@@ -2453,6 +2453,7 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
                 }
                 Ok(true) => {
                     if !(*header.as_ptr()).is_allocated(idx) {
+                        (*header.as_ptr()).clear_mark_atomic(idx);
                         return;
                     }
                     let marked_generation = (*ptr.as_ptr()).generation();
