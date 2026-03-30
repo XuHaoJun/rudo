@@ -4,7 +4,7 @@
 
 ### By Status
 - **Fixed**: 430
-- **Open**: 11
+- **Open**: 12
 - **Invalid**: 43
 - **Closed**: 7
 - **Resolved**: 1
@@ -13,7 +13,7 @@
 
 ### By Tags
 - **Verified**: 453
-- **Not Verified**: 24
+- **Not Verified**: 25
 - **Not Reproduced**: 19
 - **Bug, Fixed**: 1
 - **Bug, GC, Incremental Marking, Slot Reuse, TOCTOU**: 1
@@ -542,3 +542,4 @@
 | [2026-03-30_ISSUE_bug467_simple_write_barrier_second_is_allocated_missing.md](./2026-03-30_ISSUE_bug467_simple_write_barrier_second_is_allocated_missing.md) | simple_write_barrier Missing Second is_allocated Check Before Reading has_gen_old_flag | Open | Not Verified |
 | [2026-03-30_ISSUE_bug468_incremental_fallback_worklist_abandon.md](./2026-03-30_ISSUE_bug468_incremental_fallback_worklist_abandon.md) | Incremental marking fallback abandons state.worklist causing reachable objects to be swept | Fixed | Verified |
 | [2026-03-30_ISSUE_bug469_worker_mark_loop_missing_is_under_construction_check.md](./2026-03-30_ISSUE_bug469_worker_mark_loop_missing_is_under_construction_check.md) | worker_mark_loop_with_registry missing is_under_construction check before trace_fn | Fixed | Verified |
+| [2026-03-31_ISSUE_bug470_gchandle_clone_downgrade_migration_panic.md](./2026-03-31_ISSUE_bug470_gchandle_clone_downgrade_migration_panic.md) | GcHandle::clone 和 GcHandle::downgrade 在 orphan migration 視窗期間不正確地 panic | Open | Not Verified |
