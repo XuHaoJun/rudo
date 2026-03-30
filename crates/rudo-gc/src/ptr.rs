@@ -2595,6 +2595,15 @@ impl<T: Trace> Weak<T> {
     /// The caller must ensure that `T` and `U` have the same layout and that
     /// the cast is valid for the lifetime of the pointer.
     pub fn cast<U: Trace + 'static>(self) -> Weak<U> {
+        assert!(
+            std::mem::size_of::<GcBox<T>>() == std::mem::size_of::<GcBox<U>>(),
+            "Weak::cast requires GcBox<T> and GcBox<U> to have the same size; \
+             T={} ({} bytes), U={} ({} bytes)",
+            std::any::type_name::<T>(),
+            std::mem::size_of::<GcBox<T>>(),
+            std::any::type_name::<U>(),
+            std::mem::size_of::<GcBox<U>>()
+        );
         let ptr = self.ptr.load(Ordering::Acquire);
         std::mem::forget(self);
         let atomic_ptr = ptr.as_option().map_or_else(AtomicNullable::null, |p| {

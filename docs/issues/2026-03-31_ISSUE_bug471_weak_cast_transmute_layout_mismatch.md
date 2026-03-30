@@ -1,7 +1,7 @@
 # [Bug]: Weak::cast transmute between types with different sizes is UB
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -156,3 +156,18 @@ An attacker could exploit this by:
 2. Casting to `Weak<SmallStruct>`
 3. When the weak is upgraded and the value accessed, if the upgrade returns the original pointer but code assumes smaller size, out-of-bounds read could leak adjacent heap data
 4. This could be leveraged for heap introspection attacks if the GC allocator has predictable layout
+
+---
+
+## Resolution (2026-03-31)
+
+**Outcome:** Fixed.
+
+**Applied fix:** Added runtime assertion in `Weak::cast<U>()` at `ptr.rs:2598-2605` to ensure `GcBox<T>` and `GcBox<U>` have the same size before performing the transmute. This prevents silent UB and causes a clear panic with diagnostic message instead.
+
+**Test updates:** Updated 3 tests in `weak_cast.rs` that were testing invalid (UB) casts:
+- `test_weak_cast_array`: Changed to use same-size array types
+- `test_weak_cast_complex_nested`: Changed to use single i64 field
+- `test_weak_cast_with_gccell`: Simplified to use layout-compatible types
+
+All 17 weak_cast tests now pass. Full test suite passes. Clippy passes.
