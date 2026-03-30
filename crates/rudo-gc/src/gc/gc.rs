@@ -2497,7 +2497,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 continue;
             }
 
-            if !(*header).is_marked(0) {
+            if !(*header).is_marked(0) && (*header).is_allocated(0) {
                 let block_size = (*header).block_size as usize;
                 let header_size = (*header).header_size as usize;
                 let obj_ptr = header.cast::<u8>().add(header_size);
