@@ -1,7 +1,7 @@
 # [Bug]: simple_write_barrier Missing Second is_allocated Check Before Reading has_gen_old_flag
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -121,3 +121,14 @@ let has_gen_old = (*gc_box_addr).has_gen_old_flag();
 ## 修復歷史
 
 - **2026-03-30**: 報告此 bug (bug467)
+- **2026-03-31**: Fix applied in `heap.rs`
+
+## 修復詳情
+
+**檔案:** `crates/rudo-gc/src/heap.rs`
+
+**修改:**
+1. Large object path (line ~2890): Added second `is_allocated` check after computing `gc_box_addr` but before reading `has_gen_old_flag`
+2. Small object path (line ~2917): Added second `is_allocated` check after computing `gc_box_addr` but before reading `has_gen_old_flag`
+
+**驗證:** `./clippy.sh` passes

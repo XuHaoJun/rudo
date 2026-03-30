@@ -2888,6 +2888,12 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
 
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    // FIX bug467: Second is_allocated check BEFORE reading has_gen_old - prevents TOCTOU.
+                    // If slot was swept after first check but before reading has_gen_old,
+                    // we'd read stale data from a reused slot.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     // Cache flag to avoid TOCTOU between check and barrier (bug149).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
@@ -2913,7 +2919,9 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-                    // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug286).
+                    // FIX bug467: Second is_allocated check BEFORE reading has_gen_old - prevents TOCTOU.
+                    // If slot was swept after first check but before reading has_gen_old,
+                    // we'd read stale data from a reused slot.
                     if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
