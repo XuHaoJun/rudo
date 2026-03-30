@@ -976,6 +976,11 @@ pub fn worker_mark_loop(
                             if (*gc_box_ptr).generation() != marked_generation {
                                 break; // Slot was reused - skip
                             }
+                            // FIX bug469: Skip objects under construction (e.g. Gc::new_cyclic).
+                            // Matches mark_object_black / mark_new_object_black (bug238).
+                            if (*gc_box_ptr).is_under_construction() {
+                                break;
+                            }
                             marked += 1;
                             ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
                             break;
@@ -1131,6 +1136,11 @@ pub fn worker_mark_loop_with_registry(
                             // If slot was reused, trace_fn would be called on wrong object data.
                             if (*gc_box_ptr).generation() != marked_generation {
                                 break; // Slot was reused - skip
+                            }
+                            // FIX bug469: Skip objects under construction (e.g. Gc::new_cyclic).
+                            // Matches mark_object_black / mark_new_object_black (bug238).
+                            if (*gc_box_ptr).is_under_construction() {
+                                break;
                             }
                             marked += 1;
                             ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
