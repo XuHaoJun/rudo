@@ -2622,8 +2622,9 @@ unsafe fn lazy_sweep_page(
             } else {
                 ((*gc_box_ptr).drop_fn)(obj_ptr);
                 (*gc_box_ptr).set_dead();
-                // Clear GEN_OLD_FLAG so reused slots don't inherit stale barrier state (bug135).
                 (*gc_box_ptr).clear_gen_old();
+                (*gc_box_ptr).clear_under_construction();
+                (*gc_box_ptr).clear_is_dropping();
 
                 #[allow(clippy::cast_ptr_alignment)]
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
@@ -2751,8 +2752,9 @@ unsafe fn lazy_sweep_page_all_dead(
                 }
             } else {
                 ((*gc_box_ptr).drop_fn)(obj_ptr);
-                // Clear GEN_OLD_FLAG so reused slots don't inherit stale barrier state (bug135).
                 (*gc_box_ptr).clear_gen_old();
+                (*gc_box_ptr).clear_under_construction();
+                (*gc_box_ptr).clear_is_dropping();
 
                 #[allow(clippy::cast_ptr_alignment)]
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
