@@ -1564,16 +1564,9 @@ impl<T: std::fmt::Debug> std::fmt::Debug for GcThreadSafeCell<T> {
     }
 }
 
-// SAFETY: GcThreadSafeCell uses parking_lot::Mutex internally, which handles synchronization.
-// The mutex ensures exclusive access - only one thread can access the data at a time.
-// The GC tracing uses data_ptr() during STW pauses when no mutator threads are running.
-// parking_lot::Mutex<T> requires T: Send for Mutex<T>: Send.
-unsafe impl<T: Trace + Send + ?Sized> Send for GcThreadSafeCell<T> {}
+unsafe impl<T: Trace + Send + Sync + ?Sized> Send for GcThreadSafeCell<T> {}
 
-// SAFETY: GcThreadSafeCell uses parking_lot::Mutex internally, which is Send + Sync.
-// Concurrent access is protected by the mutex, and GC tracing is safe during STW pauses.
-// T: Send is required to match GcRwLock and GcMutex consistency (bug440).
-unsafe impl<T: Trace + Send + ?Sized> Sync for GcThreadSafeCell<T> {}
+unsafe impl<T: Trace + Send + Sync + ?Sized> Sync for GcThreadSafeCell<T> {}
 
 #[cfg(test)]
 mod tests {
