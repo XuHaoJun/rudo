@@ -455,6 +455,7 @@ impl<T: Trace + 'static> GcHandle<T> {
     /// // weak doesn't keep the object alive
     /// ```
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn downgrade(&self) -> WeakCrossThreadHandle<T> {
         assert!(
             self.handle_id != HandleId::INVALID,
@@ -465,7 +466,55 @@ impl<T: Trace + 'static> GcHandle<T> {
         if let Some(tcb) = self.origin_tcb.upgrade() {
             let roots = tcb.cross_thread_roots.lock().unwrap();
             if !roots.strong.contains_key(&self.handle_id) {
-                panic!("GcHandle::downgrade: handle has been unregistered");
+                drop(roots);
+                let orphan = heap::lock_orphan_roots();
+                if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                    panic!("GcHandle::downgrade: handle has been unregistered");
+                }
+                unsafe {
+                    let pre_generation = (*self.ptr.as_ptr()).generation();
+                    (*self.ptr.as_ptr()).inc_weak();
+                    if pre_generation != (*self.ptr.as_ptr()).generation() {
+                        (*self.ptr.as_ptr()).dec_weak();
+                        drop(orphan);
+                        return WeakCrossThreadHandle {
+                            weak: GcBoxWeakRef::null(),
+                            origin_tcb: Weak::clone(&self.origin_tcb),
+                            origin_thread: self.origin_thread,
+                        };
+                    }
+                    if let Some(idx) =
+                        crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
+                    {
+                        let header =
+                            crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            (*self.ptr.as_ptr()).dec_weak();
+                            drop(orphan);
+                            return WeakCrossThreadHandle {
+                                weak: GcBoxWeakRef::null(),
+                                origin_tcb: Weak::clone(&self.origin_tcb),
+                                origin_thread: self.origin_thread,
+                            };
+                        }
+                    }
+                    let gc_box = &*self.ptr.as_ptr();
+                    if gc_box.has_dead_flag()
+                        || gc_box.dropping_state() != 0
+                        || gc_box.is_under_construction()
+                    {
+                        (*self.ptr.as_ptr()).dec_weak();
+                        panic!(
+                            "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle (orphan)"
+                        );
+                    }
+                }
+                drop(orphan);
+                return WeakCrossThreadHandle {
+                    weak: GcBoxWeakRef::new(self.ptr),
+                    origin_tcb: Weak::clone(&self.origin_tcb),
+                    origin_thread: self.origin_thread,
+                };
             }
             unsafe {
                 // Get generation BEFORE inc_weak to detect slot reuse (bug351).
@@ -602,6 +651,7 @@ impl Drop for TcbRootRemoveGuard {
 }
 
 #[allow(clippy::significant_drop_tightening)] // Lock must be held through inc_ref
+#[allow(clippy::too_many_lines)]
 impl<T: Trace + 'static> Clone for GcHandle<T> {
     #[track_caller]
     fn clone(&self) -> Self {
@@ -634,7 +684,44 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
             );
             let mut roots = tcb.cross_thread_roots.lock().unwrap();
             if !roots.strong.contains_key(&self.handle_id) {
-                panic!("cannot clone an unregistered GcHandle");
+                // BUG470 fix: Check orphan before panicking - migration may be in progress.
+                // This matches the retry pattern in GcHandle::resolve() (bug401).
+                let orphan = heap::lock_orphan_roots();
+                if orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                    drop(orphan);
+                } else {
+                    drop(orphan);
+                    drop(roots);
+                    // Migration in progress: retry TCB lookup using SAME tcb from line 676
+                    roots = tcb.cross_thread_roots.lock().unwrap();
+                    if !roots.strong.contains_key(&self.handle_id) {
+                        drop(roots);
+                        let orphan = heap::lock_orphan_roots();
+                        if !orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                            panic!("cannot clone an unregistered GcHandle");
+                        }
+                        // Use orphan path
+                        if let (new_id, true) = heap::clone_orphan_root_with_inc_ref(
+                            self.origin_thread,
+                            self.handle_id,
+                            self.ptr.cast::<GcBox<()>>(),
+                        ) {
+                            let guard = OrphanRootRemoveGuard {
+                                thread_id: self.origin_thread,
+                                handle_id: new_id,
+                                ptr: self.ptr.cast::<GcBox<()>>(),
+                            };
+                            std::mem::forget(guard);
+                            return Self {
+                                ptr: self.ptr,
+                                origin_tcb: Weak::clone(&self.origin_tcb),
+                                origin_thread: self.origin_thread,
+                                handle_id: new_id,
+                            };
+                        }
+                        panic!("cannot clone an unregistered GcHandle");
+                    }
+                }
             }
             // All checks before inc_ref/insert: avoid orphaned root entry if any assert panics.
             // Order: is_allocated check -> inc_ref -> insert. If inc_ref or insert panics,

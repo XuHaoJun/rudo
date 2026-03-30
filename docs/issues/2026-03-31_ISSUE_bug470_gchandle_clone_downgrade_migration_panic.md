@@ -1,7 +1,7 @@
 # [Bug]: GcHandle::clone 和 GcHandle::downgrade 在 orphan migration 視窗期間不正確地 panic
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -238,3 +238,22 @@ let (new_id, origin_tcb) = if let (new_id, true) = heap::clone_orphan_root_with_
 - **bug401**: GcHandle::resolve panic during cross-thread handle migration (已修復，使用 retry logic)
 - **bug313**: GcHandle::is_valid() TOCTOU - Orphan Lock Release 到 TCB Check 之間的 Race Condition (已修復)
 - **bug325**: Orphan Root Migration Race (已修復)
+
+---
+
+## Resolution (2026-03-31)
+
+**Outcome:** Fixed.
+
+**Verification:** Applied fix to `handles/cross_thread.rs`:
+
+1. **GcHandle::clone()**: Added orphan check before panic when TCB roots doesn't contain handle. If handle is in orphan table, uses orphan path instead of panicking.
+
+2. **GcHandle::downgrade()**: Added orphan fallback when TCB is alive but roots.strong doesn't contain handle. If handle is in orphan table, proceeds with orphan path.
+
+Both fixes follow the retry pattern from `GcHandle::resolve()` (bug401):
+- If TCB alive but handle not in TCB roots, check orphan
+- If handle in orphan, use orphan path
+- If handle not in orphan either, panic
+
+Clippy passes, all tests pass.
