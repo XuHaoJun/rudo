@@ -638,13 +638,11 @@ fn wake_waiting_threads() {
     let registry = crate::heap::thread_registry().lock().unwrap();
     let mut woken_count = 0;
     for tcb in &registry.threads {
-        // Clear gc_requested for ALL threads to prevent hangs in future GC cycles
-        tcb.gc_requested.store(false, Ordering::Release);
-
         if tcb.state.load(Ordering::Acquire) == crate::heap::THREAD_STATE_SAFEPOINT {
             tcb.park_cond.notify_all();
             tcb.state
                 .store(crate::heap::THREAD_STATE_EXECUTING, Ordering::Release);
+            tcb.gc_requested.store(false, Ordering::Release);
             woken_count += 1;
         }
     }
