@@ -1,6 +1,6 @@
 # [Bug]: Incremental marking fallback abandons state.worklist causing reachable objects to be swept
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -130,3 +130,40 @@ This is a soundness bug - reachable objects being reclaimed is undefined behavio
 
 **Geohot (Exploit 觀點):**
 This is a reliable exploit primitive - by controlling dirty page pressure, an attacker can reliably trigger the fallback path and cause reachable objects to be swept. The race is deterministic given dirty page threshold. This could be used to UAF any GC-managed object by creating a reference chain and triggering fallback before the chain is fully traced.
+
+---
+
+## 修復記錄 (Resolution)
+
+**日期:** 2026-03-30
+**修復者:** opencode
+
+### 修復內容
+
+在 `execute_final_mark` 中添加了處理 `state.worklist` 的邏輯，確保在進入 Sweeping 階段之前，所有reachable對象都被完整追蹤。
+
+**修改檔案:** `crates/rudo-gc/src/gc/incremental.rs:929-942`
+
+**修改內容:**
+```rust
+while let Some((ptr, _enqueue_generation)) = visitor.worklist.pop() {
+    state.push_work(ptr);
+    total_marked += 1;
+}
+
+// FIX bug468: Process remaining state.worklist items
+while let Some(ptr) = state.pop_work() {
+    unsafe {
+        trace_and_mark_object(ptr, state);
+    }
+    total_marked += 1;
+}
+
+let remaining = state.worklist_len();
+```
+
+### 驗證
+
+- `cargo build --workspace` 編譯成功
+- `./clippy.sh` 通過
+- `./test.sh` 所有測試通過

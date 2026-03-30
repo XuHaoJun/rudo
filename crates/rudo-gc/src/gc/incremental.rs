@@ -931,6 +931,13 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
         total_marked += 1;
     }
 
+    while let Some(ptr) = state.pop_work() {
+        unsafe {
+            trace_and_mark_object(ptr, state);
+        }
+        total_marked += 1;
+    }
+
     let remaining = state.worklist_len();
     if remaining > 0 {
         state.set_phase(MarkPhase::Marking);
