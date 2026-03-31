@@ -289,7 +289,10 @@ impl Drop for OrphanInsertGuard {
             .remove(&(self.thread_id, self.handle_id))
             .is_some()
         {
-            GcBox::dec_ref(self.ptr.as_ptr());
+            // FIX bug483: Use undo_inc_ref for rollback instead of dec_ref.
+            // dec_ref returns early without decrementing when DEAD_FLAG is set or
+            // is_under_construction() is true, causing ref_count leak.
+            unsafe { GcBox::undo_inc_ref(self.ptr.as_ptr()) }
         }
     }
 }

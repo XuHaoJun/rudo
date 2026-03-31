@@ -1,7 +1,7 @@
 # [Bug]: Guard drop rollback uses dec_ref causing ref_count leak on panic
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
