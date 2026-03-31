@@ -1,13 +1,38 @@
 # [Bug]: Final mark may fail to trace through objects under construction
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |
 | :--- | :--- | :--- |
-| **Likelihood (發生機率)** | `Medium` | 僅在 GC 在 `Gc::new_cyclic_weak` 的 `data_fn` 期間執行時發生 |
+| **Likelihood (發生機率)** | `Medium` | 僅在 GC 在 `Gc::new_cyclic_weak` 的 `data_fn` 期間執行時發生
+
+**Verification Note:** 分析確認此問題是真實的。在 `new_cyclic_weak` 期間：
+1. GcBox A 分配時 `under_construction = true`
+2. `data_fn` 執行時創建子物件 B 並存入 A 的 value 欄位
+3. 如果 GC 在此期間執行，A 被標記為可達但其子節點不被追蹤
+4. 如果 B 沒有其他引用，可能被錯誤回收
+
+這是一個真實的 GC 正確性問題。
+
+### Root Cause Analysis 更新
+
+經過詳細分析，問題的根本原因如下：
+
+在 `trace_and_mark_object` 中（`gc/incremental.rs:758-760`）：
+```rust
+if (*gc_box.as_ptr()).is_under_construction() {
+    return;
+}
+```
+
+這個檢查是在並發標記期間新增的（bug368 修復），用於防止追蹤未初始化的欄位。但在 STW final mark 期間，如果 GC 執行緒本身在 `new_cyclic_weak` 的 `data_fn` 中呼叫了 `collect_full()`，則：
+- A 物件處於「在建構中」狀態
+- A 的 children（如 B）不被追蹤
+- 如果 B 沒有其他引用，可能被錯誤 sweep
+- 這會導致 UAF 或過早回收 |
 | **Severity (嚴重程度)** | `High` | 可能導致 UAF 或过早回收 |
 | **Reproducibility (復現難度)** | `Low` | 需要精確的時序配合 |
 
@@ -102,15 +127,21 @@ fn main() {
 
 ## 🛠️ 建議修復方案 (Suggested Fix / Remediation)
 
-選項 1：移除 `trace_and_mark_object` 中的 `is_under_construction()` 檢查
-- 在 final mark 期間，所有執行緒都已停止，不應有在建構中的物件
-- 如果有，應該是一個錯誤，而不是靜默跳過
+**已實現修復：**
 
-選項 2：在 `execute_final_mark` 之前驗證沒有在建構中的物件
-- 在開始 final mark 之前，新增一個階段來清理任何在建構中的物件
+修改 `trace_and_mark_object` 函數，在 final mark 階段跳過 `is_under_construction()` 檢查：
 
-選項 3：追蹤在建構中的物件並在之後重新處理
-- 將這些物件添加到一個特殊清單，完成建構後重新追蹤
+```rust
+// incremental.rs:758-760
+if (*gc_box.as_ptr()).is_under_construction() && state.phase() != MarkPhase::FinalMark {
+    return;
+}
+```
+
+**修復原理：**
+- 在並發標記期間，`is_under_construction()` 檢查是必要的（bug368 修復），用於防止追蹤未初始化的欄位
+- 在 STW final mark 期間，所有執行緒都已停止，不會有並發的物件建構
+- 因此在 final mark 期間可以安全地追蹤在建構中的物件的子節點
 
 ---
 
@@ -124,3 +155,17 @@ fn main() {
 
 **Geohot (Exploit 觀點):**
 如果攻擊者能夠在 `new_cyclic` 的 `data_fn` 期間觸發 GC，可能會導致物件被錯誤標記但其子節點未被追蹤。這可能導致 Use-After-Free 或過早回收。這個檢查原本是為了安全性，但在 final mark 期間不應該發生。
+
+---
+
+## 驗證記錄 (2026-03-31)
+
+**驗證方法:**
+- 分析 `trace_and_mark_object` 函數確認 `is_under_construction` 檢查會導致 children 不被追蹤
+- 確認在 final mark 期間，所有執行緒都已停止，不會有並發的物件建構
+- 確認修復：在 final mark 階段跳過 `is_under_construction()` 檢查
+
+**應用修復:**
+修改 `incremental.rs:758-760`，在 final mark 期間跳過 `is_under_construction()` 檢查。
+
+**測試:** 所有測試通過。

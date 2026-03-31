@@ -755,7 +755,7 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
         return;
     }
 
-    if (*gc_box.as_ptr()).is_under_construction() {
+    if (*gc_box.as_ptr()).is_under_construction() && state.phase() != MarkPhase::FinalMark {
         return;
     }
 
