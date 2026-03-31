@@ -406,10 +406,11 @@ impl<T: Trace + 'static> GcHandle<T> {
 
             gc_box.inc_ref();
 
-            // Verify generation hasn't changed - if slot was reused, return None.
-            // This prevents inc_ref from operating on the wrong object's ref count.
+            // FIX bug474: Use undo_inc_ref instead of dec_ref.
+            // dec_ref returns early without decrementing when DEAD_FLAG is set,
+            // but we MUST decrement to avoid ref_count leak when slot was reused.
             if pre_generation != gc_box.generation() {
-                GcBox::dec_ref(self.ptr.as_ptr());
+                GcBox::undo_inc_ref(self.ptr.as_ptr());
                 return None;
             }
 
@@ -425,7 +426,10 @@ impl<T: Trace + 'static> GcHandle<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    GcBox::dec_ref(self.ptr.as_ptr());
+                    // FIX bug474: Use undo_inc_ref instead of dec_ref.
+                    // dec_ref returns early without decrementing when DEAD_FLAG is set,
+                    // but we MUST decrement to avoid ref_count leak when slot was swept.
+                    GcBox::undo_inc_ref(self.ptr.as_ptr());
                     return None;
                 }
             }
