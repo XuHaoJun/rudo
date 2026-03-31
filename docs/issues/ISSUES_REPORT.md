@@ -29,6 +29,7 @@
 | Issue | Title | Status | Tags |
 |---|---|---|---|
 | [2026-03-31_ISSUE_bug475_borrow_mut_simple_satb_old_value_not_recorded_when_incremental_transitions.md](./2026-03-31_ISSUE_bug475_borrow_mut_simple_satb_old_value_not_recorded_when_incremental_transitions.md) | GcThreadSafeCell::borrow_mut_simple 當 incremental_active 從 false 轉換為 true 時，SATB OLD 值未被記錄 | Open | Unverified |
+| [2026-04-01_ISSUE_bug479_gcrwlock_write_satb_inconsistent_mark_object_black.md](./2026-04-01_ISSUE_bug479_gcrwlock_write_satb_inconsistent_mark_object_black.md) | GcRwLock::write() 當 incremental_active 轉換時，SATB 記錄 OLD 值但不標記 NEW 值 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md](./2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md) | Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏 | Fixed | Not Reproduced |
