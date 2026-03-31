@@ -275,11 +275,15 @@ impl<T: Trace + 'static> GcHandle<T> {
 
             // Post-increment safety check (TOCTOU: object may have been dropped between
             // pre-check and inc_ref). Same pattern as Weak::upgrade.
+            // FIX bug478: Use undo_inc_ref instead of dec_ref.
+            // dec_ref returns early without decrementing when DEAD_FLAG is set,
+            // but we MUST decrement to avoid ref_count leak when object became dead
+            // between pre-check and inc_ref (TOCTOU race).
             if gc_box.dropping_state() != 0
                 || gc_box.has_dead_flag()
                 || gc_box.is_under_construction()
             {
-                GcBox::dec_ref(self.ptr.as_ptr());
+                GcBox::undo_inc_ref(self.ptr.as_ptr());
                 panic!("GcHandle::resolve: object was dropped after inc_ref (TOCTOU race)");
             }
 
@@ -415,11 +419,15 @@ impl<T: Trace + 'static> GcHandle<T> {
             }
 
             // Post-increment safety check (TOCTOU). Same pattern as Weak::try_upgrade.
+            // FIX bug478: Use undo_inc_ref instead of dec_ref.
+            // dec_ref returns early without decrementing when DEAD_FLAG is set,
+            // but we MUST decrement to avoid ref_count leak when object became dead
+            // between pre-check and inc_ref (TOCTOU race).
             if gc_box.dropping_state() != 0
                 || gc_box.has_dead_flag()
                 || gc_box.is_under_construction()
             {
-                GcBox::dec_ref(self.ptr.as_ptr());
+                GcBox::undo_inc_ref(self.ptr.as_ptr());
                 return None;
             }
 
