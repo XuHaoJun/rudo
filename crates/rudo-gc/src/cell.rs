@@ -1153,38 +1153,36 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     {
         let guard = self.inner.lock();
 
-        // FIX bug174: Capture old GC pointers for SATB when incremental marking is active.
-        // This was previously missing - borrow_mut_simple would skip SATB capture even when
-        // incremental marking was active, potentially causing premature collection.
+        // FIX bug475: Always capture old GC pointers for SATB, regardless of incremental_active.
+        // If incremental marking becomes active between borrow_mut_simple() and drop(),
+        // OLD values must already be recorded to preserve SATB invariant.
+        // (Similar to bug432 fix for GcRwLock::write())
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
-        if incremental_active {
-            let value = &*guard;
-            let mut gc_ptrs = Vec::with_capacity(32);
-            value.capture_gc_ptrs_into(&mut gc_ptrs);
-            if !gc_ptrs.is_empty()
-                && crate::heap::try_with_heap(|heap| {
-                    for gc_ptr in &gc_ptrs {
-                        if !heap.record_satb_old_value(*gc_ptr) {
-                            crate::gc::incremental::IncrementalMarkState::global()
-                                .request_fallback(
-                                    crate::gc::incremental::FallbackReason::SatbBufferOverflow,
-                                );
-                            break;
-                        }
-                    }
-                    true
-                })
-                .is_some()
-            {
-                // Heap available, SATB recorded in thread-local buffer
-            } else {
-                // No GC heap on this thread, use cross-thread buffer (bug417)
-                for gc_ptr in gc_ptrs {
-                    if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
+        let value = &*guard;
+        let mut gc_ptrs = Vec::with_capacity(32);
+        value.capture_gc_ptrs_into(&mut gc_ptrs);
+        if !gc_ptrs.is_empty()
+            && crate::heap::try_with_heap(|heap| {
+                for gc_ptr in &gc_ptrs {
+                    if !heap.record_satb_old_value(*gc_ptr) {
                         crate::gc::incremental::IncrementalMarkState::global().request_fallback(
                             crate::gc::incremental::FallbackReason::SatbBufferOverflow,
                         );
+                        break;
                     }
+                }
+                true
+            })
+            .is_some()
+        {
+            // Heap available, SATB recorded in thread-local buffer
+        } else {
+            // No GC heap on this thread, use cross-thread buffer (bug417)
+            for gc_ptr in gc_ptrs {
+                if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
+                    crate::gc::incremental::IncrementalMarkState::global().request_fallback(
+                        crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                    );
                 }
             }
         }
