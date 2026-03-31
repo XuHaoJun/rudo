@@ -334,7 +334,20 @@ impl AsyncHandleScope {
                     "AsyncHandleScope::handle: object slot was swept"
                 );
             }
+            // FIX bug476: Get generation BEFORE dereference to detect slot reuse.
+            // If slot is swept and reused between is_allocated check and dereference,
+            // generation will differ.
+            let pre_generation = (*gc_box_ptr).generation();
+
             let gc_box = &*gc_box_ptr;
+
+            // FIX bug476: Verify generation hasn't changed (slot was NOT reused).
+            if pre_generation != gc_box.generation() {
+                panic!(
+                    "AsyncHandleScope::handle: slot was reused between liveness check and dereference"
+                );
+            }
+
             assert!(
                 !gc_box.has_dead_flag()
                     && gc_box.dropping_state() == 0
