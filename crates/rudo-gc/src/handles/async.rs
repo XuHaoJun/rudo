@@ -1297,6 +1297,7 @@ impl GcScope {
                 validate_gc_in_current_heap(tracked.ptr as *const u8);
 
                 // Liveness checks: ensure tracked object was not swept or reclaimed (bug248).
+                let pre_generation: u32;
                 unsafe {
                     if let Some(idx) = crate::heap::ptr_to_object_index(tracked.ptr as *const u8) {
                         let header = crate::heap::ptr_to_page_header(tracked.ptr as *const u8);
@@ -1305,8 +1306,18 @@ impl GcScope {
                             "GcScope::spawn: tracked object was deallocated"
                         );
                     }
+                    // Get generation BEFORE dereference to detect slot reuse (bugXXX).
+                    // If slot is swept and reused between is_allocated check and dereference,
+                    // generation will differ.
+                    pre_generation = (*tracked.ptr).generation();
                 }
                 let gc_box = unsafe { &*tracked.ptr };
+                // FIX bugXXX: Verify generation hasn't changed (slot was NOT reused).
+                if pre_generation != gc_box.generation() {
+                    panic!(
+                        "GcScope::spawn: slot was reused between liveness check and dereference"
+                    );
+                }
                 assert!(
                     !gc_box.has_dead_flag()
                         && gc_box.dropping_state() == 0
