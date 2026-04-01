@@ -70,7 +70,7 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
     /// and the write is made visible with a release store.
     #[allow(dead_code)]
     pub fn push(&self, bottom: &AtomicUsize, item: T) -> bool {
-        let b = bottom.load(Ordering::Relaxed);
+        let b = bottom.load(Ordering::Acquire);
         let t = self.top.load(Ordering::Acquire);
 
         if b.wrapping_sub(t) >= N {
@@ -161,7 +161,7 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
     #[allow(dead_code)]
     pub fn steal(&self, bottom: &AtomicUsize) -> Option<T> {
         let t = self.top.load(Ordering::Acquire);
-        let b = bottom.load(Ordering::Relaxed);
+        let b = bottom.load(Ordering::Acquire);
 
         if t == b {
             return None;
