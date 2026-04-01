@@ -548,6 +548,10 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
 
     stop_all_mutators_for_snapshot();
 
+    if state.fallback_requested() {
+        return 0;
+    }
+
     state.set_phase(MarkPhase::Snapshot);
     state.stats().reset();
     state.reset_worklist();
