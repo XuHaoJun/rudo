@@ -1070,38 +1070,29 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
-        if incremental_active {
-            let value = &*guard;
-            let mut gc_ptrs = Vec::with_capacity(32);
-            value.capture_gc_ptrs_into(&mut gc_ptrs);
-            if !gc_ptrs.is_empty() {
-                if crate::heap::try_with_heap(|heap| {
-                    for gc_ptr in &gc_ptrs {
-                        if !heap.record_satb_old_value(*gc_ptr) {
-                            crate::gc::incremental::IncrementalMarkState::global()
-                                .request_fallback(
-                                    crate::gc::incremental::FallbackReason::SatbBufferOverflow,
-                                );
-                            break;
-                        }
+        let value = &*guard;
+        let mut gc_ptrs = Vec::with_capacity(32);
+        value.capture_gc_ptrs_into(&mut gc_ptrs);
+        if !gc_ptrs.is_empty() {
+            if crate::heap::try_with_heap(|heap| {
+                for gc_ptr in &gc_ptrs {
+                    if !heap.record_satb_old_value(*gc_ptr) {
+                        crate::gc::incremental::IncrementalMarkState::global().request_fallback(
+                            crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                        );
+                        break;
                     }
-                    true
-                })
-                .is_some()
-                {
-                    // Heap available, SATB recorded in thread-local buffer
-                } else {
-                    // No GC heap on this thread, use cross-thread buffer
-                    for gc_ptr in gc_ptrs {
-                        // FIX bug330: Check return value and request fallback if buffer overflowed.
-                        // Note: push_cross_thread_satb also requests fallback internally, but
-                        // checking here ensures we don't silently drop pointers.
-                        if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
-                            crate::gc::incremental::IncrementalMarkState::global()
-                                .request_fallback(
-                                    crate::gc::incremental::FallbackReason::SatbBufferOverflow,
-                                );
-                        }
+                }
+                true
+            })
+            .is_some()
+            {
+            } else {
+                for gc_ptr in gc_ptrs {
+                    if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
+                        crate::gc::incremental::IncrementalMarkState::global().request_fallback(
+                            crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                        );
                     }
                 }
             }
