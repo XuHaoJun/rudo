@@ -167,7 +167,10 @@ impl<T: ?Sized> GcCell<T> {
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
-        if incremental_active {
+        // FIX bug486: Always capture old GC pointers for SATB, regardless of incremental_active.
+        // If incremental becomes active between borrow_mut() and drop(),
+        // OLD values must already be recorded to preserve SATB invariant.
+        {
             unsafe {
                 let value = &*self.inner.as_ptr();
                 let mut gc_ptrs = Vec::with_capacity(32);
@@ -195,7 +198,10 @@ impl<T: ?Sized> GcCell<T> {
 
         let result = self.inner.borrow_mut();
 
-        if incremental_active {
+        // FIX bug486: Always mark GC pointers black when barrier is active.
+        // If incremental becomes active between entry and drop, NEW values
+        // must also be marked to maintain SATB consistency.
+        if generational_active || incremental_active {
             unsafe {
                 let new_value = &*result;
                 let mut new_gc_ptrs = Vec::with_capacity(32);
