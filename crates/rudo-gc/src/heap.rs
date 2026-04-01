@@ -107,22 +107,9 @@ pub(crate) fn get_thread_id() -> u64 {
 /// - The `GcBox` must not have been deallocated
 #[must_use]
 pub(crate) unsafe fn get_allocating_thread_id(gc_box_addr: usize) -> u64 {
-    let heap_start = heap_start();
-    let heap_end = heap_end();
-
-    debug_assert!(
-        gc_box_addr >= heap_start && gc_box_addr <= heap_end,
-        "Address {gc_box_addr:#x} outside heap range [{heap_start:#x}, {heap_end:#x}]"
-    );
-
-    if gc_box_addr < heap_start || gc_box_addr > heap_end {
-        return 0;
-    }
-
     let header = unsafe { ptr_to_page_header(gc_box_addr as *const u8) };
 
     if let Some(idx) = unsafe { ptr_to_object_index(gc_box_addr as *const u8) } {
-        // Release build: avoid reading owner_thread from swept objects (bug276).
         if !unsafe { (*header.as_ptr()).is_allocated(idx) } {
             return 0;
         }
