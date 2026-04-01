@@ -1109,17 +1109,17 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         // Immediate mark of GC pointers (bug192: match GcCell::borrow_mut behavior).
         // Marking only on Drop creates a race window where another thread's GC can miss
         // these pointers. Mark immediately when handing out the guard.
-        // FIX bug301: Only mark black during incremental marking, not during generational barrier.
-        if incremental_active {
-            unsafe {
-                let guard_ref = &*guard;
-                let mut new_gc_ptrs = Vec::with_capacity(32);
-                guard_ref.capture_gc_ptrs_into(&mut new_gc_ptrs);
-                if !new_gc_ptrs.is_empty() {
-                    for gc_ptr in new_gc_ptrs {
-                        let _ =
-                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
-                    }
+        // FIX bug485: Always mark NEW GC pointers black when OLD values were recorded.
+        // If incremental becomes active between entry and drop, we must mark NEW
+        // to maintain SATB consistency (OLD recorded, NEW must be marked too).
+        // This matches GcRwLock::write() behavior (bug479 fix).
+        unsafe {
+            let guard_ref = &*guard;
+            let mut new_gc_ptrs = Vec::with_capacity(32);
+            guard_ref.capture_gc_ptrs_into(&mut new_gc_ptrs);
+            if !new_gc_ptrs.is_empty() {
+                for gc_ptr in new_gc_ptrs {
+                    let _ = crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
                 }
             }
         }
@@ -1187,16 +1187,17 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
         self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
 
-        if incremental_active {
-            unsafe {
-                let guard_ref = &*guard;
-                let mut new_gc_ptrs = Vec::with_capacity(32);
-                guard_ref.capture_gc_ptrs_into(&mut new_gc_ptrs);
-                if !new_gc_ptrs.is_empty() {
-                    for gc_ptr in new_gc_ptrs {
-                        let _ =
-                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
-                    }
+        // FIX bug485: Always mark NEW GC pointers black when OLD values were recorded.
+        // If incremental becomes active between entry and drop, we must mark NEW
+        // to maintain SATB consistency (OLD recorded, NEW must be marked too).
+        // This matches GcRwLock::write() behavior (bug479 fix).
+        unsafe {
+            let guard_ref = &*guard;
+            let mut new_gc_ptrs = Vec::with_capacity(32);
+            guard_ref.capture_gc_ptrs_into(&mut new_gc_ptrs);
+            if !new_gc_ptrs.is_empty() {
+                for gc_ptr in new_gc_ptrs {
+                    let _ = crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
                 }
             }
         }
