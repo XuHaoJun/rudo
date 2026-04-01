@@ -1526,7 +1526,16 @@ impl AsyncGcHandle {
                     }
                 }
 
+                // FIX bug489: Get generation BEFORE dereference to detect slot reuse.
+                let pre_generation = (*gc_box_ptr).generation();
+
                 let gc_box = &*gc_box_ptr;
+
+                // FIX bug489: Verify generation hasn't changed (slot was NOT reused).
+                if pre_generation != gc_box.generation() {
+                    panic!("AsyncGcHandle::downcast_ref: slot was reused between liveness check and dereference");
+                }
+
                 if gc_box.is_under_construction()
                     || gc_box.has_dead_flag()
                     || gc_box.dropping_state() != 0
