@@ -549,6 +549,7 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
     stop_all_mutators_for_snapshot();
 
     if state.fallback_requested() {
+        resume_all_mutators();
         return 0;
     }
 
