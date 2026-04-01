@@ -1848,12 +1848,13 @@ fn collect_major_incremental(heap: &mut LocalHeap) -> CollectResult {
         state.set_phase(MarkPhase::Sweeping);
     }
 
-    // FIX bug487: Only sweep if phase is Sweeping.
-    // If phase is Marking, execute_final_mark determined there's still work to do.
     if state.phase() != MarkPhase::Sweeping {
-        // This shouldn't happen if execute_final_mark works correctly.
-        // Remaining work exists but we're about to sweep - this is a bug.
-        // For now, we'll proceed but this may cause USE-AFTER-FREE.
+        state.set_phase(MarkPhase::Idle);
+        return CollectResult {
+            objects_reclaimed: 0,
+            timer,
+            collection_type: crate::metrics::CollectionType::IncrementalMajor,
+        };
     }
 
     timer.start();
