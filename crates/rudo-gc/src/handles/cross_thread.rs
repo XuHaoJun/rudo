@@ -206,11 +206,13 @@ impl<T: Trace + 'static> GcHandle<T> {
                 if roots.strong.contains_key(&self.handle_id) {
                     return self.resolve_impl();
                 }
-                if self.origin_tcb.upgrade().is_some() {
-                    let orphan = heap::lock_orphan_roots();
-                    if orphan.contains_key(&(self.origin_thread, self.handle_id)) {
-                        return self.resolve_impl();
-                    }
+                // FIX bug494: Always check orphan table when entry not found in TCB.
+                // The previous code checked origin_tcb.upgrade() without holding any lock,
+                // which could cause us to skip the orphan check if TCB died between
+                // the upgrade() check and acquiring the orphan lock.
+                let orphan = heap::lock_orphan_roots();
+                if orphan.contains_key(&(self.origin_thread, self.handle_id)) {
+                    return self.resolve_impl();
                 }
                 panic!("GcHandle::resolve: handle has been unregistered");
             },
