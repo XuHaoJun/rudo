@@ -29,19 +29,22 @@ When `execute_final_mark` is called after a fallback and sets phase to `Marking`
 2. Perform a full STW sweep before returning
 
 ### 實際行為 (Actual Behavior)
-At lines 1851-1858 in `collect_major_incremental`:
+At lines 1851-1861 in `collect_major_incremental`:
 ```rust
-if state.phase() != MarkPhase::Sweeping {
-    state.set_phase(MarkPhase::Idle);
-    return CollectResult {
-        objects_reclaimed: 0,  // WRONG - no sweep occurred!
-        timer,
-        collection_type: crate::metrics::CollectionType::IncrementalMajor,
-    };
-}
+timer.start();
+let reclaimed = if state.phase() == MarkPhase::Sweeping {
+    sweep_segment_pages(heap, false)
+} else {
+    0
+};
+let reclaimed_large = if state.phase() == MarkPhase::Sweeping {
+    sweep_large_objects(heap, false)
+} else {
+    0
+};
 ```
 
-When `execute_final_mark` sets phase to `Marking` (due to remaining work), the function returns with `objects_reclaimed: 0` **without ever sweeping**. Dead objects that were marked during the initial marking phase are never reclaimed.
+When `execute_final_mark` sets phase to `Marking` (due to remaining work), `reclaimed` and `reclaimed_large` are both `0` **without any sweep occurring**. Dead objects that were marked during the initial marking phase are never reclaimed. The function returns with `objects_reclaimed: 0`.
 
 ---
 
@@ -59,9 +62,9 @@ The bug is in `collect_major_incremental` (gc/gc.rs:1805-1874):
      - `execute_final_mark` may set phase to `Marking` if remaining > 0
    - Else: sets phase to `Sweeping`
 
-3. Lines 1851-1858: **BUG** - If phase is NOT `Sweeping`, returns early with `objects_reclaimed: 0`
+3. Lines 1851-1861: **BUG** - If phase is NOT `Sweeping`, `reclaimed` and `reclaimed_large` are both `0` without any sweep occurring
 
-The issue is that when fallback occurs and there's remaining work, `execute_final_mark` sets phase to `Marking`, and then the early return returns without sweeping.
+The issue is that when fallback occurs and there's remaining work, `execute_final_mark` sets phase to `Marking`, and then the conditional sweep returns 0 without sweeping any objects.
 
 ---
 
