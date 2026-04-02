@@ -1,9 +1,24 @@
 # [Bug]: collect_major_incremental returns early without sweeping when fallback has remaining work
 
-**Status:** Fixed
-**Tags:** Verified, Regression
+**Status:** Open
+**Tags:** Unverified, Regression
 
-**Note (2026-04-03):** Fixed in commit ab42784. The fix unconditionally sweeps after `execute_final_mark`, regardless of phase. Since unmarked objects are unreachable (dead) and marked objects are in the worklist (not in the heap's unmarked set), it's safe to sweep all unmarked objects. This fixes the memory leak without reintroducing bug488's USE-AFTER-FREE.
+## Regression Status (2026-04-03)
+
+**BUG IS PRESENT IN HEAD (b9227cf).**
+
+The bug was fixed in commit `6fffe2e` (unconditional sweep) but was **reintroduced** in commit `b9227cf` which added the phase check back:
+
+```rust
+// b9227cf added this check, reintroducing bug490:
+let reclaimed = if state.phase() == MarkPhase::Sweeping {
+    sweep_segment_pages(heap, false)
+} else {
+    0
+};
+```
+
+**Note**: `ab42784` (mentioned as fix) only fixes bug492 (reset IncrementalMarkState), NOT bug490.
 
 **Previous Note (2026-04-03):** Fixed in commit 9ecee2f. This fix prevents USE-AFTER-FREE (bug488) but introduces a trade-off: when phase is Marking, no sweep occurs, causing memory leak (bug490). A proper fix requires tracking which objects were confirmed dead before fallback.
 
@@ -144,7 +159,10 @@ Not directly exploitable but can cause memory pressure over time if GC fallback 
 **Root cause of regression**: 
 Commit `d5b39f0` "fix(gc): only sweep when phase is Sweeping to prevent USE-AFTER-FREE" was necessary to fix bug488 (USE-AFTER-FREE when sweeping during Marking phase). However, it changed the code from unconditionally sweeping to only sweeping when `phase == MarkPhase::Sweeping`.
 
-This reintroduced bug490's memory leak because when fallback occurs and `execute_final_mark` sets phase to `Marking`, no sweep happens.
+**Re-regression (2026-04-03)**:
+- Commit `6fffe2e` fixed bug490 by making sweeping unconditional
+- Commit `b9227cf` (HEAD) reverted the fix by adding the phase check back, citing bug488 prevention
+- Current code at lines 1853-1862 skips sweep when phase is `Marking`, causing memory leak
 
 **Trade-off**:
 - Sweeping when phase is `Marking` → USE-AFTER-FREE (safety issue - bug488)
