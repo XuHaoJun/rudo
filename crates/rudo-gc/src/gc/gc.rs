@@ -1848,20 +1848,16 @@ fn collect_major_incremental(heap: &mut LocalHeap) -> CollectResult {
         state.set_phase(MarkPhase::Sweeping);
     }
 
-    if state.phase() != MarkPhase::Sweeping {
-        state.set_phase(MarkPhase::Idle);
-        return CollectResult {
-            objects_reclaimed: 0,
-            timer,
-            collection_type: crate::metrics::CollectionType::IncrementalMajor,
-        };
-    }
-
     timer.start();
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
-
-    promote_all_pages(heap);
+    if state.phase() == MarkPhase::Sweeping {
+        // Only promote pages when marking is complete
+        promote_all_pages(heap);
+    }
+    // FIX bug490: When phase is Marking (remaining work after execute_final_mark),
+    // we still sweep dead objects to avoid memory leak.
+    // We skip promotion since marking isn't complete.
     timer.end_sweep();
 
     state.set_phase(MarkPhase::Idle);
