@@ -479,9 +479,9 @@ impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
-        // Mark new GC pointers black only during incremental marking (bug302).
-        // Generational barrier should only mark page as dirty, not prevent collection.
-        if incremental_active {
+        // FIX bug487: Mark GC pointers black when either generational or incremental
+        // barrier is active, matching write()/lock() behavior (bug479 fix).
+        if generational_active || incremental_active {
             for gc_ptr in &ptrs {
                 let _ = unsafe {
                     crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
@@ -758,8 +758,9 @@ impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
-        // FIX bug304: Only mark GC pointers black during incremental marking, not generational barrier.
-        if incremental_active {
+        // FIX bug487: Mark GC pointers black when either generational or incremental
+        // barrier is active, matching lock() behavior (bug480 fix).
+        if generational_active || incremental_active {
             for gc_ptr in &ptrs {
                 let _ = unsafe {
                     crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
