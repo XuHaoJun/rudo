@@ -1025,6 +1025,8 @@ fn perform_multi_threaded_collect_full() {
         .set_gc_in_progress(false);
 
     IN_COLLECT.with(|in_collect| in_collect.set(false));
+
+    IncrementalMarkState::global().set_phase(MarkPhase::Idle);
 }
 
 /// Minor collection for a heap in multi-threaded context.
