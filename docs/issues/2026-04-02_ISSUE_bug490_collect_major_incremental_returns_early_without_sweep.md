@@ -1,7 +1,7 @@
 # [Bug]: collect_major_incremental returns early without sweeping when fallback has remaining work
 
-**Status:** Fixed
-**Tags:** Verified
+**Status:** Open
+**Tags:** Verified, Regression
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -127,3 +127,23 @@ This is a memory leak, not unsoundness. The marked objects that weren't swept wi
 
 **Geohot (Exploit 觀點):**
 Not directly exploitable but can cause memory pressure over time if GC fallback occurs frequently.
+
+---
+
+## 🔄 回歸記錄 (Regression Record)
+
+**2026-04-02**: Bug490 was fixed in commit `838c448` but regressed in commit `d5b39f0` (fix for bug488).
+
+**Root cause of regression**: 
+Commit `d5b39f0` "fix(gc): only sweep when phase is Sweeping to prevent USE-AFTER-FREE" was necessary to fix bug488 (USE-AFTER-FREE when sweeping during Marking phase). However, it changed the code from unconditionally sweeping to only sweeping when `phase == MarkPhase::Sweeping`.
+
+This reintroduced bug490's memory leak because when fallback occurs and `execute_final_mark` sets phase to `Marking`, no sweep happens.
+
+**Trade-off**:
+- Sweeping when phase is `Marking` → USE-AFTER-FREE (safety issue - bug488)
+- Not sweeping when phase is `Marking` → Memory leak (bug490)
+
+**Proper fix needed**: A solution that prevents USE-AFTER-FREE while still reclaiming dead objects. Options:
+1. Only sweep objects that were confirmed dead before the fallback
+2. Use a two-phase approach: mark-dead-then-sweep instead of mark-all-then-sweep
+3. Track which objects were marked in the current cycle vs previous cycles
