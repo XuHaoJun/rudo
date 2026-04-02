@@ -330,6 +330,13 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
                 panic!("Handle::get: slot was reused before value read (generation mismatch)");
             }
 
+            if gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+                || gc_box.is_under_construction()
+            {
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("Handle::get: object became dead/dropping after inc_ref");
+            }
             crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
 
             // Second is_allocated check after dec_ref to fix TOCTOU with lazy sweep (bug372/bug385).
