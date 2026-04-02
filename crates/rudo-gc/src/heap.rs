@@ -4068,4 +4068,10 @@ pub unsafe fn reset_for_testing() {
 
     // Clear current thread's local heap
     clear_local_heap();
+
+    // Clear cross-thread SATB buffers (bug493)
+    // These buffers are global and retain entries between tests
+    CROSS_THREAD_SATB_BUFFER.lock().clear();
+    CROSS_THREAD_SATB_OVERFLOW_BUFFER.lock().clear();
+    CROSS_THREAD_SATB_EMERGENCY_BUFFER.lock().clear();
 }
