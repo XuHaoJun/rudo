@@ -1,7 +1,11 @@
 # [Bug]: collect_major_incremental returns early without sweeping when fallback has remaining work
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified, Regression
+
+**Note (2026-04-03):** Fixed in commit ab42784. The fix unconditionally sweeps after `execute_final_mark`, regardless of phase. Since unmarked objects are unreachable (dead) and marked objects are in the worklist (not in the heap's unmarked set), it's safe to sweep all unmarked objects. This fixes the memory leak without reintroducing bug488's USE-AFTER-FREE.
+
+**Previous Note (2026-04-03):** Fixed in commit 9ecee2f. This fix prevents USE-AFTER-FREE (bug488) but introduces a trade-off: when phase is Marking, no sweep occurs, causing memory leak (bug490). A proper fix requires tracking which objects were confirmed dead before fallback.
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
