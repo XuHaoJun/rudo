@@ -1,6 +1,6 @@
 # [Bug]: wake_waiting_threads TOCTOU Race Causes Thread to Skip GC Safepoint
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

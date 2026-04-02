@@ -684,12 +684,11 @@ fn perform_single_threaded_collect_with_wake() {
         // and skip rendezvous entirely (safe since GC already completed)
         let mut woken_count = 0;
         for tcb in &registry.threads {
-            tcb.gc_requested.store(false, Ordering::SeqCst);
-
             if tcb.state.load(Ordering::Acquire) == crate::heap::THREAD_STATE_SAFEPOINT {
                 tcb.park_cond.notify_all();
                 tcb.state
                     .store(crate::heap::THREAD_STATE_EXECUTING, Ordering::Release);
+                tcb.gc_requested.store(false, Ordering::SeqCst);
                 woken_count += 1;
             }
         }
