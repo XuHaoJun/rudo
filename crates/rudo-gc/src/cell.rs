@@ -1336,6 +1336,11 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
+                    // Third is_allocated check AFTER has_gen_old read - prevents TOCTOU (bug498).
+                    // Must verify slot is still allocated before recording to remembered set.
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     h
                 };
 

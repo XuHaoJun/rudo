@@ -1,7 +1,7 @@
 # [Bug]: incremental_write_barrier small object path missing third is_allocated check after gen_old read (TOCTOU)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -115,3 +115,26 @@ This is a memory safety issue. Recording invalid slots in the remembered buffer 
 
 **Geohot (Exploit 觀點):**
 If an attacker can control the timing of lazy sweep, they could potentially inject invalid entries into the remembered buffer.
+
+---
+
+## Resolution (2026-04-04)
+
+**Outcome:** Fixed.
+
+Applied fix to `crates/rudo-gc/src/cell.rs` in `incremental_write_barrier` small object path:
+- Added third `is_allocated` check AFTER reading `has_gen_old` and BEFORE `record_in_remembered_buffer`
+- Matches the pattern used in `heap.rs::incremental_write_barrier` (bug498 fix)
+
+```rust
+let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
+    return;
+}
+// Third is_allocated check AFTER has_gen_old read - prevents TOCTOU (bug498).
+if !(*h.as_ptr()).is_allocated(index) {
+    return;
+}
+```
+
+Verification: `./clippy.sh` passes.
