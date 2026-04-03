@@ -124,6 +124,9 @@ impl<T: Trace + 'static> GcHandle<T> {
         if self.handle_id == HandleId::INVALID {
             return;
         }
+
+        let pre_generation = unsafe { (*self.ptr.as_ptr()).generation() };
+
         if let Some(tcb) = self.origin_tcb.upgrade() {
             let mut roots = tcb.cross_thread_roots.lock().unwrap();
             roots.strong.remove(&self.handle_id);
@@ -132,6 +135,21 @@ impl<T: Trace + 'static> GcHandle<T> {
             let _ = heap::remove_orphan_root(self.origin_thread, self.handle_id);
         }
         self.handle_id = HandleId::INVALID;
+
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return;
+                }
+            }
+            let current_generation = (*self.ptr.as_ptr()).generation();
+            if pre_generation != current_generation {
+                panic!(
+                    "GcHandle::unregister: slot was reused during unregister (generation mismatch)"
+                );
+            }
+        }
         crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
     }
 
