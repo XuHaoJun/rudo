@@ -2875,11 +2875,18 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
             let header_size = PageHeader::header_size(block_size);
 
             if header.read().all_dead() {
-                lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
+                let reclaimed =
+                    lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
                 (*header).clear_all_dead();
                 std::sync::atomic::fence(Ordering::Release);
-                (*header).clear_needs_sweep();
-                (*header).set_dead_count(0);
+                if reclaimed == obj_count {
+                    (*header).clear_needs_sweep();
+                    (*header).set_dead_count(0);
+                } else {
+                    (*header).set_needs_sweep();
+                    #[allow(clippy::cast_possible_truncation)]
+                    (*header).set_dead_count((obj_count - reclaimed) as u16);
+                }
                 swept += 1;
             } else {
                 let (reclaimed, all_dead) =
@@ -2945,12 +2952,19 @@ pub unsafe fn sweep_specific_page(
         let header_size = crate::heap::PageHeader::header_size(block_size);
 
         if header.read().all_dead() {
-            lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
+            let actual_reclaimed =
+                lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
             (*header).clear_all_dead();
             std::sync::atomic::fence(Ordering::Release);
-            (*header).clear_needs_sweep();
-            (*header).set_dead_count(0);
-            reclaimed = obj_count;
+            if actual_reclaimed == obj_count {
+                (*header).clear_needs_sweep();
+                (*header).set_dead_count(0);
+            } else {
+                (*header).set_needs_sweep();
+                #[allow(clippy::cast_possible_truncation)]
+                (*header).set_dead_count((obj_count - actual_reclaimed) as u16);
+            }
+            reclaimed = actual_reclaimed;
         } else {
             let (reclaimed_count, all_dead) =
                 lazy_sweep_page(page_ptr, block_size, obj_count, header_size);
