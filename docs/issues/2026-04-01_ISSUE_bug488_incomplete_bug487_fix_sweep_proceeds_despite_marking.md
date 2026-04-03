@@ -45,16 +45,26 @@ let reclaimed_large = sweep_large_objects(heap, false);
 
 ## 🔬 根本原因分析 (Root Cause Analysis)
 
-In `incremental_collect_with_heap` (gc/gc.rs:1840-1872):
+In `collect_major_incremental` (gc.rs:1807-1867):
 
-1. Line 1840: `if remaining > 0 || dirty_pages > 0`
-2. Line 1842: `execute_final_mark(heaps_mut)` is called
-3. Line 1843-1846: Comment explains `execute_final_mark` sets phase based on remaining work
-4. Line 1853: Check `if state.phase() != MarkPhase::Sweeping` - this correctly detects when phase is `Marking`
-5. Lines 1855-1856: Comment acknowledges "this may cause USE-AFTER-FREE"
-6. **BUG**: Lines 1860-1861 still call `sweep_segment_pages` and `sweep_large_objects`
+1. Line 1841: `if remaining > 0 || dirty_pages > 0`
+2. Line 1843: `execute_final_mark(heaps_mut)` is called
+3. Line 1844-1847: Comment explains `execute_final_mark` sets phase based on remaining work
+4. Line 1853-1854: **BUG**: `sweep_segment_pages` and `sweep_large_objects` are called UNCONDITIONALLY
+5. Line 1855: Only `promote_all_pages` is gated on `state.phase() == MarkPhase::Sweeping`
 
-The fix comment at line 1851 states "Only sweep if phase is Sweeping" but the code **does not actually respect this** - it always sweeps regardless of the phase check result.
+The bug487 fix removed the unconditional `set_phase(Sweeping)` at the end, but the sweep itself is still unconditional. When `execute_final_mark` sets phase to `Marking` (because remaining work exists), the sweep STILL proceeds at lines 1853-1854, violating the incremental GC invariant.
+
+**Current code (gc.rs:1852-1858):**
+```rust
+timer.start();
+let reclaimed = sweep_segment_pages(heap, false);  // UNCONDITIONAL!
+let reclaimed_large = sweep_large_objects(heap, false);  // UNCONDITIONAL!
+if state.phase() == MarkPhase::Sweeping {
+    promote_all_pages(heap);  // Only this is gated
+}
+timer.end_sweep();
+```
 
 ---
 
