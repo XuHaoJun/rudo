@@ -1,12 +1,15 @@
 # [Bug]: collect_major_incremental returns early without sweeping when fallback has remaining work
 
-**Status:** Open
-**Tags:** Unverified, Regression
+**Status:** Fixed
+**Tags:** Verified, Regression
 
 ## Regression Status (2026-04-03)
 
-**BUG IS PRESENT IN HEAD (b9227cf).**
+**FIXED in commit `fix_gc_collect_major_incremental_always_sweep`.**
 
+The fix removes the early return when `phase != Sweeping` and always performs sweep after `execute_final_mark`. Since `execute_final_mark` stops all mutators (safepoint), it's safe to sweep even when phase is Marking.
+
+**Previous status (Open):**
 The bug was fixed in commit `6fffe2e` (unconditional sweep) but was **reintroduced** in commit `b9227cf` which added the phase check back:
 
 ```rust

@@ -1850,14 +1850,10 @@ fn collect_major_incremental(heap: &mut LocalHeap) -> CollectResult {
     }
 
     timer.start();
-    if state.phase() != MarkPhase::Sweeping {
-        state.set_phase(MarkPhase::Idle);
-        return CollectResult {
-            objects_reclaimed: 0,
-            timer,
-            collection_type: crate::metrics::CollectionType::IncrementalMajor,
-        };
-    }
+    // FIX bug490: Always sweep after final_mark, even when phase is Marking.
+    // execute_final_mark leaves phase as Marking when remaining > 0 (bug487).
+    // But we're in a safepoint (all mutators stopped), so it's safe to sweep.
+    // This prevents memory leak of dead objects when fallback occurs.
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
     promote_all_pages(heap);
