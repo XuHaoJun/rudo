@@ -1,6 +1,6 @@
 # [Bug]: Incomplete bug487 fix - sweep proceeds despite Marking phase
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -117,3 +117,31 @@ This is a memory safety violation. The code acknowledges the issue in a comment 
 
 **Geohot (Exploit 觀點):**
 USE-AFTER-FREE vulnerabilities are exploitable when an attacker can control the timing of allocation and object lifetimes. In a GC system, if an object is prematurely swept while references still exist (through dangling pointers), an attacker who can trigger GC at specific times could achieve arbitrary read/write primitives through object reallocation.
+
+---
+
+## Resolution (2026-04-04)
+
+**Outcome:** Fixed.
+
+Applied fix to `crates/rudo-gc/src/gc/gc.rs` in `collect_major_incremental()`:
+
+```rust
+timer.start();
+if state.phase() != MarkPhase::Sweeping {
+    state.set_phase(MarkPhase::Idle);
+    return CollectResult {
+        objects_reclaimed: 0,
+        timer,
+        collection_type: crate::metrics::CollectionType::IncrementalMajor,
+    };
+}
+let reclaimed = sweep_segment_pages(heap, false);
+let reclaimed_large = sweep_large_objects(heap, false);
+promote_all_pages(heap);
+timer.end_sweep();
+```
+
+Verification:
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+- `./test.sh` passes

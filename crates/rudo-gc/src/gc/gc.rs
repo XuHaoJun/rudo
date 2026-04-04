@@ -1850,11 +1850,17 @@ fn collect_major_incremental(heap: &mut LocalHeap) -> CollectResult {
     }
 
     timer.start();
+    if state.phase() != MarkPhase::Sweeping {
+        state.set_phase(MarkPhase::Idle);
+        return CollectResult {
+            objects_reclaimed: 0,
+            timer,
+            collection_type: crate::metrics::CollectionType::IncrementalMajor,
+        };
+    }
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
-    if state.phase() == MarkPhase::Sweeping {
-        promote_all_pages(heap);
-    }
+    promote_all_pages(heap);
     timer.end_sweep();
 
     state.set_phase(MarkPhase::Idle);
