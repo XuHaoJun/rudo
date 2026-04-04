@@ -2439,12 +2439,6 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
     }
 
     if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
-        if visitor.kind == VisitorKind::Minor
-            && (*header.as_ptr()).generation.load(Ordering::Acquire) > 0
-        {
-            return;
-        }
-
         // Skip if slot was swept and potentially reused; avoids UAF when lazy sweep
         // runs concurrently with cross-thread SATB buffer processing.
         if !(*header.as_ptr()).is_allocated(idx) {
@@ -2487,7 +2481,9 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
     }
 
     let enqueue_generation = (*ptr.as_ptr()).generation();
-    visitor.worklist.push((ptr, enqueue_generation));
+    if visitor.kind != VisitorKind::Minor || enqueue_generation == 0 {
+        visitor.worklist.push((ptr, enqueue_generation));
+    }
 }
 
 /// Sweep Large Object Space.
