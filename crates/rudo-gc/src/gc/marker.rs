@@ -179,9 +179,21 @@ pub fn clear_overflow_queue() {
     // By CASing first, pushers will see odd generation and abort.
     let old_gen = OVERFLOW_QUEUE_CLEAR_GEN.fetch_add(1, Ordering::AcqRel);
 
+    // FIX bug501: Add timeout to prevent deadlock if a thread crashes while
+    // holding OVERFLOW_QUEUE_USERS. If timeout expires, proceed with drain anyway
+    // since the orphaned user count will be cleaned up on next GC cycle.
+    let timeout = std::time::Duration::from_secs(5);
+    let start = std::time::Instant::now();
     loop {
         let users = OVERFLOW_QUEUE_USERS.load(Ordering::Acquire);
         if users == 0 {
+            break;
+        }
+        if start.elapsed() > timeout {
+            tracing::warn!(
+                "clear_overflow_queue: timeout waiting for {} users, proceeding anyway",
+                users
+            );
             break;
         }
         std::hint::spin_loop();
