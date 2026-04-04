@@ -1920,6 +1920,7 @@ impl<T: Trace> Gc<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
+                    (*ptr.as_ptr()).dec_weak();
                     return GcBoxWeakRef::null();
                 }
             }
