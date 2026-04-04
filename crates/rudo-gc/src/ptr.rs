@@ -595,7 +595,11 @@ impl<T: Trace> GcBox<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(self_ptr) {
                 let header = crate::heap::ptr_to_page_header(self_ptr);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    // Don't call dec_weak - slot may be reused (bug133)
+                    // FIX bug504: Call dec_weak to undo inc_weak.
+                    // The generation check above catches slot REUSE (where dec_weak would
+                    // target the wrong object). If we reach here with generation unchanged
+                    // but is_allocated=false, the slot was simply swept - dec_weak is safe.
+                    (*NonNull::from(self).as_ptr()).dec_weak();
                     return GcBoxWeakRef::null();
                 }
             }
