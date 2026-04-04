@@ -190,6 +190,7 @@ pub fn clear_overflow_queue() {
             break;
         }
         if start.elapsed() > timeout {
+            #[cfg(feature = "tracing")]
             tracing::warn!(
                 "clear_overflow_queue: timeout waiting for {} users, proceeding anyway",
                 users
