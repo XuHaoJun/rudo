@@ -337,7 +337,7 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
                 GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
                 panic!("Handle::get: object became dead/dropping after inc_ref");
             }
-            crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
+            GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
 
             // Second is_allocated check after dec_ref to fix TOCTOU with lazy sweep (bug372/bug385).
             // If slot was swept between dec_ref and value read, we could

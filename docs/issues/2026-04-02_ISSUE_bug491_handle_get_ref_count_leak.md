@@ -1,7 +1,7 @@
 # [Bug]: Handle::get reference count leak when object becomes dead/dropping after try_inc_ref_if_nonzero
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## Threat Model Assessment
 
