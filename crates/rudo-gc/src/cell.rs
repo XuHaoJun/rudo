@@ -1301,6 +1301,11 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
+                    // Third is_allocated check AFTER has_gen_old read - prevents TOCTOU (bug499).
+                    // Must verify slot is still allocated before recording to remembered set.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     NonNull::new_unchecked(h_ptr)
                 } else {
                     let h = ptr_to_page_header(ptr);
