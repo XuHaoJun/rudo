@@ -2619,16 +2619,13 @@ unsafe fn lazy_sweep_page(
 
             let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
-            if weak_count > 0 {
-                if !dead_flag {
-                    ((*gc_box_ptr).drop_fn)(obj_ptr);
-                    (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
-                    (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
-                    (*gc_box_ptr).set_dead();
-                }
+            ((*gc_box_ptr).drop_fn)(obj_ptr);
+            if weak_count > 0 && !dead_flag {
+                (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
+                (*gc_box_ptr).set_dead();
                 all_dead = false;
             } else {
-                ((*gc_box_ptr).drop_fn)(obj_ptr);
                 (*gc_box_ptr).set_dead();
                 (*gc_box_ptr).clear_gen_old();
                 (*gc_box_ptr).clear_under_construction();
@@ -2751,15 +2748,12 @@ unsafe fn lazy_sweep_page_all_dead(
 
             let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
-            if weak_count > 0 {
-                if !dead_flag {
-                    ((*gc_box_ptr).drop_fn)(obj_ptr);
-                    (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
-                    (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
-                    (*gc_box_ptr).set_dead();
-                }
+            ((*gc_box_ptr).drop_fn)(obj_ptr);
+            if weak_count > 0 && !dead_flag {
+                (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
+                (*gc_box_ptr).set_dead();
             } else {
-                ((*gc_box_ptr).drop_fn)(obj_ptr);
                 (*gc_box_ptr).clear_gen_old();
                 (*gc_box_ptr).clear_under_construction();
                 (*gc_box_ptr).clear_is_dropping();
