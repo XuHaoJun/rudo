@@ -1,7 +1,7 @@
 # [Bug]: Lazy Sweep 記憶體洩漏 - 有 weak refs 的死亡物件未被回收
 
 **Status:** Open
-**Tags:** Unverified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
