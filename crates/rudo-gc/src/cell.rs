@@ -1154,7 +1154,11 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         // If incremental marking becomes active between borrow_mut_simple() and drop(),
         // OLD values must already be recorded to preserve SATB invariant.
         // (Similar to bug432 fix for GcRwLock::write())
+        // FIX bug507: Cache both barrier states together to avoid TOCTOU.
+        // If incremental marking becomes active between caching and barrier,
+        // stale incremental_active would cause incorrect barrier behavior.
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
         let value = &*guard;
         let mut gc_ptrs = Vec::with_capacity(32);
         value.capture_gc_ptrs_into(&mut gc_ptrs);
@@ -1184,7 +1188,6 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
             }
         }
 
-        let generational_active = crate::gc::incremental::is_generational_barrier_active();
         self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
 
         // FIX bug485: Always mark NEW GC pointers black when OLD values were recorded.
