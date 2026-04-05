@@ -1,7 +1,7 @@
 # [Bug]: clear_overflow_queue uses tracing::warn! without tracing feature flag
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

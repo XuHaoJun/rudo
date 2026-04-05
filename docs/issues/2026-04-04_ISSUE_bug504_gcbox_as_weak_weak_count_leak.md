@@ -1,7 +1,7 @@
 # [Bug]: GcBox::as_weak Weak Count Leak - dec_weak Not Called When Slot Swept
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
