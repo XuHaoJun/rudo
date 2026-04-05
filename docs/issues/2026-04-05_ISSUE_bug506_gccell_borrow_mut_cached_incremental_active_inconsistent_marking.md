@@ -1,6 +1,6 @@
 # [Bug]: GcCell::borrow_mut() uses cached incremental_active for marking NEW pointers, inconsistent with GcThreadSafeCell/GcRwLock
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)

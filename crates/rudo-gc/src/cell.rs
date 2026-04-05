@@ -198,23 +198,24 @@ impl<T: ?Sized> GcCell<T> {
 
         let result = self.inner.borrow_mut();
 
-        // FIX bug486: Always mark GC pointers black when barrier is active.
-        // If incremental becomes active between entry and drop, NEW values
-        // must also be marked to maintain SATB consistency.
-        if generational_active || incremental_active {
-            unsafe {
-                let new_value = &*result;
-                let mut new_gc_ptrs = Vec::with_capacity(32);
-                new_value.capture_gc_ptrs_into(&mut new_gc_ptrs);
-                if !new_gc_ptrs.is_empty() {
-                    crate::heap::with_heap(|_heap| {
-                        for gc_ptr in new_gc_ptrs {
-                            let _ = crate::gc::incremental::mark_object_black(
-                                gc_ptr.as_ptr() as *const u8
-                            );
-                        }
-                    });
-                }
+        // FIX bug506: Always mark NEW GC pointers unconditionally, matching
+        // GcThreadSafeCell::borrow_mut() and GcRwLock::write() behavior.
+        // GcThreadSafeCell marks unconditionally when new_gc_ptrs is not empty.
+        // GcRwLock::write() passes true to mark_gc_ptrs_immediate.
+        // GcCell was using cached generational_active || incremental_active,
+        // which could cause NEW to not be marked if barrier became active
+        // between cache time and marking time.
+        unsafe {
+            let new_value = &*result;
+            let mut new_gc_ptrs = Vec::with_capacity(32);
+            new_value.capture_gc_ptrs_into(&mut new_gc_ptrs);
+            if !new_gc_ptrs.is_empty() {
+                crate::heap::with_heap(|_heap| {
+                    for gc_ptr in new_gc_ptrs {
+                        let _ =
+                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
+                    }
+                });
             }
         }
 
