@@ -1,7 +1,8 @@
 # [Bug]: scan_page_for_marked_refs missing second is_allocated check before push_work
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Invalid
+
+**Reason:** The issue description is inaccurate. The current code at `incremental.rs:850-856` already has the second `is_allocated` check before `push_work`. The issue was created based on outdated analysis or a misunderstanding. Both `scan_page_for_marked_refs` and `scan_page_for_unmarked_refs` have consistent defensive checks.
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
