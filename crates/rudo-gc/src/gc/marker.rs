@@ -93,7 +93,8 @@ fn push_overflow_work(work: *const GcBox<()>) -> Result<(), *const GcBox<()>> {
                     break;
                 }
             }
-            return Err(work);
+            OVERFLOW_QUEUE_USERS.fetch_add(1, Ordering::AcqRel);
+            continue;
         }
         let current = OVERFLOW_QUEUE.load(Ordering::Acquire);
         let current_gen = gen_from_value(current);
