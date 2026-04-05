@@ -1955,6 +1955,9 @@ impl LocalHeap {
         self.dirty_page_history.rotate_right(1);
         self.dirty_page_history[0] = count;
         self.avg_dirty_pages = self.dirty_page_history.iter().sum::<usize>() / 4;
+        for &page_ptr in &self.dirty_pages_snapshot {
+            unsafe { (*page_ptr.as_ptr()).clear_dirty_listed() };
+        }
         self.dirty_pages_snapshot.clear();
     }
 
