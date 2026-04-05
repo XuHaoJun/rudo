@@ -106,7 +106,7 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
     /// item, we synchronize with stealers using CAS on top.
     #[allow(dead_code)]
     pub fn pop(&self, bottom: &AtomicUsize) -> Option<T> {
-        let b = bottom.load(Ordering::Relaxed);
+        let b = bottom.load(Ordering::Acquire);
         let t = self.top.load(Ordering::Acquire);
 
         if b == t {
