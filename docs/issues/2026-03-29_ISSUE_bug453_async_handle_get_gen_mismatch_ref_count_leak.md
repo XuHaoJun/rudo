@@ -21,6 +21,10 @@ if pre_generation != gc_box.generation() {
 
 **Status: Fixed** - 修復已套用於程式碼。
 
+## Resolution (2026-04-06)
+
+**Outcome:** Already fixed in code.
+
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
 | 評估指標 | 等級 | 說明 |

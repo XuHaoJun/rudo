@@ -166,7 +166,8 @@ TOCTOU 竞争条件在 GC 中特别危险，因为 slot 回收和引用追踪之
 2. `unified_write_barrier`: 第二次檢查位於 line 3112，兩個路徑都執行
 3. `incremental_write_barrier`: 第二次檢查位於 line 3212-3215，但 large object 路徑在 line 3176 直接返回，**不會執行**第二次檢查
 
-**Status: Open** - 需要修復。
+**Status:** Fixed
+**Tags:** Verified
 
 ---
 

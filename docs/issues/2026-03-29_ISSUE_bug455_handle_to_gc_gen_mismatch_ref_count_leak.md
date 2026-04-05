@@ -1,7 +1,24 @@
 # [Bug]: Handle::to_gc() generation mismatch panic does not undo ref_count increment (ref_count leak)
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
+
+## Resolution (2026-04-06)
+
+**Outcome:** Already fixed in `crates/rudo-gc/src/handles/mod.rs` `Handle::to_gc()`.
+
+**Verification:** Static review of current code (lines 423-426):
+
+```rust
+if pre_generation != gc_box.generation() {
+    GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+    panic!("Handle::to_gc: slot was reused between pre-check and inc_ref (generation mismatch)");
+}
+```
+
+Applied via commit: `121a58a fix(handles): Handle::get generation mismatch must undo ref_count increment`
+
+This matches the bug454 fix pattern and the AsyncHandle::to_gc implementation.
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -153,3 +170,11 @@ Generation 機制旨在防止 slot 重用問題。Bug454 修復了 `Handle::get(
 - bug454: Handle::get() 相同問題 - 已修復
 - bug453: AsyncHandle::get() 相同問題 - 已修復
 - bug413: GcBoxWeakRef::upgrade() 相同模式 - 已修復
+
+---
+
+## Resolution (2026-04-06)
+
+**Outcome:** Already fixed.
+
+The fix in bug454 (`Handle::get` at lines 328-331) applies the same pattern to `Handle::to_gc()` at lines 423-426. Both now use `if pre_generation != gc_box.generation()` with `undo_inc_ref` before panic, matching the pattern in `AsyncHandle::to_gc()`.
