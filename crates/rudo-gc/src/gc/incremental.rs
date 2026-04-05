@@ -847,6 +847,13 @@ unsafe fn scan_page_for_marked_refs(
                         if unsafe { (*gc_box_ptr).is_under_construction() } {
                             break;
                         }
+                        // Second is_allocated re-check to fix TOCTOU with lazy sweep (bug509).
+                        // If slot was swept after is_under_construction check but before push_work,
+                        // clear mark and skip to avoid pushing a pointer to a swept slot.
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
                         refs_found += 1;
                         if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
                             state.push_work(gc_box);
