@@ -1182,6 +1182,12 @@ pub fn worker_mark_loop_with_registry(
                     break;
                 }
             }
+            // FIX bugXXX: Fallback to overflow queue to prevent work loss.
+            // If all queues are full, push back to overflow to ensure
+            // work is not lost (matches try_steal_work pattern).
+            while push_overflow_work(obj).is_err() {
+                std::hint::spin_loop();
+            }
         }
 
         // 3. Wait for work or completion
