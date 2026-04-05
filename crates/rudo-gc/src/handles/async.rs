@@ -1319,13 +1319,13 @@ impl GcScope {
                             "GcScope::spawn: tracked object was deallocated"
                         );
                     }
-                    // Get generation BEFORE dereference to detect slot reuse (bugXXX).
+                    // Get generation BEFORE dereference to detect slot reuse (bug496).
                     // If slot is swept and reused between is_allocated check and dereference,
                     // generation will differ.
                     pre_generation = (*tracked.ptr).generation();
                 }
                 let gc_box = unsafe { &*tracked.ptr };
-                // FIX bugXXX: Verify generation hasn't changed (slot was NOT reused).
+                // FIX bug496: Verify generation hasn't changed (slot was NOT reused).
                 if pre_generation != gc_box.generation() {
                     panic!(
                         "GcScope::spawn: slot was reused between liveness check and dereference"

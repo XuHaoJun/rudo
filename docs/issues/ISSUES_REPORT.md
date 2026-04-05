@@ -546,5 +546,6 @@
 | [2026-03-30_ISSUE_bug469_worker_mark_loop_missing_is_under_construction_check.md](./2026-03-30_ISSUE_bug469_worker_mark_loop_missing_is_under_construction_check.md) | worker_mark_loop_with_registry missing is_under_construction check before trace_fn | Fixed | Verified |
 | [2026-03-31_ISSUE_bug470_gchandle_clone_downgrade_migration_panic.md](./2026-03-31_ISSUE_bug470_gchandle_clone_downgrade_migration_panic.md) | GcHandle::clone 和 GcHandle::downgrade 在 orphan migration 視窗期間不正確地 panic | Open | Not Verified |
 | [2026-03-31_ISSUE_bug473_lazy_sweep_missing_clear_flags.md](./2026-03-31_ISSUE_bug473_lazy_sweep_missing_clear_flags.md) | lazy_sweep_page 回收 slot 時未清除 UNDER_CONSTRUCTION_FLAG 和 is_dropping | Open | Not Verified |
+| [2026-04-06_ISSUE_bug510_gcscope_spawn_comments_reference_bugxxx_not_bug496.md](./2026-04-06_ISSUE_bug510_gcscope_spawn_comments_reference_bugxxx_not_bug496.md) | GcScope::spawn comments reference bugXXX instead of bug496 | Open | Unverified |
 
 (End of file - total 547 lines)
