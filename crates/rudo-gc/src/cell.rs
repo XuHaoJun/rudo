@@ -1400,6 +1400,12 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                         if (*header).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                             return;
                         }
+                        // FIX bug521: Third is_allocated check before set_dirty - prevents TOCTOU.
+                        // If slot was swept after generation check but before set_dirty,
+                        // we'd set dirty bit on wrong slot.
+                        if !(*header).is_allocated(0) {
+                            return;
+                        }
                         (*header).set_dirty(0);
                         heap.add_to_dirty_pages(NonNull::new_unchecked(header));
                     }

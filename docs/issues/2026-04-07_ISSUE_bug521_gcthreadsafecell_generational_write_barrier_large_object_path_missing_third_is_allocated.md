@@ -1,6 +1,6 @@
 # [Bug]: GcThreadSafeCell::generational_write_barrier large object path missing third is_allocated check before set_dirty
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
