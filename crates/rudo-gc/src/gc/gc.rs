@@ -2630,7 +2630,8 @@ unsafe fn lazy_sweep_page(
                 reclaimed += 1;
                 all_dead = false;
             } else {
-                (*gc_box_ptr).set_dead();
+                // FIX bug522: Don't set DEAD_FLAG before reuse - slot will be reused and
+                // DEAD_FLAG should not be inherited by the new object. Matches lazy_sweep_page_all_dead.
                 (*gc_box_ptr).clear_gen_old();
                 (*gc_box_ptr).clear_under_construction();
                 (*gc_box_ptr).clear_is_dropping();
