@@ -1251,7 +1251,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 
     #[allow(dead_code)]
     #[inline]
-    fn incremental_write_barrier(ptr: *const u8) {
+    fn incremental_write_barrier(ptr: *const u8, incremental_active: bool) {
         if !Self::is_gc_heap_pointer(ptr) {
             return;
         }
@@ -1353,7 +1353,11 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     h
                 };
 
-                heap.record_in_remembered_buffer(header);
+                // FIX bug512: Only record in remembered buffer when incremental marking is active.
+                // This matches unified_write_barrier behavior (heap.rs:3185).
+                if incremental_active {
+                    heap.record_in_remembered_buffer(header);
+                }
             });
         }
     }
