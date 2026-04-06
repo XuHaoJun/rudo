@@ -2752,7 +2752,16 @@ impl LocalHeap {
             let alloc_size = total_size.div_ceil(page_size()) * page_size();
 
             let gc_box_ptr = addr as *mut crate::ptr::GcBox<()>;
-            if !(*gc_box_ptr).has_dead_flag() {
+            // FIX bug515: Check is_allocated before calling drop_fn.
+            // If the slot was already swept (has_dead_flag cleared), drop_fn
+            // could be called on a reused slot with wrong drop function.
+            // Use ptr_to_object_index to verify slot is still valid.
+            let idx = unsafe { ptr_to_object_index(addr as *const u8) };
+            let is_valid = idx.is_some() && {
+                let header = unsafe { ptr_to_page_header(addr as *const u8) };
+                (*header.as_ptr()).is_allocated(idx.unwrap())
+            };
+            if is_valid && !(*gc_box_ptr).has_dead_flag() {
                 ((*gc_box_ptr).drop_fn)(addr as *mut u8);
             }
 
