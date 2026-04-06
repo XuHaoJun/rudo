@@ -1436,6 +1436,12 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                             {
                                 return;
                             }
+                            // FIX bug520: Third is_allocated check before set_dirty - prevents TOCTOU.
+                            // If slot was swept after generation check but before set_dirty,
+                            // we'd set dirty bit on wrong slot.
+                            if !(*header.as_ptr()).is_allocated(index) {
+                                return;
+                            }
                             (*header.as_ptr()).set_dirty(index);
                             heap.add_to_dirty_pages(header);
                         }
