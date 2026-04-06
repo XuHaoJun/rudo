@@ -328,6 +328,16 @@ pub fn clone_orphan_root_with_inc_ref(
             GcBox::undo_inc_ref(ptr.as_ptr());
             panic!("clone_orphan_root_with_inc_ref: slot was reused during clone (generation mismatch)");
         }
+
+        // FIX bug515: Second is_allocated check AFTER inc_ref to catch slot reuse
+        // that bypassed the generation check (defense-in-depth).
+        if let Some(idx) = ptr_to_object_index(ptr.as_ptr() as *const u8) {
+            let header = ptr_to_page_header(ptr.as_ptr() as *const u8);
+            assert!(
+                (*header.as_ptr()).is_allocated(idx),
+                "clone_orphan_root_with_inc_ref: object slot was swept after inc_ref"
+            );
+        }
     }
     let new_id = allocate_orphan_handle_id();
     orphan.insert((thread_id, new_id), ptr.as_ptr() as usize);

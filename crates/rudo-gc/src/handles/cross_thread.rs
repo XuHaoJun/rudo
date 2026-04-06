@@ -797,6 +797,18 @@ impl<T: Trace + 'static> Clone for GcHandle<T> {
                     crate::ptr::GcBox::undo_inc_ref(self.ptr.as_ptr());
                     panic!("GcHandle::clone: slot was reused during clone (generation mismatch)");
                 }
+
+                // FIX bug515: Second is_allocated check AFTER inc_ref to catch slot reuse
+                // that bypassed the generation check (defense-in-depth).
+                // If slot was swept after inc_ref, we'd modify the wrong object's ref count.
+                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
+                {
+                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                    assert!(
+                        (*header.as_ptr()).is_allocated(idx),
+                        "GcHandle::clone: object slot was swept after inc_ref"
+                    );
+                }
             }
             let new_id = roots.allocate_id();
             roots.strong.insert(new_id, self.ptr.cast::<GcBox<()>>());
