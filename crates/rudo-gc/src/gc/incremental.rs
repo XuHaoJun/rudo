@@ -791,7 +791,14 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
 
     ((*gc_box.as_ptr()).trace_fn)(data_ptr, &mut visitor);
 
-    while let Some((child_ptr, _enqueue_generation)) = visitor.worklist.pop() {
+    while let Some((child_ptr, enqueue_generation)) = visitor.worklist.pop() {
+        // FIX bug512: Verify slot wasn't reused since enqueue.
+        // The generation was captured when the object was pushed to worklist.
+        // If slot was swept and reused, generation will differ.
+        let current_generation = (*child_ptr.as_ptr()).generation();
+        if current_generation != enqueue_generation {
+            continue; // Slot was reused - skip this entry
+        }
         state.push_work(child_ptr);
     }
 }
