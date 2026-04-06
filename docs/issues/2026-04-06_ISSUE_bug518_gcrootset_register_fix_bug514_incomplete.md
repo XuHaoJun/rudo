@@ -1,7 +1,8 @@
 # [Bug]: GcRootSet::register FIX bug514 incomplete - always stores (0, 0) instead of actual generation
 
-**Status:** Open
-**Tags:** Verified
+**Status:** Fixed
+**Tags:** Verified, Fixed
+**Fixed by:** commit to tokio/root.rs (GcRootSet::register)
 
 ## 威脅模型評估 (Threat Model Assessment)
 

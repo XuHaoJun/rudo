@@ -68,14 +68,22 @@ impl GcRootSet {
     /// * `ptr` - The raw pointer address to register
     #[allow(clippy::significant_drop_tightening)]
     pub fn register(&self, ptr: usize) {
+        use std::collections::hash_map::Entry;
         let mut roots = self.roots.lock().unwrap();
 
-        // FIX bug514: Store generation from GcBox if valid, otherwise 0.
-        // Generation is read during snapshot to detect slot reuse.
-        // We store 0 as a placeholder when heap is not available;
-        // snapshot() will do the generation check when called with a valid heap.
-        let entry = roots.entry(ptr).or_insert((0, 0));
-        entry.0 += 1;
+        match roots.entry(ptr) {
+            Entry::Vacant(v) => {
+                let generation = crate::heap::try_with_heap(|heap| unsafe {
+                    crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8)
+                        .map_or(0u32, |gc_box| gc_box.as_ref().generation())
+                })
+                .unwrap_or(0);
+                v.insert((1, generation));
+            }
+            Entry::Occupied(o) => {
+                o.into_mut().0 += 1;
+            }
+        }
 
         self.dirty.store(true, Ordering::Release);
     }
@@ -92,15 +100,21 @@ impl GcRootSet {
     ///
     /// * `ptr` - The raw pointer address to unregister
     pub fn unregister(&self, ptr: usize) {
-        let mut roots = self.roots.lock().unwrap();
-        if let Some(entry) = roots.get_mut(&ptr) {
-            entry.0 -= 1;
-            if entry.0 == 0 {
-                roots.remove(&ptr);
+        let needs_dirty = {
+            let mut roots = self.roots.lock().unwrap();
+            if let Some(entry) = roots.get_mut(&ptr) {
+                entry.0 -= 1;
+                if entry.0 == 0 {
+                    roots.remove(&ptr);
+                }
+                true
+            } else {
+                false
             }
+        };
+        if needs_dirty {
             self.dirty.store(true, Ordering::Release);
         }
-        drop(roots);
     }
 
     /// Returns the number of currently registered roots.
