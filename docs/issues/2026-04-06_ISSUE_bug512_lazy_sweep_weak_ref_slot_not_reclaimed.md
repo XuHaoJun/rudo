@@ -1,6 +1,6 @@
 # [Bug]: lazy_sweep_page with weak_count > 0 does not reclaim slot - memory leak
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -124,3 +124,36 @@ This is not a soundness issue (no UB), but a memory management issue. Slots neve
 
 **Geohot (Exploit 觀點):**
 Memory leak can be leveraged for memory exhaustion attacks. If an attacker can control when weak refs are created and when strong refs are dropped, they could cause gradual memory growth.
+
+---
+
+## Resolution (2026-04-06)
+
+**Outcome:** Fixed.
+
+Applied fix to `crates/rudo-gc/src/gc/gc.rs`:
+
+**In `lazy_sweep_page` (lines 2619-2624):**
+```rust
+if weak_count > 0 && !dead_flag {
+    (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+    (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
+    (*gc_box_ptr).set_dead();
+    (*header).clear_allocated(i);  // FIX: reclaim slot
+    reclaimed += 1;
+    all_dead = false;
+}
+```
+
+**In `lazy_sweep_page_all_dead` (lines 2750-2753):**
+```rust
+if weak_count > 0 && !dead_flag {
+    (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+    (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
+    (*gc_box_ptr).set_dead();
+    (*header).clear_allocated(i);  // FIX: reclaim slot
+    reclaimed += 1;
+}
+```
+
+Both functions now properly reclaim slots for objects with weak refs when they become unreachable.

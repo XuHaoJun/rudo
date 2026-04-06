@@ -2620,6 +2620,8 @@ unsafe fn lazy_sweep_page(
                 (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                 (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
                 (*gc_box_ptr).set_dead();
+                (*header).clear_allocated(i);
+                reclaimed += 1;
                 all_dead = false;
             } else {
                 (*gc_box_ptr).set_dead();
@@ -2749,6 +2751,8 @@ unsafe fn lazy_sweep_page_all_dead(
                 (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                 (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
                 (*gc_box_ptr).set_dead();
+                (*header).clear_allocated(i);
+                reclaimed += 1;
             } else {
                 (*gc_box_ptr).clear_gen_old();
                 (*gc_box_ptr).clear_under_construction();
