@@ -2468,6 +2468,12 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
                         return;
                     }
                     if (*ptr.as_ptr()).generation() != marked_generation {
+                        // FIX bug519: Check is_allocated to distinguish swept from swept+reused.
+                        // If slot is still allocated, mark belongs to new object - don't clear.
+                        // If slot is not allocated, we should clear the stale mark.
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            (*header.as_ptr()).clear_mark_atomic(idx);
+                        }
                         return;
                     }
                     visitor.objects_marked += 1;
