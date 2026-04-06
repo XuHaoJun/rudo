@@ -591,8 +591,17 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
         }
     }
 
-    while let Some((ptr, _enqueue_generation)) = visitor.worklist.pop() {
-        state.push_work(ptr);
+    while let Some((ptr, enqueue_generation)) = visitor.worklist.pop() {
+        // FIX bug512: Verify slot wasn't reused since enqueue.
+        // The generation was captured when the object was pushed to worklist.
+        // If slot was swept and reused, generation will differ.
+        unsafe {
+            let current_generation = (*ptr.as_ptr()).generation();
+            if current_generation != enqueue_generation {
+                continue; // Slot was reused - skip this entry
+            }
+            state.push_work(ptr);
+        }
     }
 
     let count = state.worklist_len();
@@ -945,8 +954,15 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
         heap.clear_dirty_pages_snapshot();
     }
 
-    while let Some((ptr, _enqueue_generation)) = visitor.worklist.pop() {
-        state.push_work(ptr);
+    while let Some((ptr, enqueue_generation)) = visitor.worklist.pop() {
+        // FIX bug512: Verify slot wasn't reused since enqueue.
+        unsafe {
+            let current_generation = (*ptr.as_ptr()).generation();
+            if current_generation != enqueue_generation {
+                continue; // Slot was reused - skip this entry
+            }
+            state.push_work(ptr);
+        }
         total_marked += 1;
     }
 
