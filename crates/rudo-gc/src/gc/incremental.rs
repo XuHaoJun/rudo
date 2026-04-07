@@ -1091,18 +1091,31 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
                 return false;
             }
             if !(*header.as_ptr()).is_marked(idx) {
-                let marked_generation = (*gc_box).generation();
-                (*header.as_ptr()).set_mark(idx);
-                if !(*header.as_ptr()).is_allocated(idx) {
-                    (*header.as_ptr()).clear_mark_atomic(idx);
-                    return false;
+                // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug527).
+                // This matches mark_object_black and scan_page_for_marked_refs.
+                loop {
+                    match (*header.as_ptr()).try_mark(idx) {
+                        Ok(false) => {
+                            // Already marked by another thread
+                            return true;
+                        }
+                        Ok(true) => {
+                            let marked_generation = (*gc_box).generation();
+                            // Verify slot wasn't swept+reused between try_mark and now
+                            if (*gc_box).generation() != marked_generation {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                return false;
+                            }
+                            // Verify still allocated before returning (bug527)
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                return false;
+                            }
+                            return true;
+                        }
+                        Err(()) => {} // CAS failed, retry
+                    }
                 }
-                let current_generation = (*gc_box).generation();
-                if current_generation != marked_generation {
-                    (*header.as_ptr()).clear_mark_atomic(idx);
-                    return false;
-                }
-                return true;
             }
         }
     }
