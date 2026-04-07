@@ -737,6 +737,12 @@ impl PerThreadMarkQueue {
                                     (*header).clear_mark_atomic(i);
                                     break;
                                 }
+                                // FIX bug528: Skip objects under construction (e.g. Gc::new_cyclic).
+                                // Matches mark_object_black / mark_new_object_black (bug238).
+                                if unsafe { (*gc_box_ptr.as_ptr()).is_under_construction() } {
+                                    (*header).clear_mark_atomic(i);
+                                    break;
+                                }
                                 marked += 1;
                                 self.push(gc_box_ptr.as_ptr());
                                 break;
