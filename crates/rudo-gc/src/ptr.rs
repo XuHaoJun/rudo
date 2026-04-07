@@ -717,7 +717,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
             // Try atomic transition from 0 to 1 (resurrection)
             if gc_box.try_inc_ref_from_zero() {
-                // FIX bug425: Get generation AFTER successful CAS to detect slot reuse.
+                // FIX bug525: Get generation AFTER successful CAS to detect slot reuse.
                 // If slot is swept and reused between CAS success and return,
                 // the generation will be different.
                 let post_resurrection_generation = gc_box.generation();
@@ -726,7 +726,6 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
                     // Undo the increment and return None. Use undo_inc_ref, not dec_ref:
                     // dec_ref returns early without decrementing when DEAD_FLAG is set.
-                    let _ = gc_box;
                     crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
                 }
@@ -737,11 +736,12 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                     crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
                 }
-                // Check is_allocated after successful upgrade to prevent slot reuse issues
+                // FIX bug525: Check is_allocated after successful resurrection to prevent
+                // type confusion. Every other inc_ref path has this check - this path was missing it.
                 if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                     let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        // Don't call dec_ref - slot may be reused (bug133)
+                        crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                         return None;
                     }
                 }
@@ -965,7 +965,6 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 {
                     // Undo the increment and return None. Use undo_inc_ref, not dec_ref:
                     // dec_ref returns early without decrementing when DEAD_FLAG is set.
-                    let _ = gc_box;
                     crate::ptr::GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
                 }
