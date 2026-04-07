@@ -298,17 +298,11 @@ pub fn clone_orphan_root_with_inc_ref(
     }
     // SAFETY: ptr came from a live GcHandle whose orphan entry still exists in the table.
     // The orphan lock is held here, preventing concurrent removal of the entry.
-    // Order: is_allocated check -> inc_ref -> insert. If inc_ref or insert panics,
+    // Order: is_allocated check -> flags check -> inc_ref -> insert. If inc_ref or insert panics,
     // no root entry exists; the extra ref would leak but no UAF from orphaned root.
     unsafe {
-        let gc_box = &*ptr.as_ptr();
-        assert!(
-            !gc_box.has_dead_flag()
-                && gc_box.dropping_state() == 0
-                && !gc_box.is_under_construction(),
-            "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle (orphan)"
-        );
-        // Check is_allocated before inc_ref; if this panics, no root entry exists yet.
+        // FIX bug526: Check is_allocated BEFORE dereferencing to prevent UAF.
+        // If slot was swept, dereferencing would be UB.
         if let Some(idx) = ptr_to_object_index(ptr.as_ptr() as *const u8) {
             let header = ptr_to_page_header(ptr.as_ptr() as *const u8);
             assert!(
@@ -316,6 +310,14 @@ pub fn clone_orphan_root_with_inc_ref(
                 "clone_orphan_root_with_inc_ref: object slot was swept"
             );
         }
+
+        let gc_box = &*ptr.as_ptr();
+        assert!(
+            !gc_box.has_dead_flag()
+                && gc_box.dropping_state() == 0
+                && !gc_box.is_under_construction(),
+            "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle (orphan)"
+        );
         // Get generation BEFORE inc_ref to detect slot reuse.
         // If slot is swept and reused between check and inc_ref,
         // the generation will be different after inc_ref.

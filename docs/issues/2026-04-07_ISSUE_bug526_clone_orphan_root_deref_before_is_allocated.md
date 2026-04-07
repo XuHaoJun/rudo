@@ -1,6 +1,6 @@
 # [Bug]: clone_orphan_root_with_inc_ref dereferences before is_allocated check
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Unverified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
