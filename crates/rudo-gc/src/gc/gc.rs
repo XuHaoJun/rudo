@@ -837,6 +837,10 @@ fn perform_single_threaded_collect_full() {
     });
 
     IN_COLLECT.with(|in_collect| in_collect.set(false));
+
+    // FIX bug492: Reset IncrementalMarkState after full GC completes.
+    // Without this, incremental GC may resume with stale state (phase != Idle).
+    IncrementalMarkState::global().set_phase(MarkPhase::Idle);
 }
 
 /// Perform full collection as the collector thread.
