@@ -285,19 +285,11 @@ impl<T: ?Sized> GcRwLock<T> {
         T: GcCapture,
     {
         let guard = self.inner.write();
-        // Cache barrier state AFTER acquiring lock to avoid stale values if incremental
-        // marking started while blocked (matches GcThreadSafeCell::borrow_mut).
         let incremental_active = is_incremental_marking_active();
         let generational_active = is_generational_barrier_active();
-        // FIX bug432: Always record SATB OLD values at write() time, not just when
-        // incremental_active is true. This ensures OLD values are preserved if
-        // incremental marking starts after lock acquisition but before drop().
         record_satb_old_values_with_state(&*guard, true);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
-        // FIX bug479: Always mark GC pointers black when OLD values were recorded.
-        // If incremental becomes active between entry and here, we must mark NEW
-        // to maintain SATB consistency (OLD recorded, NEW must be marked too).
-        mark_gc_ptrs_immediate(&*guard, true);
+        mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
         GcRwLockWriteGuard {
             guard,
             _marker: PhantomData,
@@ -338,10 +330,7 @@ impl<T: ?Sized> GcRwLock<T> {
             // FIX bug432: Always record SATB OLD values at write() time.
             record_satb_old_values_with_state(&*guard, true);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
-            // FIX bug479: Always mark GC pointers black when OLD values were recorded.
-            // If incremental becomes active between entry and here, we must mark NEW
-            // to maintain SATB consistency (OLD recorded, NEW must be marked too).
-            mark_gc_ptrs_immediate(&*guard, true);
+            mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
             GcRwLockWriteGuard {
                 guard,
                 _marker: PhantomData,
@@ -606,10 +595,7 @@ impl<T: ?Sized> GcMutex<T> {
         // FIX bug432: Always record SATB OLD values at lock() time.
         record_satb_old_values_with_state(&*guard, true);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
-        // FIX bug480: Always mark GC pointers black when OLD values were recorded.
-        // If incremental becomes active between entry and here, we must mark NEW
-        // to maintain SATB consistency (OLD recorded, NEW must be marked too).
-        mark_gc_ptrs_immediate(&*guard, true);
+        mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
         GcMutexGuard {
             guard,
             _marker: PhantomData,
@@ -648,10 +634,7 @@ impl<T: ?Sized> GcMutex<T> {
             // FIX bug432: Always record SATB OLD values at lock() time.
             record_satb_old_values_with_state(&*guard, true);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
-            // FIX bug480: Always mark GC pointers black when OLD values were recorded.
-            // If incremental becomes active between entry and here, we must mark NEW
-            // to maintain SATB consistency (OLD recorded, NEW must be marked too).
-            mark_gc_ptrs_immediate(&*guard, true);
+            mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
             GcMutexGuard {
                 guard,
                 _marker: PhantomData,
