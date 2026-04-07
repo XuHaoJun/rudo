@@ -1,7 +1,27 @@
 # [Bug]: cell.rs incremental_write_barrier large object path has_gen_old TOCTOU
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified, Fixed
+
+## Resolution
+
+**Outcome:** Already fixed in current codebase.
+
+**Verification:** The code in `cell.rs:1298-1307` already contains the fix:
+
+```rust
+// Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug459).
+// Must verify slot is still allocated before reading any GcBox fields.
+if !(*h_ptr).is_allocated(0) {
+    return;
+}
+let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+let has_gen_old = (*gc_box_addr).has_gen_old_flag();
+```
+
+The second `is_allocated` check is correctly placed BEFORE reading `has_gen_old_flag`, matching the pattern from `incremental_write_barrier` in heap.rs and preventing the TOCTOU race.
+
+The issue file incorrectly showed "Status: Open" when the fix was already applied.
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
