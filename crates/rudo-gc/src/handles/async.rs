@@ -674,10 +674,12 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                 panic!("AsyncHandle::get: object became dead/dropping after inc_ref");
             }
 
-            GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
-
-            // Second is_allocated check after undo_inc_ref (bug379 fix).
-            // If slot was swept after dec_ref, we could read from a freed object.
+            // The temporary ref count increment from try_inc_ref_if_nonzero() protects the
+            // object during the borrow. We do NOT undo it here because:
+            // 1. get() returns &T (a reference, not a Gc), so there's no ownership transfer
+            // 2. The reference is returned to the caller who may use it beyond this call
+            // 3. The object's lifetime is protected by the handle's AsyncHandleScope
+            // 4. Unconditionally decrementing would leak ref counts on every call (bug523)
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
                 assert!(
@@ -778,17 +780,11 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             panic!("AsyncHandle::get_unchecked: object became dead/dropping after inc_ref");
         }
 
-        GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
-
-        // Second is_allocated check after undo_inc_ref (bug379 fix).
-        // If slot was swept after undo_inc_ref, we could read from a freed object.
-        if let Some(idx) = unsafe { crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) } {
-            let header = unsafe { crate::heap::ptr_to_page_header(gc_box_ptr as *const u8) };
-            assert!(
-                unsafe { (*header.as_ptr()).is_allocated(idx) },
-                "AsyncHandle::get_unchecked: object slot was swept after undo_inc_ref"
-            );
-        }
+        // The temporary ref count increment from try_inc_ref_if_nonzero() protects the
+        // object during the borrow. We do NOT undo it here because:
+        // 1. get_unchecked() returns &T (a reference, not a Gc), so there's no ownership transfer
+        // 2. The reference is returned to the caller who may use it beyond this call
+        // 3. Unconditionally decrementing would leak ref counts on every call (bug523)
 
         let value = gc_box.value();
         value
