@@ -3205,6 +3205,12 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
+                    // FIX bug542: Third `is_allocated` check AFTER has_gen_old read - prevents TOCTOU.
+                    // Must verify slot is still allocated before returning to caller.
+                    // Matches gc_cell_validate_and_barrier (bug531) and incremental_write_barrier (bug530) patterns.
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     (h, index)
                 };
 
