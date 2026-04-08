@@ -1,7 +1,7 @@
 //! Regression test for Bug 530: `incremental_write_barrier` small object path
-//! missing third is_allocated check after reading `has_gen_old`.
+//! missing third `is_allocated` check after reading `has_gen_old`.
 //!
-//! When lazy sweep reclaims and reuses a slot between the second is_allocated
+//! When lazy sweep reclaims and reuses a slot between the second `is_allocated`
 //! check and reading `has_gen_old`, the small object path would incorrectly
 //! read the new object's flags, potentially causing wrong remembered set entries.
 //!
