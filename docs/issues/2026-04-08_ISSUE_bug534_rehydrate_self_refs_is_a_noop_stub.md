@@ -1,7 +1,15 @@
 # [Bug]: rehydrate_self_refs is a no-op stub despite being called from new_cyclic_weak
 
-**Status:** Open
+**Status:** Partial Fix (call removed from new_cyclic_weak)
 **Tags:** Verified
+
+## 📝 修復紀錄 (Fix Applied)
+
+**Date:** 2026-04-08
+**Fix:** Removed the call to `rehydrate_self_refs` from `new_cyclic_weak` (ptr.rs:1535-1541).
+**Reason:** The function is a no-op stub that only visits Gc pointers but does nothing when it finds null ones. Calling it gave a false impression that rehydration was happening.
+
+**Note:** The underlying `rehydrate_self_refs` function remains unimplemented. Self-referential cycles created with `new_cyclic_weak` may not properly upgrade after GC reclaims and reuses the slot.
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
