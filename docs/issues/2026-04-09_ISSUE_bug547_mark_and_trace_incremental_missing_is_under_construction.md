@@ -1,7 +1,7 @@
 # [Bug]: mark_and_trace_incremental missing is_under_construction check before trace_fn
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Verified
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

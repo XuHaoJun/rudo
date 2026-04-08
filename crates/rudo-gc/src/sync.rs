@@ -287,7 +287,8 @@ impl<T: ?Sized> GcRwLock<T> {
         let guard = self.inner.write();
         let incremental_active = is_incremental_marking_active();
         let generational_active = is_generational_barrier_active();
-        record_satb_old_values_with_state(&*guard, true);
+        // FIX bug548: Use incremental_active instead of true to avoid unnecessary SATB work.
+        record_satb_old_values_with_state(&*guard, incremental_active);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
         mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
         GcRwLockWriteGuard {
@@ -327,8 +328,8 @@ impl<T: ?Sized> GcRwLock<T> {
         self.inner.try_write().map(|guard| {
             let incremental_active = is_incremental_marking_active();
             let generational_active = is_generational_barrier_active();
-            // FIX bug432: Always record SATB OLD values at write() time.
-            record_satb_old_values_with_state(&*guard, true);
+            // FIX bug548: Use incremental_active instead of true to avoid unnecessary SATB work.
+            record_satb_old_values_with_state(&*guard, incremental_active);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
             mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
             GcRwLockWriteGuard {
@@ -592,8 +593,8 @@ impl<T: ?Sized> GcMutex<T> {
         // marking started while blocked (matches GcThreadSafeCell::borrow_mut).
         let incremental_active = is_incremental_marking_active();
         let generational_active = is_generational_barrier_active();
-        // FIX bug432: Always record SATB OLD values at lock() time.
-        record_satb_old_values_with_state(&*guard, true);
+        // FIX bug548: Use incremental_active instead of true to avoid unnecessary SATB work.
+        record_satb_old_values_with_state(&*guard, incremental_active);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
         mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
         GcMutexGuard {
@@ -631,8 +632,8 @@ impl<T: ?Sized> GcMutex<T> {
         self.inner.try_lock().map(|guard| {
             let incremental_active = is_incremental_marking_active();
             let generational_active = is_generational_barrier_active();
-            // FIX bug432: Always record SATB OLD values at lock() time.
-            record_satb_old_values_with_state(&*guard, true);
+            // FIX bug548: Use incremental_active instead of true to avoid unnecessary SATB work.
+            record_satb_old_values_with_state(&*guard, incremental_active);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
             mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
             GcMutexGuard {
