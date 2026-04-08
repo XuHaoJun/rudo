@@ -2108,6 +2108,12 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
                         (*header.as_ptr()).clear_mark_atomic(index);
                         return;
                     }
+                    // FIX bug546: Skip objects under construction (e.g. Gc::new_cyclic).
+                    // Matches worker_mark_loop (bug469), mark_object_black (bug238).
+                    if (*ptr.as_ptr()).is_under_construction() {
+                        (*header.as_ptr()).clear_mark_atomic(index);
+                        return;
+                    }
                     visitor.objects_marked += 1;
                     break;
                 }
