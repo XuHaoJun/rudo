@@ -3302,6 +3302,12 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                     if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
+                    // FIX bug530: Third is_allocated check AFTER has_gen_old read - prevents TOCTOU.
+                    // Must verify slot is still allocated before returning to caller.
+                    // Large object path has this check (bug499); small object path was missing it.
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     (h, index)
                 };
 
