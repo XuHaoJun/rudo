@@ -3171,6 +3171,12 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
+                    // FIX bug542: Third `is_allocated` check AFTER has_gen_old read - prevents TOCTOU.
+                    // Must verify slot is still allocated before returning to caller.
+                    // Matches small object path pattern.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
                 } else {
                     let h = ptr_to_page_header(ptr);

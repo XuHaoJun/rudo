@@ -121,4 +121,23 @@ While this is primarily a correctness bug, a stale slot index could potentially 
 3. `unified_write_barrier` small object path is missing the third `is_allocated` check after has_gen_old read
 4. This matches the bug530/bug531 pattern but was not applied to `unified_write_barrier`
 
-**Status: Open** - Needs fix similar to bug531 fix in gc_cell_validate_and_barrier
+**Status:** Fixed - Applied in commit 0e1c85a for small object path; additional fix for large object path applied separately.
+
+## 驗證記錄
+
+**驗證日期:** 2026-04-09
+**驗證人員:** opencode
+
+### 驗證結果
+
+1. Small object path fix applied in commit `0e1c85a` (heap.rs:3208-3213)
+2. Large object path also missing third check - fix applied (heap.rs:3174-3179)
+
+```rust
+// FIX bug542: Third `is_allocated` check AFTER has_gen_old read - prevents TOCTOU.
+if !(*h_ptr).is_allocated(0) {
+    return;
+}
+```
+
+**Status: Fixed** - Both large and small object paths now have third `is_allocated` check.
