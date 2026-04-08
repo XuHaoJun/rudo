@@ -1532,6 +1532,14 @@ impl<T: Trace> Gc<T> {
             (*gc_box_ptr.as_ptr()).set_under_construction(false);
         }
 
+        // FIX bug533: Call rehydrate_self_refs to handle self-referential cycles.
+        // Like new_cyclic (line 1406), new_cyclic_weak must rehydrate dead self-refs
+        // after construction completes. This ensures Weak pointers in cyclic
+        // structures can properly upgrade after the cycle is collected and slot reused.
+        unsafe {
+            rehydrate_self_refs(gc_box_ptr, &(*gc_box_ptr.as_ptr()).value);
+        }
+
         guard.completed = true;
         std::mem::forget(guard);
 
