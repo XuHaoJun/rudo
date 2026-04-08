@@ -864,22 +864,27 @@ impl<T: Trace + 'static> Drop for GcHandle<T> {
         }
         self.handle_id = HandleId::INVALID;
 
+        // FIX bug524: Check generation BEFORE is_allocated early return.
+        // If slot was swept and reused, generation will have changed.
+        // We must detect this BEFORE the is_allocated check to avoid
+        // calling dec_ref on a reused slot.
         unsafe {
+            let current_generation = (*self.ptr.as_ptr()).generation();
+            if pre_generation != current_generation {
+                // Slot was reused - do NOT call dec_ref on wrong object.
+                return;
+            }
+
+            // Now safe to check is_allocated - slot still valid if we reach here
             if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
+                    // Slot was swept after generation check - object already collected.
                     return;
                 }
             }
-            // FIX bug407: Verify generation hasn't changed before dec_ref.
-            // If slot was reused during the window between remove and dec_ref,
-            // panic to prevent corrupting the new object's ref_count.
-            let current_generation = (*self.ptr.as_ptr()).generation();
-            if pre_generation != current_generation {
-                panic!("GcHandle::drop: slot was reused during drop (generation mismatch)");
-            }
+            crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
         }
-        crate::ptr::GcBox::dec_ref(self.ptr.as_ptr());
     }
 }
 
