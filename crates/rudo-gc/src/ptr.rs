@@ -1402,9 +1402,12 @@ impl<T: Trace> Gc<T> {
             _marker: PhantomData,
         };
 
-        unsafe {
-            rehydrate_self_refs(gc_box_ptr, &(*gc_box).value);
-        }
+        // NOTE: rehydrate_self_refs is NOT called here because it is a no-op stub.
+        // The function only visits Gc pointers but does nothing when it finds null ones.
+        // See bug541: rehydrate_self_refs is a no-op stub.
+        // Since new_cyclic is already deprecated as non-functional (the dead_gc passed
+        // to the closure has a null internal pointer), calling rehydrate_self_refs
+        // has no effect anyway.
 
         gc
     }
@@ -3200,6 +3203,7 @@ unsafe impl<K: Trace + Send + Sync, V: Trace + Send + Sync> Sync for Ephemeron<K
 // ============================================================================
 
 /// Rehydrate dead self-references in a value.
+#[allow(dead_code)]
 fn rehydrate_self_refs<T: Trace>(_target: NonNull<GcBox<T>>, value: &T) {
     struct Rehydrator;
 
