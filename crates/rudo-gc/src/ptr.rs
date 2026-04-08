@@ -1409,7 +1409,10 @@ impl<T: Trace> Gc<T> {
         // to the closure has a null internal pointer), calling rehydrate_self_refs
         // has no effect anyway.
 
-        gc
+        Self {
+            ptr: AtomicNullable::new(gc_box_ptr),
+            _marker: PhantomData,
+        }
     }
 
     /// Create a self-referential garbage-collected value using a Weak reference.
