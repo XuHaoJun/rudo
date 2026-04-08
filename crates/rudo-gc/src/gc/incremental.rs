@@ -1011,9 +1011,17 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                         // Read generation after successful mark to detect slot reuse (bug336).
                         let marked_generation = unsafe { (*gc_box_ptr).generation() };
 
-                        // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
-                        // If slot was swept after try_mark, clear mark and skip.
+                        // FIX bug528: Re-check is_allocated to fix TOCTOU with lazy sweep.
+                        // If slot was swept after try_mark, check generation to distinguish
+                        // swept (should clear mark) from swept+reused (should not clear).
                         if !(*header).is_allocated(i) {
+                            // Read current generation to distinguish swept from reused
+                            let current_generation = unsafe { (*gc_box_ptr).generation() };
+                            if current_generation != marked_generation {
+                                // Slot was reused - mark belongs to new object, don't clear
+                                break;
+                            }
+                            // Slot was swept but not reused - safe to clear mark
                             (*header).clear_mark_atomic(i);
                             break;
                         }
