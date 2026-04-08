@@ -2944,6 +2944,12 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
+                    // FIX bug535: Third is_allocated check AFTER has_gen_old read - prevents TOCTOU.
+                    // If slot was swept after generation check but before returning,
+                    // we'd return a stale slot index. Matches incremental_write_barrier pattern.
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     (h, index)
                 };
 
