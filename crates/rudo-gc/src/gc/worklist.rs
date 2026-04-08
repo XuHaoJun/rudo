@@ -186,7 +186,7 @@ impl<T: Copy, const N: usize> StealQueue<T, N> {
     #[must_use]
     #[allow(dead_code)]
     pub fn len(&self, bottom: &AtomicUsize) -> usize {
-        let b = bottom.load(Ordering::Relaxed);
+        let b = bottom.load(Ordering::Acquire);
         let t = self.top.load(Ordering::Acquire);
         b.wrapping_sub(t)
     }

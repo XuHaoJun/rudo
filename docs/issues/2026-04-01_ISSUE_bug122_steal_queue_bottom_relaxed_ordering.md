@@ -1,7 +1,11 @@
 # [Bug]: StealQueue bottom load uses Relaxed instead of Acquire ordering
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
+
+**Fix Applied:** The issue was actually in the `len()` function (line 189), not in `push()` (line 73) or `steal()` (line 164) which already used `Acquire`. The `len()` function was the only one still using `Relaxed`. Changed to `Acquire` ordering to ensure proper synchronization with `pop()`'s `Release` store.
+
+**Verification:** Build passes, clippy passes.
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
