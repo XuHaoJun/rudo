@@ -1001,6 +1001,13 @@ pub fn worker_mark_loop(
                             if (*gc_box_ptr).is_under_construction() {
                                 break;
                             }
+                            // FIX bug529: Second is_allocated re-check before trace_fn.
+                            // If slot was swept after is_under_construction check but before trace_fn,
+                            // clear mark and skip to avoid calling trace_fn on a swept slot.
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                break;
+                            }
                             marked += 1;
                             ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
                             break;
@@ -1160,6 +1167,13 @@ pub fn worker_mark_loop_with_registry(
                             // FIX bug469: Skip objects under construction (e.g. Gc::new_cyclic).
                             // Matches mark_object_black / mark_new_object_black (bug238).
                             if (*gc_box_ptr).is_under_construction() {
+                                break;
+                            }
+                            // FIX bug529: Second is_allocated re-check before trace_fn.
+                            // If slot was swept after is_under_construction check but before trace_fn,
+                            // clear mark and skip to avoid calling trace_fn on a swept slot.
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
                                 break;
                             }
                             marked += 1;
