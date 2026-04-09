@@ -1223,12 +1223,12 @@ unsafe fn mark_and_push_to_worker_queue(
                             break; // Already marked by another thread, slot valid
                         }
                         Ok(true) => {
-                            let marked_generation = (*gc_box.as_ptr()).generation();
                             if !(*header.as_ptr()).is_allocated(idx) {
-                                let current_generation = (*gc_box.as_ptr()).generation();
-                                if current_generation != marked_generation {
-                                    return;
-                                }
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                return;
+                            }
+                            let marked_generation = (*gc_box.as_ptr()).generation();
+                            if (*gc_box.as_ptr()).generation() != marked_generation {
                                 (*header.as_ptr()).clear_mark_atomic(idx);
                                 return;
                             }
