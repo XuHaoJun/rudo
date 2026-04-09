@@ -1,6 +1,6 @@
 # [Bug]: record_satb_old_values_with_state called with `true` instead of actual `incremental_active` value
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Not Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
