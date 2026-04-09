@@ -1,7 +1,20 @@
 # [Bug]: bug548 的修復重新引入 bug432 - GcRwLock/GcMutex SATB OLD 值記錄丟失
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
+
+## 修復紀錄 (Fix Applied)
+
+**Date:** 2026-04-10
+**Fix:** Changed `record_satb_old_values_with_state(&*guard, incremental_active)` to `record_satb_old_values_with_state(&*guard, true)` in:
+- `GcRwLock::write()` (sync.rs:291)
+- `GcRwLock::try_write()` (sync.rs:332)
+- `GcMutex::lock()` (sync.rs:601)
+- `GcMutex::try_lock()` (sync.rs:642)
+
+This reverts the bug548 optimization and restores the bug432 fix - SATB OLD values are now always recorded regardless of incremental_active state.
+
+**Verification:** `./clippy.sh` passes, `./test.sh` passes.
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
