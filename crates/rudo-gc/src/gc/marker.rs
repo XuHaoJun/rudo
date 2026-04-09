@@ -915,22 +915,18 @@ pub fn worker_mark_loop(
                             // If slot is swept and reused between mark and trace_fn call,
                             // generation will differ and we should skip this object.
                             let marked_generation = (*gc_box_ptr).generation();
-                            if !(*header.as_ptr()).is_allocated(idx) {
-                                let current_generation = (*gc_box_ptr).generation();
-                                if current_generation != marked_generation {
-                                    break; // Slot was reused - skip
-                                }
-                                (*header.as_ptr()).clear_mark_atomic(idx);
-                                break;
-                            }
-                            // Verify generation hasn't changed before calling trace_fn (bug427 fix).
-                            // If slot was reused, trace_fn would be called on wrong object data.
+                            // FIX bug553: Remove inner is_allocated re-check block.
+                            // The outer check at line 909 already handles is_allocated == false.
+                            // The inner block was dead code that could cause UB by reading generation
+                            // from a deallocated slot. Generation mismatch should always clear mark.
                             if (*gc_box_ptr).generation() != marked_generation {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
                                 break; // Slot was reused - skip
                             }
                             // FIX bug469: Skip objects under construction (e.g. Gc::new_cyclic).
                             // Matches mark_object_black / mark_new_object_black (bug238).
                             if (*gc_box_ptr).is_under_construction() {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
                                 break;
                             }
                             // FIX bug529: Second is_allocated re-check before trace_fn.
@@ -1083,22 +1079,18 @@ pub fn worker_mark_loop_with_registry(
                             // If slot is swept and reused between mark and trace_fn call,
                             // generation will differ and we should skip this object.
                             let marked_generation = (*gc_box_ptr).generation();
-                            if !(*header.as_ptr()).is_allocated(idx) {
-                                let current_generation = (*gc_box_ptr).generation();
-                                if current_generation != marked_generation {
-                                    break; // Slot was reused - skip
-                                }
-                                (*header.as_ptr()).clear_mark_atomic(idx);
-                                break;
-                            }
-                            // Verify generation hasn't changed before calling trace_fn (bug427 fix).
-                            // If slot was reused, trace_fn would be called on wrong object data.
+                            // FIX bug553: Remove inner is_allocated re-check block.
+                            // The outer check at line 909 already handles is_allocated == false.
+                            // The inner block was dead code that could cause UB by reading generation
+                            // from a deallocated slot. Generation mismatch should always clear mark.
                             if (*gc_box_ptr).generation() != marked_generation {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
                                 break; // Slot was reused - skip
                             }
                             // FIX bug469: Skip objects under construction (e.g. Gc::new_cyclic).
                             // Matches mark_object_black / mark_new_object_black (bug238).
                             if (*gc_box_ptr).is_under_construction() {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
                                 break;
                             }
                             // FIX bug529: Second is_allocated re-check before trace_fn.
