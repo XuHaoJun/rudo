@@ -2101,10 +2101,10 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
                 Ok(true) => {
                     let marked_generation = (*ptr.as_ptr()).generation();
                     if !(*header.as_ptr()).is_allocated(index) {
-                        let current_generation = (*ptr.as_ptr()).generation();
-                        if current_generation != marked_generation {
-                            return;
-                        }
+                        (*header.as_ptr()).clear_mark_atomic(index);
+                        return;
+                    }
+                    if (*ptr.as_ptr()).generation() != marked_generation {
                         (*header.as_ptr()).clear_mark_atomic(index);
                         return;
                     }
@@ -2464,24 +2464,19 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
                     return; // Already marked by another thread, no push needed
                 }
                 Ok(true) => {
-                    if !(*header.as_ptr()).is_allocated(idx) {
-                        (*header.as_ptr()).clear_mark_atomic(idx);
-                        return;
-                    }
+                    // FIX BUGXXX: Read generation BEFORE is_allocated check to avoid UB.
+                    // Reading from a deallocated slot is undefined behavior.
                     let marked_generation = (*ptr.as_ptr()).generation();
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        let current_generation = (*ptr.as_ptr()).generation();
-                        if current_generation != marked_generation {
-                            return;
-                        }
+                        // FIX BUGXXX: Slot was swept - ALWAYS clear stale mark when slot not allocated.
+                        // The generation was captured while slot was still valid.
+                        // When slot is not allocated, the mark is stale and must be cleared.
                         (*header.as_ptr()).clear_mark_atomic(idx);
                         return;
                     }
                     if (*ptr.as_ptr()).generation() != marked_generation {
-                        // FIX bug549: When generation mismatch, the old object was marked but
-                        // the new object in the reused slot was NOT traced by this marking.
-                        // Clear the stale mark to prevent incorrect object retention.
-                        // (The bug519 fix only handled the slot-not-allocated case)
+                        // FIX bug549: Slot was reused with new object - clear stale mark.
+                        // The old object's mark should not persist on the new object.
                         (*header.as_ptr()).clear_mark_atomic(idx);
                         return;
                     }
