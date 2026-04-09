@@ -784,7 +784,9 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
 
     // Verify generation hasn't changed before calling trace_fn (bug426 fix).
     // If slot was reused, trace_fn would be called on wrong object data.
+    // FIX bug556: Also clear the stale mark so it doesn't persist on the new object.
     if (*gc_box.as_ptr()).generation() != marked_generation {
+        (*header.as_ptr()).clear_mark_atomic(idx);
         return;
     }
 
