@@ -2099,11 +2099,15 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
                     return; // Already marked by another thread, slot valid
                 }
                 Ok(true) => {
-                    let marked_generation = (*ptr.as_ptr()).generation();
+                    // FIX bug559: Check is_allocated FIRST to avoid UB.
+                    // Reading generation from a deallocated slot is undefined behavior.
                     if !(*header.as_ptr()).is_allocated(index) {
+                        // Slot was swept - ALWAYS clear stale mark.
                         (*header.as_ptr()).clear_mark_atomic(index);
                         return;
                     }
+                    // Now safe to read generation from guaranteed allocated slot
+                    let marked_generation = (*ptr.as_ptr()).generation();
                     if (*ptr.as_ptr()).generation() != marked_generation {
                         (*header.as_ptr()).clear_mark_atomic(index);
                         return;

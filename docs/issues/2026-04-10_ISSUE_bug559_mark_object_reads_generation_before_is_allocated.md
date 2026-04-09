@@ -1,7 +1,12 @@
 # [Bug]: mark_object reads generation before is_allocated check - UB from deallocated slot access
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
+
+## Fix Applied
+
+**Date:** 2026-04-10
+**Fix:** Applied the same pattern to `mark_object_minor` (gc/gc.rs:2101-2118). Note: `mark_object` was already fixed (lines 2420-2436 show "FIX bug559" comment). The bug was in `mark_object_minor` which had the same pattern.
 
 ## 📊 Threat Model Assessment
 
@@ -146,6 +151,6 @@ An attacker could potentially manipulate GC timing to cause stale marks to persi
 
 ## Related Issues
 
-- bug554: mark_object reads gen from deallocated slot (Status: Open, but claims Fixed in header)
+- bug554: mark_object reads gen from deallocated slot (Status: Fixed - `mark_object` already had fix at 2420-2436)
 - bug557: mark_and_trace_incremental fixed correctly - same pattern
-- bug551: mark_object_minor same bug (Status: Fixed)
+- bug551: mark_object_minor same bug (Status: Fixed - `mark_object_minor` fixed 2026-04-10 at gc.rs:2101-2118)
