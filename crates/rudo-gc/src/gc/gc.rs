@@ -2478,12 +2478,11 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
                         return;
                     }
                     if (*ptr.as_ptr()).generation() != marked_generation {
-                        // FIX bug519: Check is_allocated to distinguish swept from swept+reused.
-                        // If slot is still allocated, mark belongs to new object - don't clear.
-                        // If slot is not allocated, we should clear the stale mark.
-                        if !(*header.as_ptr()).is_allocated(idx) {
-                            (*header.as_ptr()).clear_mark_atomic(idx);
-                        }
+                        // FIX bug549: When generation mismatch, the old object was marked but
+                        // the new object in the reused slot was NOT traced by this marking.
+                        // Clear the stale mark to prevent incorrect object retention.
+                        // (The bug519 fix only handled the slot-not-allocated case)
+                        (*header.as_ptr()).clear_mark_atomic(idx);
                         return;
                     }
                     // FIX bug547: Skip objects under construction (e.g. Gc::new_cyclic).
