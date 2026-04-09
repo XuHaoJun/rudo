@@ -2414,13 +2414,15 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
                         return; // Already marked by another thread, no push needed
                     }
                     Ok(true) => {
-                        let marked_generation = (*ptr.as_ptr()).generation();
+                        // FIX bug559: Check is_allocated FIRST to avoid UB.
+                        // Reading generation from a deallocated slot is undefined behavior.
                         if !(*header.as_ptr()).is_allocated(idx) {
-                            // FIX bug554: Do NOT read generation from deallocated slot.
                             // Slot was swept - ALWAYS clear stale mark.
                             (*header.as_ptr()).clear_mark_atomic(idx);
                             return;
                         }
+                        // Now safe to read generation from guaranteed allocated slot
+                        let marked_generation = (*ptr.as_ptr()).generation();
                         if (*ptr.as_ptr()).generation() != marked_generation {
                             (*header.as_ptr()).clear_mark_atomic(idx);
                             return;
