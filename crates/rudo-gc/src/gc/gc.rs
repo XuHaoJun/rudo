@@ -2416,10 +2416,12 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
                     Ok(true) => {
                         let marked_generation = (*ptr.as_ptr()).generation();
                         if !(*header.as_ptr()).is_allocated(idx) {
-                            let current_generation = (*ptr.as_ptr()).generation();
-                            if current_generation != marked_generation {
-                                return;
-                            }
+                            // FIX bug554: Do NOT read generation from deallocated slot.
+                            // Slot was swept - ALWAYS clear stale mark.
+                            (*header.as_ptr()).clear_mark_atomic(idx);
+                            return;
+                        }
+                        if (*ptr.as_ptr()).generation() != marked_generation {
                             (*header.as_ptr()).clear_mark_atomic(idx);
                             return;
                         }
