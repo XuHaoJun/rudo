@@ -2459,16 +2459,19 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
             match (*header.as_ptr()).try_mark(idx) {
                 Ok(false) => {
                     if !(*header.as_ptr()).is_allocated(idx) {
+                        // FIX bug552: Slot was swept - clear stale mark before returning.
+                        // Even though another thread marked it, the mark is stale now.
+                        (*header.as_ptr()).clear_mark_atomic(idx);
                         return;
                     }
                     return; // Already marked by another thread, no push needed
                 }
                 Ok(true) => {
-                    // FIX BUGXXX: Read generation BEFORE is_allocated check to avoid UB.
+                    // FIX bug552: Read generation BEFORE is_allocated check to avoid UB.
                     // Reading from a deallocated slot is undefined behavior.
                     let marked_generation = (*ptr.as_ptr()).generation();
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        // FIX BUGXXX: Slot was swept - ALWAYS clear stale mark when slot not allocated.
+                        // FIX bug552: Slot was swept - ALWAYS clear stale mark when slot not allocated.
                         // The generation was captured while slot was still valid.
                         // When slot is not allocated, the mark is stale and must be cleared.
                         (*header.as_ptr()).clear_mark_atomic(idx);
