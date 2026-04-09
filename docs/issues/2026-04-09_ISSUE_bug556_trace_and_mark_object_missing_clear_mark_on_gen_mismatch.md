@@ -1,7 +1,7 @@
 # [Bug]: trace_and_mark_object missing clear_mark_atomic on generation mismatch (bug556)
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -125,9 +125,22 @@ In a concurrent scenario, an attacker could potentially manipulate allocation pa
 
 ---
 
-## 相關 Issue
+## 驗證記錄
 
-- bug426: trace_and_mark_object missing generation check before trace_fn (original fix)
-- bug549: mark_and_trace_incremental missing clear_mark on gen mismatch (similar bug)
-- bug546: mark_object_minor missing clear_mark on gen mismatch (similar bug, FIXED)
-- bug555: mark_object_black reads generation from deallocated slot (similar pattern)
+**驗證日期:** 2026-04-09 (agent: opencode)
+
+### 驗證結果
+
+Code review of `crates/rudo-gc/src/gc/incremental.rs:785-791`:
+
+```rust
+// FIX bug556: Also clear the stale mark so it doesn't persist on the new object.
+if (*gc_box.as_ptr()).generation() != marked_generation {
+    (*header.as_ptr()).clear_mark_atomic(idx);
+    return;
+}
+```
+
+The fix is already applied - `clear_mark_atomic(idx)` is called before return when generation mismatch is detected. This matches the pattern from `mark_object_minor` (bug546) and `mark_and_trace_incremental` (bug549).
+
+**Status: Fixed** - No further action needed.
