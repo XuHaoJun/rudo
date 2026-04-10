@@ -923,9 +923,9 @@ pub struct WeakCrossThreadHandle<T: Trace + 'static> {
     pub(crate) origin_thread: ThreadId,
 }
 
-unsafe impl<T: Trace + 'static> Send for WeakCrossThreadHandle<T> {}
+unsafe impl<T: Trace + Send + Sync + 'static> Send for WeakCrossThreadHandle<T> {}
 
-unsafe impl<T: Trace + 'static> Sync for WeakCrossThreadHandle<T> {}
+unsafe impl<T: Trace + Send + Sync + 'static> Sync for WeakCrossThreadHandle<T> {}
 
 impl<T: Trace + 'static> WeakCrossThreadHandle<T> {
     /// Returns the thread where this handle was created.

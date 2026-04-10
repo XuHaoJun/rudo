@@ -1027,15 +1027,8 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
     }
 }
 
-// SAFETY: GcBoxWeakRef<T> is Send + Sync because:
-// - ptr: AtomicNullable<GcBox<T>> is Send + Sync (atomic pointer)
-// - generation: u32 is Send + Sync (plain u32)
-// - T: Trace + 'static bound ensures no non-Send/Sync types in the generic
-#[allow(clippy::non_send_fields_in_send_ty)]
-unsafe impl<T: Trace + 'static> Send for GcBoxWeakRef<T> {}
-// SAFETY: Same rationale as Send impl above.
-#[allow(clippy::non_send_fields_in_send_ty)]
-unsafe impl<T: Trace + 'static> Sync for GcBoxWeakRef<T> {}
+unsafe impl<T: Trace + Send + Sync + 'static> Send for GcBoxWeakRef<T> {}
+unsafe impl<T: Trace + Send + Sync + 'static> Sync for GcBoxWeakRef<T> {}
 
 // ============================================================================
 // Nullable - A nullable pointer to unsized types
@@ -1169,6 +1162,9 @@ impl<T: Sized> Clone for AtomicNullable<T> {
         }
     }
 }
+
+unsafe impl<T: Sized> Send for AtomicNullable<T> {}
+unsafe impl<T: Sized> Sync for AtomicNullable<T> {}
 
 // ============================================================================
 // Gc<T> - The garbage-collected smart pointer
