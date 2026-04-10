@@ -445,6 +445,7 @@ fn test_cross_thread_satb_during_active_gc() {
 ///    buffer is reachable with only 3 pushes.
 /// 2. Pushes three synthetic cross-thread SATB entries (one per tier).
 /// 3. Asserts that flushing recovers all three entries — none were dropped.
+#[cfg(feature = "test-util")]
 #[test]
 fn test_cross_thread_satb_dual_overflow_no_entry_loss() {
     use rudo_gc::GcBox;
