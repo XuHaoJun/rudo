@@ -2341,6 +2341,7 @@ impl LocalHeap {
             // Clear the free list head to avoid leaving corrupt state; sweep will rebuild.
             // SAFETY: Caller guarantees header is valid.
             let _ = unsafe { (*header).compare_exchange_free_list(Some(idx), None) };
+            unsafe { (*header).clear_allocated(idx as usize) };
             return None;
         }
         // SAFETY: Caller guarantees header is valid.
