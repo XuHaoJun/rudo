@@ -2229,8 +2229,13 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) {
                             (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                             (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
                             (*gc_box_ptr).set_dead();
-                            (*header).clear_allocated(i);
                         }
+                        // FIX bug567: Always clear allocated bit for slots with weak_count > 0.
+                        // Even if dead_flag is already set (from a previous GC cycle),
+                        // the slot should be freed. Otherwise, when weak_count later
+                        // becomes 0, sweep_phase1 will skip the slot (dead_flag == true)
+                        // and the slot will never be reclaimed.
+                        (*header).clear_allocated(i);
                     } else {
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
                         (*gc_box_ptr).set_dead();
