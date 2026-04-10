@@ -2147,7 +2147,11 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
                     visitor.objects_marked += 1;
                     break;
                 }
-                Err(()) => {} // CAS failed, retry
+                Err(()) => {
+                    if !(*header.as_ptr()).is_allocated(index) {
+                        return;
+                    }
+                }
             }
         }
 
@@ -2458,7 +2462,11 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
                         visitor.objects_marked += 1;
                         break;
                     }
-                    Err(()) => {} // CAS failed, retry
+                    Err(()) => {
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            return;
+                        }
+                    }
                 }
             }
         } else {
@@ -2532,7 +2540,11 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
                     }
                     break;
                 }
-                Err(()) => {} // CAS failed, retry
+                Err(()) => {
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        return;
+                    }
+                }
             }
         }
     } else {
