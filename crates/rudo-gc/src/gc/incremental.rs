@@ -1010,7 +1010,18 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                         #[allow(clippy::unnecessary_cast)]
                         #[allow(clippy::ptr_as_ptr)]
                         let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-                        // Read generation after successful mark to detect slot reuse (bug336).
+
+                        // FIX bug561: Check is_allocated BEFORE reading generation.
+                        // Must verify slot is still allocated before reading any GcBox fields.
+                        // Matches worker_mark_loop (marker.rs:909) pattern.
+                        // If slot was swept after try_mark, we can't reliably detect reuse,
+                        // so we clear the mark to be safe.
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
+
+                        // Now safe to read generation from guaranteed allocated slot
                         let marked_generation = unsafe { (*gc_box_ptr).generation() };
 
                         // FIX bug528: Re-check is_allocated to fix TOCTOU with lazy sweep.
