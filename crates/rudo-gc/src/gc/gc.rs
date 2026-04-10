@@ -1237,6 +1237,14 @@ unsafe fn mark_and_push_to_worker_queue(
                         Err(()) => {} // CAS failed, retry
                     }
                 }
+                if (*gc_box.as_ptr()).is_under_construction() {
+                    (*header.as_ptr()).clear_mark_atomic(idx);
+                    return;
+                }
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    (*header.as_ptr()).clear_mark_atomic(idx);
+                    return;
+                }
             }
         }
         let worker_idx = gc_box.as_ptr() as usize % num_workers;
