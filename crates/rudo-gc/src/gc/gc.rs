@@ -1234,7 +1234,14 @@ unsafe fn mark_and_push_to_worker_queue(
                             }
                             break;
                         }
-                        Err(()) => {} // CAS failed, retry
+                        Err(()) => {
+                            // FIX bug573: Check is_allocated before retry.
+                            // If CAS failed because lazy sweep deallocated the slot,
+                            // retrying on a deallocated slot is UB.
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                return;
+                            }
+                        }
                     }
                 }
                 if (*gc_box.as_ptr()).is_under_construction() {
