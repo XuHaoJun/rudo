@@ -1,7 +1,7 @@
 # [Bug]: GcThreadSafeCell inconsistent Sync trait bound
 
-**Status:** Open
-**Tags:** Verified
+**Status:** Fixed
+**Tags:** Verified, Soundness
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -110,3 +110,20 @@ This is a clear soundness violation. The `Sync` trait indicates that `&T` can be
 
 **Geohot (Exploit 觀點):**
 From an exploit perspective, this is a data race condition baked into the type system. An attacker could spawn two threads that both hold shared references to a `GcThreadSafeCell<Cell<T>>`, then both call `.get()` or `.set()` simultaneously. This violates Rust's aliasing rules and could lead to data corruption or memory safety issues depending on what operations are performed on the `Cell`.
+
+---
+
+## 修復紀錄 (Fix Applied)
+
+**Date:** 2026-03-31
+**Commit:** 514fc91
+**Fix:** Changed trait bounds in `cell.rs:1593-1595` to require `T: Send + Sync`:
+
+```rust
+unsafe impl<T: Trace + Send + Sync + ?Sized> Send for GcThreadSafeCell<T> {}
+unsafe impl<T: Trace + Send + Sync + ?Sized> Sync for GcThreadSafeCell<T> {}
+```
+
+This matches `GcRwLock` and `GcMutex` and correctly requires `T: Sync` for `Sync` impl.
+
+**Verification:** `./clippy.sh` passes.
