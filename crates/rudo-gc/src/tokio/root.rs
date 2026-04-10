@@ -81,7 +81,19 @@ impl GcRootSet {
                 v.insert((1, generation));
             }
             Entry::Occupied(o) => {
-                o.into_mut().0 += 1;
+                let current_generation = crate::heap::try_with_heap(|heap| unsafe {
+                    crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8)
+                        .map_or(0u32, |gc_box| gc_box.as_ref().generation())
+                })
+                .unwrap_or(0);
+
+                let entry = o.into_mut();
+                if entry.1 == current_generation {
+                    entry.0 += 1;
+                } else {
+                    entry.0 = 1;
+                    entry.1 = current_generation;
+                }
             }
         }
 
