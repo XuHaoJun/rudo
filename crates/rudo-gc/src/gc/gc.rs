@@ -2224,22 +2224,15 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) {
                     let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
                     if weak_count > 0 {
-                        // Has weak refs - drop value but keep allocation
                         if !dead_flag {
                             ((*gc_box_ptr).drop_fn)(obj_ptr);
                             (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                             (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
                             (*gc_box_ptr).set_dead();
+                            (*header).clear_allocated(i);
                         }
                     } else {
-                        // No weak refs - will be fully reclaimed
-                        // Execute drop_fn now (phase 1)
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
-
-                        // CRITICAL FIX: Mark as dead so phase 2 knows to reclaim.
-                        // Without this, has_dead_flag() returns false in phase 2,
-                        // objects are never reclaimed, and the next GC cycle will
-                        // try to drop them again - use-after-free!
                         (*gc_box_ptr).set_dead();
                     }
                 }
