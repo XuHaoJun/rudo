@@ -1344,8 +1344,11 @@ fn mark_minor_roots_parallel(
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                // Add to first worker queue (will be distributed by work stealing)
-                worker_queues[0].push(gc_box_ptr);
+                #[allow(clippy::ptr_as_ptr)]
+                let gc_box = std::ptr::NonNull::new(gc_box_ptr as *mut GcBox<()>);
+                if let Some(gc_box) = gc_box {
+                    mark_and_push_to_worker_queue(obj_ptr, gc_box, &worker_queues, num_workers);
+                }
                 continue; // Large objects don't use per-object dirty tracking
             }
             dirty_pages.push(header);
@@ -1360,7 +1363,11 @@ fn mark_minor_roots_parallel(
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                worker_queues[0].push(gc_box_ptr);
+                #[allow(clippy::ptr_as_ptr)]
+                let gc_box = std::ptr::NonNull::new(gc_box_ptr as *mut GcBox<()>);
+                if let Some(gc_box) = gc_box {
+                    mark_and_push_to_worker_queue(obj_ptr, gc_box, &worker_queues, num_workers);
+                }
             } else {
                 dirty_pages.push(header);
             }
@@ -1381,7 +1388,11 @@ fn mark_minor_roots_parallel(
                     let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                    worker_queues[worker_idx].push(gc_box_ptr);
+                    #[allow(clippy::ptr_as_ptr)]
+                    let gc_box = std::ptr::NonNull::new(gc_box_ptr as *mut GcBox<()>);
+                    if let Some(gc_box) = gc_box {
+                        mark_and_push_to_worker_queue(obj_ptr, gc_box, &worker_queues, num_workers);
+                    }
                 }
             }
         }
