@@ -815,7 +815,17 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return Self::null();
             }
 
-            // Get generation BEFORE inc_weak to detect slot reuse (bug354).
+            // FIX bug564: Check is_allocated BEFORE reading generation.
+            // Must verify slot is still allocated before reading any GcBox fields.
+            // Same pattern as bug561/bug562 fixes.
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return Self::null();
+                }
+            }
+
+            // Now safe to read generation from guaranteed allocated slot
             let pre_generation = (*ptr.as_ptr()).generation();
 
             (*ptr.as_ptr()).inc_weak();
@@ -824,17 +834,6 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if pre_generation != (*ptr.as_ptr()).generation() {
                 (*ptr.as_ptr()).dec_weak();
                 return Self::null();
-            }
-
-            // Check is_allocated AFTER inc_weak + generation check.
-            // The generation check above detects slot reuse and undoes inc_weak.
-            // This is_allocated check is a secondary safety net (bug354).
-            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
-                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
-                if !(*header.as_ptr()).is_allocated(idx) {
-                    (*ptr.as_ptr()).dec_weak();
-                    return Self::null();
-                }
             }
         }
         Self {
