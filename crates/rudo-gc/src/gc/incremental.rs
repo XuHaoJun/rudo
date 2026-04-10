@@ -592,10 +592,18 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
     }
 
     while let Some((ptr, enqueue_generation)) = visitor.worklist.pop() {
-        // FIX bug512: Verify slot wasn't reused since enqueue.
-        // The generation was captured when the object was pushed to worklist.
-        // If slot was swept and reused, generation will differ.
         unsafe {
+            // FIX bug565: Check is_allocated BEFORE reading generation.
+            // Must verify slot is still allocated before reading any GcBox fields.
+            // Matches pattern from bug561/bug562 fixes.
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    continue; // Slot was swept - skip this entry
+                }
+            }
+
+            // Now safe to read generation from guaranteed allocated slot
             let current_generation = (*ptr.as_ptr()).generation();
             if current_generation != enqueue_generation {
                 continue; // Slot was reused - skip this entry
@@ -803,9 +811,16 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
     ((*gc_box.as_ptr()).trace_fn)(data_ptr, &mut visitor);
 
     while let Some((child_ptr, enqueue_generation)) = visitor.worklist.pop() {
-        // FIX bug512: Verify slot wasn't reused since enqueue.
-        // The generation was captured when the object was pushed to worklist.
-        // If slot was swept and reused, generation will differ.
+        // FIX bug565: Check is_allocated BEFORE reading generation.
+        // Must verify slot is still allocated before reading any GcBox fields.
+        if let Some(idx) = crate::heap::ptr_to_object_index(child_ptr.as_ptr() as *const u8) {
+            let header = crate::heap::ptr_to_page_header(child_ptr.as_ptr() as *const u8);
+            if !(*header.as_ptr()).is_allocated(idx) {
+                continue; // Slot was swept - skip this entry
+            }
+        }
+
+        // Now safe to read generation from guaranteed allocated slot
         let current_generation = (*child_ptr.as_ptr()).generation();
         if current_generation != enqueue_generation {
             continue; // Slot was reused - skip this entry
