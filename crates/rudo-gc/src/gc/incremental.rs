@@ -986,8 +986,16 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
     }
 
     while let Some((ptr, enqueue_generation)) = visitor.worklist.pop() {
-        // FIX bug512: Verify slot wasn't reused since enqueue.
         unsafe {
+            // FIX bug565: Check is_allocated BEFORE reading generation.
+            // Must verify slot is still allocated before reading any GcBox fields.
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    continue; // Slot was swept - skip this entry
+                }
+            }
+
             let current_generation = (*ptr.as_ptr()).generation();
             if current_generation != enqueue_generation {
                 continue; // Slot was reused - skip this entry
