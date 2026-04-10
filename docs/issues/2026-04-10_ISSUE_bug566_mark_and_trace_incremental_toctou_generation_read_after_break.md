@@ -1,7 +1,7 @@
 # [Bug]: mark_and_trace_incremental TOCTOU - generation read after loop without is_allocated check
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

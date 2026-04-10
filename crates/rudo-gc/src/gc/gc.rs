@@ -2496,18 +2496,24 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
                         return;
                     }
                     visitor.objects_marked += 1;
+                    // FIX bug566: Re-verify is_allocated after successful mark, before reading generation.
+                    // The slot could have been deallocated by lazy sweep between break and read.
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        (*header.as_ptr()).clear_mark_atomic(idx);
+                        return;
+                    }
+                    let enqueue_generation = (*ptr.as_ptr()).generation();
+                    if visitor.kind != VisitorKind::Minor || enqueue_generation == 0 {
+                        visitor.worklist.push((ptr, enqueue_generation));
+                    }
                     break;
                 }
                 Err(()) => {} // CAS failed, retry
             }
         }
     } else {
+        #[allow(clippy::needless_return)]
         return;
-    }
-
-    let enqueue_generation = (*ptr.as_ptr()).generation();
-    if visitor.kind != VisitorKind::Minor || enqueue_generation == 0 {
-        visitor.worklist.push((ptr, enqueue_generation));
     }
 }
 
