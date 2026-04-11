@@ -835,6 +835,17 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 (*ptr.as_ptr()).dec_weak();
                 return Self::null();
             }
+
+            // FIX bug600: Second is_allocated check AFTER inc_weak to catch slot reuse
+            // that bypassed the generation check (defense-in-depth).
+            // Matches as_weak() pattern (bug504 fix).
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    (*ptr.as_ptr()).dec_weak();
+                    return Self::null();
+                }
+            }
         }
         Self {
             ptr: AtomicNullable::new(ptr),
