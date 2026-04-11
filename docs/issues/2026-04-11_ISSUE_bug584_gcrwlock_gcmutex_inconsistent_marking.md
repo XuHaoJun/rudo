@@ -1,7 +1,7 @@
 # [Bug]: GcRwLock/GcMutex inconsistent with GcCell/GcThreadSafeCell - NEW pointer marking
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -134,3 +134,19 @@ The inconsistency itself is a code smell. If the API contract says these types s
 
 **Geohot (Exploit 觀點):**
 The race condition (barrier becoming active between check and marking) is similar to TOCTOU issues. The unconditional marking approach is defense-in-depth against timing attacks.
+
+---
+
+## 修復紀錄 (2026-04-11)
+
+**修復人員:** opencode
+
+**修復內容:**
+- `sync.rs:295`: GcRwLock::write() - 將 `mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active)` 改為 `mark_gc_ptrs_immediate(&*guard, true)`
+- `sync.rs:338`: GcRwLock::try_write() - 同上
+- `sync.rs:605`: GcMutex::lock() - 同上
+- `sync.rs:646`: GcMutex::try_lock() - 同上
+
+**驗證:**
+- `cargo build --workspace` 編譯成功
+- `./clippy.sh` 通過

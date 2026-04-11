@@ -292,7 +292,7 @@ impl<T: ?Sized> GcRwLock<T> {
         // between lock acquisition and drop, OLD values would not be recorded.
         record_satb_old_values_with_state(&*guard, true);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
-        mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
+        mark_gc_ptrs_immediate(&*guard, true);
         GcRwLockWriteGuard {
             guard,
             _marker: PhantomData,
@@ -335,7 +335,7 @@ impl<T: ?Sized> GcRwLock<T> {
             // between lock acquisition and drop, OLD values would not be recorded.
             record_satb_old_values_with_state(&*guard, true);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
-            mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
+            mark_gc_ptrs_immediate(&*guard, true);
             GcRwLockWriteGuard {
                 guard,
                 _marker: PhantomData,
@@ -602,7 +602,7 @@ impl<T: ?Sized> GcMutex<T> {
         // between lock acquisition and drop, OLD values would not be recorded.
         record_satb_old_values_with_state(&*guard, true);
         self.trigger_write_barrier_with_state(generational_active, incremental_active);
-        mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
+        mark_gc_ptrs_immediate(&*guard, true);
         GcMutexGuard {
             guard,
             _marker: PhantomData,
@@ -643,7 +643,7 @@ impl<T: ?Sized> GcMutex<T> {
             // between lock acquisition and drop, OLD values would not be recorded.
             record_satb_old_values_with_state(&*guard, true);
             self.trigger_write_barrier_with_state(generational_active, incremental_active);
-            mark_gc_ptrs_immediate(&*guard, generational_active || incremental_active);
+            mark_gc_ptrs_immediate(&*guard, true);
             GcMutexGuard {
                 guard,
                 _marker: PhantomData,
