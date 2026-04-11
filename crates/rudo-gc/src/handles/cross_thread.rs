@@ -510,6 +510,34 @@ impl<T: Trace + 'static> GcHandle<T> {
                     panic!("GcHandle::downgrade: handle has been unregistered");
                 }
                 unsafe {
+                    // FIX bug580: Check flags BEFORE inc_weak to avoid modifying an invalid object.
+                    // Matches pattern in resolve_impl() and clone() - all checks before increment.
+                    let gc_box = &*self.ptr.as_ptr();
+                    if gc_box.has_dead_flag()
+                        || gc_box.dropping_state() != 0
+                        || gc_box.is_under_construction()
+                    {
+                        panic!(
+                            "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle (orphan)"
+                        );
+                    }
+
+                    // FIX bug580: Check is_allocated BEFORE inc_weak to avoid TOCTOU.
+                    if let Some(idx) =
+                        crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
+                    {
+                        let header =
+                            crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            drop(orphan);
+                            return WeakCrossThreadHandle {
+                                weak: GcBoxWeakRef::null(),
+                                origin_tcb: Weak::clone(&self.origin_tcb),
+                                origin_thread: self.origin_thread,
+                            };
+                        }
+                    }
+
                     let pre_generation = (*self.ptr.as_ptr()).generation();
                     (*self.ptr.as_ptr()).inc_weak();
                     if pre_generation != (*self.ptr.as_ptr()).generation() {
@@ -521,31 +549,6 @@ impl<T: Trace + 'static> GcHandle<T> {
                             origin_thread: self.origin_thread,
                         };
                     }
-                    if let Some(idx) =
-                        crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
-                    {
-                        let header =
-                            crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                        if !(*header.as_ptr()).is_allocated(idx) {
-                            (*self.ptr.as_ptr()).dec_weak();
-                            drop(orphan);
-                            return WeakCrossThreadHandle {
-                                weak: GcBoxWeakRef::null(),
-                                origin_tcb: Weak::clone(&self.origin_tcb),
-                                origin_thread: self.origin_thread,
-                            };
-                        }
-                    }
-                    let gc_box = &*self.ptr.as_ptr();
-                    if gc_box.has_dead_flag()
-                        || gc_box.dropping_state() != 0
-                        || gc_box.is_under_construction()
-                    {
-                        (*self.ptr.as_ptr()).dec_weak();
-                        panic!(
-                            "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle (orphan)"
-                        );
-                    }
                 }
                 drop(orphan);
                 return WeakCrossThreadHandle {
@@ -555,6 +558,32 @@ impl<T: Trace + 'static> GcHandle<T> {
                 };
             }
             unsafe {
+                // FIX bug580: Check flags BEFORE inc_weak to avoid modifying an invalid object.
+                // Matches pattern in resolve_impl() and clone() - all checks before increment.
+                let gc_box = &*self.ptr.as_ptr();
+                if gc_box.has_dead_flag()
+                    || gc_box.dropping_state() != 0
+                    || gc_box.is_under_construction()
+                {
+                    panic!(
+                        "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle"
+                    );
+                }
+
+                // FIX bug580: Check is_allocated BEFORE inc_weak to avoid TOCTOU.
+                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
+                {
+                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        drop(roots);
+                        return WeakCrossThreadHandle {
+                            weak: GcBoxWeakRef::null(),
+                            origin_tcb: Weak::clone(&self.origin_tcb),
+                            origin_thread: self.origin_thread,
+                        };
+                    }
+                }
+
                 // Get generation BEFORE inc_weak to detect slot reuse (bug351).
                 let pre_generation = (*self.ptr.as_ptr()).generation();
 
@@ -570,30 +599,6 @@ impl<T: Trace + 'static> GcHandle<T> {
                         origin_thread: self.origin_thread,
                     };
                 }
-
-                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
-                {
-                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                    if !(*header.as_ptr()).is_allocated(idx) {
-                        (*self.ptr.as_ptr()).dec_weak();
-                        drop(roots);
-                        return WeakCrossThreadHandle {
-                            weak: GcBoxWeakRef::null(),
-                            origin_tcb: Weak::clone(&self.origin_tcb),
-                            origin_thread: self.origin_thread,
-                        };
-                    }
-                }
-                let gc_box = &*self.ptr.as_ptr();
-                if gc_box.has_dead_flag()
-                    || gc_box.dropping_state() != 0
-                    || gc_box.is_under_construction()
-                {
-                    (*self.ptr.as_ptr()).dec_weak();
-                    panic!(
-                        "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle"
-                    );
-                }
             }
             drop(roots);
         } else {
@@ -602,6 +607,32 @@ impl<T: Trace + 'static> GcHandle<T> {
                 panic!("GcHandle::downgrade: handle has been unregistered");
             }
             unsafe {
+                // FIX bug580: Check flags BEFORE inc_weak to avoid modifying an invalid object.
+                // Matches pattern in resolve_impl() and clone() - all checks before increment.
+                let gc_box = &*self.ptr.as_ptr();
+                if gc_box.has_dead_flag()
+                    || gc_box.dropping_state() != 0
+                    || gc_box.is_under_construction()
+                {
+                    panic!(
+                        "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle (orphan)"
+                    );
+                }
+
+                // FIX bug580: Check is_allocated BEFORE inc_weak to avoid TOCTOU.
+                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
+                {
+                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        drop(orphan);
+                        return WeakCrossThreadHandle {
+                            weak: GcBoxWeakRef::null(),
+                            origin_tcb: Weak::clone(&self.origin_tcb),
+                            origin_thread: self.origin_thread,
+                        };
+                    }
+                }
+
                 // Get generation BEFORE inc_weak to detect slot reuse (bug351).
                 let pre_generation = (*self.ptr.as_ptr()).generation();
 
@@ -616,30 +647,6 @@ impl<T: Trace + 'static> GcHandle<T> {
                         origin_tcb: Weak::clone(&self.origin_tcb),
                         origin_thread: self.origin_thread,
                     };
-                }
-
-                if let Some(idx) = crate::heap::ptr_to_object_index(self.ptr.as_ptr() as *const u8)
-                {
-                    let header = crate::heap::ptr_to_page_header(self.ptr.as_ptr() as *const u8);
-                    if !(*header.as_ptr()).is_allocated(idx) {
-                        (*self.ptr.as_ptr()).dec_weak();
-                        drop(orphan);
-                        return WeakCrossThreadHandle {
-                            weak: GcBoxWeakRef::null(),
-                            origin_tcb: Weak::clone(&self.origin_tcb),
-                            origin_thread: self.origin_thread,
-                        };
-                    }
-                }
-                let gc_box = &*self.ptr.as_ptr();
-                if gc_box.has_dead_flag()
-                    || gc_box.dropping_state() != 0
-                    || gc_box.is_under_construction()
-                {
-                    (*self.ptr.as_ptr()).dec_weak();
-                    panic!(
-                        "GcHandle::downgrade: cannot downgrade a dead, dropping, or under construction GcHandle (orphan)"
-                    );
                 }
             }
             drop(orphan);
