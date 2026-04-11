@@ -1,7 +1,15 @@
 # [Bug]: GcHandle::downgrade calls inc_weak BEFORE is_under_construction check
 
-**Status:** Open
-**Tags:** Verified
+**Status:** Fixed
+**Tags:** Verified, Fixed
+
+## 修復紀錄 (Fix Applied)
+
+**Date:** 2026-04-11
+**Commit:** 28027ff
+**Fix:** Moved `is_under_construction()`, `has_dead_flag()`, `dropping_state()` checks BEFORE `inc_weak()` call in all three code paths of `GcHandle::downgrade()`. Also added `is_allocated` check before `inc_weak()`. This matches the pattern used in `resolve_impl()` and `clone()` where all checks come before the increment.
+
+**Code Change:** The fix ensures that `inc_weak()` is only called after all validation checks pass, preventing modification of potentially invalid objects.
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
