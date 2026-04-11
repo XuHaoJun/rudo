@@ -1468,9 +1468,10 @@ impl<T: Trace> Gc<T> {
                 unsafe {
                     let raw_weak_count = (*self.gc_box_ptr.as_ptr()).weak_count_raw();
                     let actual_count = raw_weak_count & !GcBox::<T>::FLAGS_MASK;
-                    if actual_count > 0
-                        || (raw_weak_count & GcBox::<T>::UNDER_CONSTRUCTION_FLAG) != 0
-                    {
+                    // FIX bug109: Only call mark_dead() if there are actual weak references.
+                    // UNDER_CONSTRUCTION_FLAG indicates construction is in progress, not that
+                    // weak refs exist. If actual_count == 0, we should dealloc directly.
+                    if actual_count > 0 {
                         (*self.gc_box_ptr.as_ptr()).mark_dead();
                     } else {
                         with_heap(|heap| {
@@ -2104,9 +2105,20 @@ impl<T: Trace> Deref for Gc<T> {
         unsafe {
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                // FIX bug583: Check generation BEFORE is_allocated to detect slot reuse.
+                // If slot was swept and reused, generation will have changed.
+                // We must detect this BEFORE the is_allocated check to avoid
+                // type confusion (accessing new object through old Gc pointer).
+                let pre_generation = (*gc_box_ptr).generation();
                 assert!(
                     (*header.as_ptr()).is_allocated(idx),
                     "Gc::deref: slot has been swept and reused"
+                );
+                // Verify generation hasn't changed (slot was not reused during check).
+                assert_eq!(
+                    pre_generation,
+                    (*gc_box_ptr).generation(),
+                    "Gc::deref: slot was reused during deref (generation mismatch)"
                 );
             }
         }
