@@ -773,10 +773,15 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    // Don't call dec_ref - slot may be reused (bug133)
+                    // FIX bug601: Call undo_inc_ref to avoid leaking reference count.
+                    // The generation check above catches slot REUSE (where generation would change).
+                    // If we reach here with generation unchanged but is_allocated=false,
+                    // the slot was simply swept - undo_inc_ref is safe.
+                    GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
                 }
             }
+            crate::gc::notify_created_gc();
             Some(Gc {
                 ptr: AtomicNullable::new(ptr),
                 _marker: PhantomData,
@@ -1025,7 +1030,11 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    // Don't call dec_ref - slot may be reused (bug133)
+                    // FIX bug601: Call undo_inc_ref to avoid leaking reference count.
+                    // The generation check above catches slot REUSE (where generation would change).
+                    // If we reach here with generation unchanged but is_allocated=false,
+                    // the slot was simply swept - undo_inc_ref is safe.
+                    GcBox::undo_inc_ref(ptr.as_ptr());
                     return None;
                 }
             }
