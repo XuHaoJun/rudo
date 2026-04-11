@@ -76,9 +76,9 @@ pub struct GcHandle<T: Trace + 'static> {
     pub(crate) handle_id: HandleId,
 }
 
-unsafe impl<T: Trace + 'static> Send for GcHandle<T> {}
+unsafe impl<T: Trace + Send + Sync + 'static> Send for GcHandle<T> {}
 
-unsafe impl<T: Trace + 'static> Sync for GcHandle<T> {}
+unsafe impl<T: Trace + Send + Sync + 'static> Sync for GcHandle<T> {}
 
 impl<T: Trace + 'static> GcHandle<T> {
     /// Returns the thread where this handle was created.
