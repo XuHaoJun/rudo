@@ -940,7 +940,11 @@ pub fn worker_mark_loop(
                             ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
                             break;
                         }
-                        Err(()) => {}
+                        Err(()) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -1104,7 +1108,11 @@ pub fn worker_mark_loop_with_registry(
                             ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
                             break;
                         }
-                        Err(()) => {}
+                        Err(()) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                break;
+                            }
+                        }
                     }
                 }
             }

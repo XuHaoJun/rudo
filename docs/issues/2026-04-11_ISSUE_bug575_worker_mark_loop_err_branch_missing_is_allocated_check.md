@@ -1,7 +1,7 @@
 # [Bug]: worker_mark_loop CAS retry in Err branch without is_allocated check
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -123,3 +123,31 @@ While the race window is small, an attacker who could influence GC timing might 
 
 - bug574: Same bug pattern in mark_object_minor, mark_object, mark_and_trace_incremental (fixed)
 - bug573: Same bug pattern in mark_and_push_to_worker_queue (fixed)
+
+---
+
+## 修復紀錄 (Fix Applied)
+
+**Date:** 2026-04-11
+**Fix Applied:** Added `is_allocated` check in `Err` branch of `worker_mark_loop` and `worker_mark_loop_with_registry` to prevent UB from deallocated slot access during CAS retry.
+
+**Changes made:**
+
+1. **worker_mark_loop** (gc/marker.rs:943): Added `is_allocated` check in `Err` branch
+2. **worker_mark_loop_with_registry** (gc/marker.rs:1107): Same fix applied
+
+**Before:**
+```rust
+Err(()) => {} // CAS failed, retry
+```
+
+**After:**
+```rust
+Err(()) => {
+    if !(*header.as_ptr()).is_allocated(idx) {
+        break;
+    }
+}
+```
+
+**Verification:** `./clippy.sh` passes.
