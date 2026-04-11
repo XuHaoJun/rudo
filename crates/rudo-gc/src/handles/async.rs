@@ -527,10 +527,17 @@ impl<'scope> AsyncHandleGuard<'scope> {
 ///
 /// # Safety
 ///
-/// `AsyncHandle` is `Send + Sync` because:
-/// 1. The underlying data is GC-allocated and immutable
-/// 2. The scope ID check prevents use-after-free in debug builds
-/// 3. The GC can safely trace handles from any thread
+/// `AsyncHandle<T>: Send` requires `T: Send`. The handle itself is just a raw pointer
+/// and scope ID that can be safely sent to another thread. The actual data access
+/// through `get()` requires the calling thread to be a GC thread.
+///
+/// `AsyncHandle<T>: Sync` requires `T: Sync`. This ensures that shared references
+/// to the handle (`&AsyncHandle<T>`) are only available when the inner data can
+/// be safely accessed from multiple threads.
+///
+/// The underlying data is GC-allocated and immutable from the Rust type system's
+/// perspective (no &mut access), but T may contain interior mutability types
+/// (`Cell`, `RefCell`, etc.) which are accounted for in the Send/Sync bounds.
 ///
 /// # Example
 ///
