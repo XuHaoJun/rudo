@@ -1882,11 +1882,10 @@ impl<T: Trace> Gc<T> {
 
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
-                // Don't call dec_weak when slot swept - it may be reused (bug133)
-                assert!(
-                    (*header.as_ptr()).is_allocated(idx),
-                    "Gc::downgrade: slot was swept during downgrade"
-                );
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    (*gc_box_ptr).dec_weak();
+                    panic!("Gc::downgrade: slot was swept during downgrade");
+                }
             }
         }
         Weak {
