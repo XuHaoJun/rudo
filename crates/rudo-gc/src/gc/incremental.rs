@@ -1106,8 +1106,12 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                         break;
                     }
                     Err(()) => {
-                        // CAS failed - another thread modified this word.
-                        // Retry the CAS to get a consistent view.
+                        // FIX bug581: Check is_allocated before retry to avoid UB from deallocated slot.
+                        // If CAS failed because lazy sweep deallocated the slot, retrying on a
+                        // deallocated slot is UB. Matches scan_page_for_marked_refs (bug576) pattern.
+                        if !(*header).is_allocated(i) {
+                            break;
+                        }
                     }
                 }
             }
