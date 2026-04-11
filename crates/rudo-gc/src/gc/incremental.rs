@@ -907,7 +907,11 @@ unsafe fn scan_page_for_marked_refs(
                         }
                         break;
                     }
-                    Err(()) => {} // CAS failed, retry
+                    Err(()) => {
+                        if !(*header).is_allocated(i) {
+                            break;
+                        }
+                    } // CAS failed, retry
                 }
             }
         }
@@ -1171,7 +1175,11 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
                             }
                             return true;
                         }
-                        Err(()) => {} // CAS failed, retry
+                        Err(()) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                return false;
+                            }
+                        }
                     }
                 }
             }
