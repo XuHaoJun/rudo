@@ -3155,7 +3155,24 @@ pub unsafe fn mark_page_dirty_for_borrow(ptr: *const u8) {
             return;
         }
 
+        let page_addr = ptr_addr & page_mask();
+
         unsafe {
+            if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
+                if ptr_addr >= head_addr + h_size && ptr_addr < head_addr + h_size + size {
+                    let h_ptr = head_addr as *mut PageHeader;
+                    if (*h_ptr).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
+                    (*h_ptr).set_dirty(0);
+                    heap.add_to_dirty_pages(NonNull::new_unchecked(h_ptr));
+                    return;
+                }
+            }
+
             let header = ptr_to_page_header(ptr);
             let h = header.as_ptr();
 
