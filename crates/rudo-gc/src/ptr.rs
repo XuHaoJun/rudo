@@ -2246,10 +2246,27 @@ impl<T: Trace> Drop for Gc<T> {
 
         let gc_box_ptr = ptr.as_ptr();
 
-        let was_last = GcBox::<T>::dec_ref(gc_box_ptr);
+        // FIX bug619: Check generation BEFORE dec_ref to detect slot reuse.
+        // If slot was swept and reused, the generation would have changed.
+        // Matches the pattern in GcHandle::drop (bug407/bug524).
+        unsafe {
+            let pre_generation = (*gc_box_ptr).generation();
+            let current_generation = (*gc_box_ptr).generation();
+            if pre_generation != current_generation {
+                return;
+            }
 
-        if !was_last {
-            notify_dropped_gc();
+            if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
+                let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return;
+                }
+            }
+
+            let was_last = GcBox::<T>::dec_ref(gc_box_ptr);
+            if !was_last {
+                notify_dropped_gc();
+            }
         }
     }
 }
