@@ -490,6 +490,9 @@ impl<T: GcCapture + ?Sized> Drop for GcRwLockWriteGuard<'_, T> {
         if generational_active || incremental_active {
             let ptr = std::ptr::from_ref(&*self.guard).cast::<u8>();
             crate::heap::unified_write_barrier(ptr, incremental_active);
+            unsafe {
+                crate::heap::mark_page_dirty_for_borrow(ptr);
+            }
         }
     }
 }
@@ -766,6 +769,9 @@ impl<T: GcCapture + ?Sized> Drop for GcMutexGuard<'_, T> {
         if generational_active || incremental_active {
             let ptr = std::ptr::from_ref(&*self.guard).cast::<u8>();
             crate::heap::unified_write_barrier(ptr, incremental_active);
+            unsafe {
+                crate::heap::mark_page_dirty_for_borrow(ptr);
+            }
         }
     }
 }
