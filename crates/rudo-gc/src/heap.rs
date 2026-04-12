@@ -2914,6 +2914,13 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
+                    // FIX bug604: Third is_allocated check AFTER has_gen_old read - prevents TOCTOU.
+                    // If slot was swept after generation check but before returning,
+                    // we'd return a stale slot index. Matches incremental_write_barrier (bug499)
+                    // and simple_write_barrier small object path (bug535) patterns.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
                 } else {
                     let h = ptr_to_page_header(ptr);
@@ -3120,6 +3127,63 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 std::sync::atomic::fence(Ordering::AcqRel);
                 heap.record_in_remembered_buffer(h);
             }
+        }
+    });
+}
+
+/// Marks a page as dirty for borrow_mut without gen_old check.
+///
+/// This is used by GcCell::borrow_mut to ensure children are traced during minor GC.
+/// Unlike unified_write_barrier, this does NOT check gen_old - it always adds the page
+/// to dirty_pages. This is necessary because the gen_old optimization (bug71) skips
+/// recording OLD→YOUNG references for young pages, but we still need the page in dirty_pages
+/// so children in GcCell<Vec<Gc<T>>> are traced during minor GC.
+///
+/// # Safety
+///
+/// The pointer must be a valid pointer to a GcCell field within the GC heap.
+#[inline]
+#[allow(dead_code)]
+pub unsafe fn mark_page_dirty_for_borrow(ptr: *const u8) {
+    if ptr.is_null() {
+        return;
+    }
+
+    let ptr_addr = ptr as usize;
+    with_heap(|heap| {
+        if ptr_addr < heap.min_addr || ptr_addr >= heap.max_addr {
+            return;
+        }
+
+        unsafe {
+            let header = ptr_to_page_header(ptr);
+            let h = header.as_ptr();
+
+            if (*h).magic != MAGIC_GC_PAGE {
+                return;
+            }
+
+            let block_size = (*h).block_size as usize;
+            let header_size = (*h).header_size as usize;
+            let header_page_addr = h as usize;
+
+            if ptr_addr < header_page_addr + header_size {
+                return;
+            }
+
+            let offset = ptr_addr - (header_page_addr + header_size);
+            let index = offset / block_size;
+            let obj_count = (*h).obj_count as usize;
+            if index >= obj_count {
+                return;
+            }
+
+            if !(*h).is_allocated(index) {
+                return;
+            }
+
+            (*h).set_dirty(index);
+            heap.add_to_dirty_pages(header);
         }
     });
 }

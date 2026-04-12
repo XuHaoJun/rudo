@@ -1,6 +1,6 @@
 # [Bug]: Generation Wraparound 導致 Slot Reuse 檢測失效
 
-**Status:** Open
+**Status:** Invalid
 **Tags:** Unverified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
@@ -132,3 +132,17 @@ if slot_version != marked_slot_version {
 - 理論上可利用：攻擊者可通過大量分配嘗試觸發 wraparound
 - 實際難度：需要 2^32 次分配來保證觸發，實際不可行
 - 建議：專注於更實際的攻擊面
+
+---
+
+## Resolution (2026-04-12)
+
+**Outcome:** Invalid - impractical to reproduce.
+
+**Reasoning:**
+1. **Practical impossibility**: Triggering generation wraparound requires ~4 billion (2^32) allocations to the SAME slot. At modern allocation rates, this would take years of continuous allocation to one slot.
+2. **SATB semantics**: The issue itself acknowledges (line 89) that "Object B IS traced (this is actually correct per SATB!)" - this is expected behavior, not a bug.
+3. **Never verified**: The issue is marked "Unverified" and was documented as a theoretical concern without actual reproduction.
+4. **Risk assessment**: Even if triggered, the risk is low - it could cause incorrect tracing but not memory safety violations.
+
+**Conclusion:** This is a theoretical concern that was documented for completeness but is practically impossible to reproduce. The generation mechanism provides adequate protection for real-world scenarios.

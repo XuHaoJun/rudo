@@ -196,6 +196,15 @@ impl<T: ?Sized> GcCell<T> {
             crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut", incremental_active);
         }
 
+        // FIX bug583: Always mark the page dirty when borrow_mut is called.
+        // The gen_old optimization (bug71) skips recording OLD→YOUNG references when
+        // page is young (gen=0) and gen_old flag is not set. But for minor GC tracing,
+        // we need the page to be in dirty_pages so children in GcCell<Vec<Gc<T>>>
+        // are traced. Without this, children are incorrectly swept.
+        unsafe {
+            crate::heap::mark_page_dirty_for_borrow(ptr);
+        }
+
         let result = self.inner.borrow_mut();
 
         // FIX bug506: Always mark NEW GC pointers unconditionally, matching
