@@ -1081,6 +1081,8 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     {
         let guard = self.inner.lock();
 
+        let ptr = std::ptr::from_ref(self).cast::<u8>();
+
         // Cache barrier states once to avoid TOCTOU between SATB capture
         // and trigger_write_barrier (bug116, bug153)
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
@@ -1115,6 +1117,16 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
         }
 
         self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
+
+        // FIX bug610: Always mark the page dirty when borrow_mut is called.
+        // The gen_old optimization (bug71) skips recording OLD→YOUNG references when
+        // page is young (gen=0) and gen_old flag is not set. But for minor GC tracing,
+        // we need the page to be in dirty_pages so children in GcThreadSafeCell<Vec<Gc<T>>>
+        // are traced. Without this, children are incorrectly swept.
+        // This matches the fix in GcCell::borrow_mut() (bug583).
+        unsafe {
+            crate::heap::mark_page_dirty_for_borrow(ptr);
+        }
 
         // Immediate mark of GC pointers (bug192: match GcCell::borrow_mut behavior).
         // Marking only on Drop creates a race window where another thread's GC can miss
