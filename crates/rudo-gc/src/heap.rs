@@ -2480,15 +2480,14 @@ impl LocalHeap {
                 free_list_head: 0,
             });
 
-            // Initialize all slots with no-op drop
+            // Initialize all slots with proper GcBox header
+            // This fixes the bug where weak_count was uninitialized, causing UB
+            // when clear_gen_old() reads weak_count during slot reuse (try_pop_from_page)
             for i in 0..obj_count {
                 let obj_ptr = ptr.as_ptr().add(h_size + (i * block_size));
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-                std::ptr::addr_of_mut!((*gc_box_ptr).drop_fn)
-                    .write(crate::ptr::GcBox::<()>::no_op_drop);
-                std::ptr::addr_of_mut!((*gc_box_ptr).trace_fn)
-                    .write(crate::ptr::GcBox::<()>::no_op_trace);
+                crate::ptr::GcBox::<()>::init_header_at(gc_box_ptr);
             }
         }
 
