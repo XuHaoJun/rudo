@@ -52,14 +52,16 @@ use crate::Trace;
 
 mod private {}
 
-/// Marks GC pointers in the value as black when barrier is active.
+/// Marks GC pointers in the value as black.
 /// Ensures consistency with `GcCell::borrow_mut()` — new pointers are marked
 /// immediately on acquisition, not deferred to guard drop. (bug198)
+///
+/// Note: Unlike the original implementation, this function does NOT check
+/// `barrier_active` because `GcCell::borrow_mut()` marks unconditionally when
+/// there are `gc_ptrs` to mark. This ensures consistent behavior across
+/// `GcCell`, `GcThreadSafeCell`, `GcRwLock`, and `GcMutex`.
 #[inline]
-fn mark_gc_ptrs_immediate<T: GcCapture + ?Sized>(value: &T, barrier_active: bool) {
-    if !barrier_active {
-        return;
-    }
+fn mark_gc_ptrs_immediate<T: GcCapture + ?Sized>(value: &T, _barrier_active: bool) {
     unsafe {
         let mut gc_ptrs = Vec::with_capacity(32);
         value.capture_gc_ptrs_into(&mut gc_ptrs);
