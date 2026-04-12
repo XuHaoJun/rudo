@@ -278,6 +278,21 @@ impl<T: Trace + ?Sized> GcBox<T> {
             .ok();
     }
 
+    /// Undo a weak reference count increment.
+    /// Uses direct subtraction to avoid `dec_weak`'s early-return semantics.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure `self_ptr` is valid and that we just incremented `weak_count`
+    /// via `inc_weak` (so `weak_count` >= 1).
+    #[inline]
+    pub(crate) unsafe fn undo_inc_weak(self_ptr: *mut Self) {
+        // SAFETY: Caller guarantees ptr is valid and we own an increment to undo.
+        unsafe {
+            (*self_ptr).weak_count.fetch_sub(1, Ordering::Release);
+        }
+    }
+
     /// Try to increment `ref_count` atomically when it is currently zero.
     /// Returns true if successful, false if `ref_count` was non-zero or object is dead.
     ///
@@ -837,7 +852,7 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
 
             // Verify generation hasn't changed - if slot was reused, undo inc_weak.
             if pre_generation != (*ptr.as_ptr()).generation() {
-                (*ptr.as_ptr()).dec_weak();
+                crate::ptr::GcBox::undo_inc_weak(ptr.as_ptr());
                 return Self::null();
             }
 
@@ -847,7 +862,12 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
                 let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
-                    (*ptr.as_ptr()).dec_weak();
+                    // FIX bug613: Use undo_inc_weak instead of dec_weak.
+                    // dec_weak has early-return semantics that can skip the decrement
+                    // when weak_count == 1 (CAS sets directly to flags without decrementing).
+                    // When slot is swept (generation unchanged) but is_allocated=false,
+                    // we must undo the increment via direct subtraction, not dec_weak.
+                    crate::ptr::GcBox::undo_inc_weak(ptr.as_ptr());
                     return Self::null();
                 }
             }
