@@ -3131,17 +3131,17 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
     });
 }
 
-/// Marks a page as dirty for borrow_mut without gen_old check.
+/// Marks a page as dirty for `borrow_mut` without `gen_old` check.
 ///
-/// This is used by GcCell::borrow_mut to ensure children are traced during minor GC.
-/// Unlike unified_write_barrier, this does NOT check gen_old - it always adds the page
-/// to dirty_pages. This is necessary because the gen_old optimization (bug71) skips
-/// recording OLD→YOUNG references for young pages, but we still need the page in dirty_pages
-/// so children in GcCell<Vec<Gc<T>>> are traced during minor GC.
+/// This is used by `GcCell::borrow_mut` to ensure children are traced during minor GC.
+/// Unlike `unified_write_barrier`, this does NOT check `gen_old` - it always adds the page
+/// to `dirty_pages`. This is necessary because the `gen_old` optimization (bug71) skips
+/// recording OLD→YOUNG references for young pages, but we still need the page in `dirty_pages`
+/// so children in `GcCell<Vec<Gc<T>>>` are traced during minor GC.
 ///
 /// # Safety
 ///
-/// The pointer must be a valid pointer to a GcCell field within the GC heap.
+/// The pointer must be a valid pointer to a `GcCell` field within the GC heap.
 #[inline]
 #[allow(dead_code)]
 pub unsafe fn mark_page_dirty_for_borrow(ptr: *const u8) {
