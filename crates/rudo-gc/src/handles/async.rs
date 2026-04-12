@@ -695,6 +695,16 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                 );
             }
 
+            // FIX bug611: Add final dead_flag/dropping_state/is_under_construction recheck.
+            // This matches Handle::get() pattern (mod.rs:362-367) and prevents reading
+            // from an object that became dead/dropping after the undo block.
+            if gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+                || gc_box.is_under_construction()
+            {
+                panic!("AsyncHandle::get: object became dead/dropping after undo block");
+            }
+
             let value = gc_box.value();
             value
         }
