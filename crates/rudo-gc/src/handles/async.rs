@@ -787,6 +787,17 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             panic!("AsyncHandle::get_unchecked: object became dead/dropping after inc_ref");
         }
 
+        // FIX bug608: Add second is_allocated check after undo block.
+        // This matches the pattern in Handle::get() and prevents TOCTOU where
+        // lazy sweep could reclaim the slot between the undo block and value() call.
+        if let Some(idx) = unsafe { crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) } {
+            let header = unsafe { crate::heap::ptr_to_page_header(gc_box_ptr as *const u8) };
+            assert!(
+                unsafe { (*header.as_ptr()).is_allocated(idx) },
+                "AsyncHandle::get_unchecked: object slot was swept after undo block"
+            );
+        }
+
         // The temporary ref count increment from try_inc_ref_if_nonzero() protects the
         // object during the borrow. We do NOT undo it here because:
         // 1. get_unchecked() returns &T (a reference, not a Gc), so there's no ownership transfer
