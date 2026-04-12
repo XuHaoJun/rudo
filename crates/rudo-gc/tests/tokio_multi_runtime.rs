@@ -6,6 +6,8 @@
 //! This test verifies that `GcRootSet` correctly tracks roots across
 //! multiple tokio runtimes running concurrently.
 
+#![cfg(feature = "tokio")]
+
 use rudo_gc::tokio::{GcRootSet, GcTokioExt};
 use rudo_gc::{Gc, Trace};
 use std::sync::atomic::{AtomicUsize, Ordering};
