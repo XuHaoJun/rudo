@@ -337,9 +337,16 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
                 GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
                 panic!("Handle::get: object became dead/dropping after inc_ref");
             }
-            GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
 
-            // Second is_allocated check after dec_ref to fix TOCTOU with lazy sweep (bug372/bug385).
+            // The temporary ref count increment from try_inc_ref_if_nonzero() protects the
+            // object during the borrow. We do NOT undo it here because:
+            // 1. get() returns &T (a reference, not a Gc), so there's no ownership transfer
+            // 2. The reference is returned to the caller who may use it beyond this call
+            // 3. The object's lifetime is protected by the handle's HandleScope
+            // 4. Unconditionally decrementing would leak ref counts on every call (bug523)
+            // This matches AsyncHandle::get() behavior (see bug523 comment in async.rs).
+
+            // Second is_allocated check after inc_ref to fix TOCTOU with lazy sweep (bug372/bug385).
             // If slot was swept between dec_ref and value read, we could
             // access a dropped value.
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
