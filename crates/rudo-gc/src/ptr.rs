@@ -2382,6 +2382,16 @@ impl<T: Trace> Weak<T> {
         unsafe {
             let gc_box = &*ptr.as_ptr();
 
+            // FIX bug629: Add second is_allocated check after dereference to prevent UAF.
+            // The pre-check at line 2374 could pass but the slot could be swept
+            // before we reach here. If slot is swept, dereferencing gc_box is UAF.
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return None;
+                }
+            }
+
             // FIX bug383: Return None instead of panicking when is_under_construction.
             // This matches Weak::try_upgrade() behavior for consistent API.
             if gc_box.is_under_construction() {

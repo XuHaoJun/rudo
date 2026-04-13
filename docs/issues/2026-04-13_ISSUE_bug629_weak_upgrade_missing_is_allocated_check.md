@@ -1,7 +1,27 @@
 # [Bug]: Weak::upgrade() 缺少 is_allocated 檢查 - 可能在 slot sweep 後 UAF
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
+
+## 修復紀錄 (Fix Applied)
+
+**Date:** 2026-04-13
+**Fix:** Added second `is_allocated` check after dereference in `Weak::upgrade()` (ptr.rs:2385-2394).
+
+**Code Change:**
+```rust
+// FIX bug629: Add second is_allocated check after dereference to prevent UAF.
+// The pre-check at line 2374 could pass but the slot could be swept
+// before we reach here. If slot is swept, dereferencing gc_box is UAF.
+if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+    let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+    if !(*header.as_ptr()).is_allocated(idx) {
+        return None;
+    }
+}
+```
+
+**Verification:** `./clippy.sh` passes. Library tests pass.
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
