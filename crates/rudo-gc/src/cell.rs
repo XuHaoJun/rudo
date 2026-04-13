@@ -278,6 +278,16 @@ impl<T: ?Sized> GcCell<T> {
             crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut_gen_only", false);
         }
 
+        // FIX bug630: Always mark page dirty when borrow_mut_gen_only is called.
+        // This ensures children in GcCell<Vec<Gc<T>>> are traced during minor GC.
+        // The gen_old optimization in gc_cell_validate_and_barrier handles whether
+        // to record the OLD→YOUNG reference, but we must always mark dirty so the
+        // page is scanned. Matches borrow_mut() behavior (bug583 fix).
+        unsafe {
+            let ptr = std::ptr::from_ref(self).cast::<u8>();
+            crate::heap::mark_page_dirty_for_borrow(ptr);
+        }
+
         self.inner.borrow_mut()
     }
 

@@ -1,6 +1,6 @@
 # [Bug]: GcCell::borrow_mut_gen_only() 缺少 mark_page_dirty_for_borrow() - 導致minor GC時children被錯誤回收
 
-**Status:** Open
+**Status:** Fixed
 **Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
