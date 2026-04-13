@@ -3198,6 +3198,15 @@ pub unsafe fn mark_page_dirty_for_borrow(ptr: *const u8) {
                 return;
             }
 
+            // FIX bug620: Third is_allocated check AFTER has_gen_old read (prevents TOCTOU).
+            // Note: Unlike gc_cell_validate_and_barrier, we do NOT check gen_old here.
+            // mark_page_dirty_for_borrow must ALWAYS mark dirty to ensure children
+            // are traced during minor GC (bug583).
+
+            if !(*h).is_allocated(index) {
+                return;
+            }
+
             (*h).set_dirty(index);
             heap.add_to_dirty_pages(header);
         }
