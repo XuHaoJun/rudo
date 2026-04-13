@@ -566,9 +566,17 @@ impl<'scope> AsyncHandleGuard<'scope> {
 /// }
 /// ```
 pub struct AsyncHandle<T: Trace + 'static> {
-    slot: *const HandleSlot,
+    slot: *mut HandleSlot,
     scope_id: u64,
     _marker: PhantomData<*const T>,
+}
+
+impl<T: Trace + 'static> Drop for AsyncHandle<T> {
+    fn drop(&mut self) {
+        unsafe {
+            (*self.slot).set(std::ptr::null());
+        }
+    }
 }
 
 impl<T: Trace + 'static> AsyncHandle<T> {
@@ -930,8 +938,6 @@ impl<T: Trace + 'static> Clone for AsyncHandle<T> {
         }
     }
 }
-
-impl<T: Trace + 'static> Copy for AsyncHandle<T> {}
 
 unsafe impl<T: Trace + Send + 'static> Send for AsyncHandle<T> {}
 unsafe impl<T: Trace + Sync + 'static> Sync for AsyncHandle<T> {}
