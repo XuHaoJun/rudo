@@ -2467,6 +2467,12 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
                             return;
                         }
                         visitor.objects_marked += 1;
+                        // FIX bug632: Re-verify is_allocated after successful mark, before reading generation.
+                        // The slot could have been deallocated by lazy sweep between break and read.
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            (*header.as_ptr()).clear_mark_atomic(idx);
+                            return;
+                        }
                         break;
                     }
                     Err(()) => {
