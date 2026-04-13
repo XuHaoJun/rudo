@@ -541,7 +541,7 @@ impl<T: Trace + 'static> GcHandle<T> {
                     let pre_generation = (*self.ptr.as_ptr()).generation();
                     (*self.ptr.as_ptr()).inc_weak();
                     if pre_generation != (*self.ptr.as_ptr()).generation() {
-                        (*self.ptr.as_ptr()).dec_weak();
+                        GcBox::undo_inc_weak(self.ptr.as_ptr());
                         drop(orphan);
                         return WeakCrossThreadHandle {
                             weak: GcBoxWeakRef::null(),
@@ -591,7 +591,7 @@ impl<T: Trace + 'static> GcHandle<T> {
 
                 // Verify generation hasn't changed - if slot was reused, undo inc_weak.
                 if pre_generation != (*self.ptr.as_ptr()).generation() {
-                    (*self.ptr.as_ptr()).dec_weak();
+                    GcBox::undo_inc_weak(self.ptr.as_ptr());
                     drop(roots);
                     return WeakCrossThreadHandle {
                         weak: GcBoxWeakRef::null(),
@@ -640,7 +640,7 @@ impl<T: Trace + 'static> GcHandle<T> {
 
                 // Verify generation hasn't changed - if slot was reused, undo inc_weak.
                 if pre_generation != (*self.ptr.as_ptr()).generation() {
-                    (*self.ptr.as_ptr()).dec_weak();
+                    GcBox::undo_inc_weak(self.ptr.as_ptr());
                     drop(orphan);
                     return WeakCrossThreadHandle {
                         weak: GcBoxWeakRef::null(),
