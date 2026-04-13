@@ -2212,16 +2212,11 @@ impl<T: Trace> Drop for Gc<T> {
 
         let gc_box_ptr = ptr.as_ptr();
 
-        // FIX bug619: Check generation BEFORE dec_ref to detect slot reuse.
-        // If slot was swept and reused, the generation would have changed.
-        // Matches the pattern in GcHandle::drop (bug407/bug524).
+        // FIX bug633: Remove ineffective generation check.
+        // The previous fix (bug619) read generation twice with no blocking operations
+        // between the reads, making the comparison always equal. The is_allocated check
+        // below provides proper protection against swept/reused slots.
         unsafe {
-            let pre_generation = (*gc_box_ptr).generation();
-            let current_generation = (*gc_box_ptr).generation();
-            if pre_generation != current_generation {
-                return;
-            }
-
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
                 if !(*header.as_ptr()).is_allocated(idx) {
