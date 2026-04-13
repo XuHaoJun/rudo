@@ -1,7 +1,7 @@
 # [Bug]: GcBoxWeakRef::upgrade missing is_allocated check before dereference - TOCTOU UAF
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -176,3 +176,24 @@ unsafe {
 - 在並髮環境中，TOCTOU 視窗可以被利用
 - 如果攻擊者能控制 GC 時機（如分配壓力），可能穩定觸發此 bug
 - dereference 已釋放記憶體是 UB，可能導致記憶體損壞或資訊洩漏
+
+---
+
+## 🔧 Fix Applied
+
+**Date:** 2026-04-14
+**Fix:** Added pre-dereference `is_allocated` check in `GcBoxWeakRef::upgrade()` at ptr.rs:710-716, matching `Weak::upgrade()` pattern.
+
+**Code Change:**
+```rust
+// FIX bug631: Add is_allocated check BEFORE dereference to prevent UAF.
+// This matches Weak::upgrade() pattern (lines 2373-2379).
+unsafe {
+    if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+        let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+        if !(*header.as_ptr()).is_allocated(idx) {
+            return None;
+        }
+    }
+}
+```

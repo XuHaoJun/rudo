@@ -707,6 +707,17 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
             return None;
         }
 
+        // FIX bug631: Add is_allocated check BEFORE dereference to prevent UAF.
+        // This matches Weak::upgrade() pattern (lines 2373-2379).
+        unsafe {
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return None;
+                }
+            }
+        }
+
         unsafe {
             let gc_box = &*ptr.as_ptr();
 
