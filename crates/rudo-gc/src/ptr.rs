@@ -833,6 +833,17 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
         }
 
         unsafe {
+            // FIX bug634: Check is_allocated BEFORE dereferencing and reading fields.
+            // This matches the pattern from bug580: is_allocated -> flag checks -> generation -> inc_weak.
+            // The has_dead_flag() and dropping_state() reads must happen AFTER verifying
+            // the slot is still allocated, not before.
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    return Self::null();
+                }
+            }
+
             let gc_box = &*ptr.as_ptr();
 
             // Note: We do NOT check is_under_construction here. Gc::new_cyclic_weak
