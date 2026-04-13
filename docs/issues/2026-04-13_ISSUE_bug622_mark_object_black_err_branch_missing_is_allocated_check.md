@@ -1,7 +1,7 @@
 # [Bug]: mark_object_black Err branch retries CAS without is_allocated check
 
-**Status:** Open
-**Tags:** Not Verified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 

@@ -1254,7 +1254,14 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
                 }
                 return Some(idx);
             }
-            Err(()) => {} // CAS failed, retry
+            Err(()) => {
+                // FIX bug622: Check is_allocated before retry on CAS failure.
+                // If lazy sweep deallocated the slot during CAS failure,
+                // retrying on deallocated memory is UB.
+                if !(*h).is_allocated(idx) {
+                    return None;
+                }
+            } // CAS failed, retry
         }
     }
 }
