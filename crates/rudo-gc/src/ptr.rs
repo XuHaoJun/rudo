@@ -1574,6 +1574,9 @@ impl<T: Trace> Gc<T> {
             (*gc_box_ptr.as_ptr()).set_under_construction(false);
         }
 
+        #[allow(clippy::ptr_as_ptr)]
+        let _ = mark_new_object_black(gc_box_ptr.as_ptr() as *const u8);
+
         // NOTE: rehydrate_self_refs is NOT called here because it is a no-op stub.
         // The function only visits Gc pointers but does nothing when it finds null ones.
         // See bug534: rehydrate_self_refs is a no-op stub.
