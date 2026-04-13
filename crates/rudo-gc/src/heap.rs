@@ -3198,11 +3198,19 @@ pub unsafe fn mark_page_dirty_for_borrow(ptr: *const u8) {
                 return;
             }
 
+            let gc_box_addr =
+                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+            // FIX bug620: Second is_allocated check BEFORE reading has_gen_old (prevents TOCTOU).
+            if !(*h).is_allocated(index) {
+                return;
+            }
+
+            let _has_gen_old = (*gc_box_addr).has_gen_old_flag();
+
             // FIX bug620: Third is_allocated check AFTER has_gen_old read (prevents TOCTOU).
             // Note: Unlike gc_cell_validate_and_barrier, we do NOT check gen_old here.
             // mark_page_dirty_for_borrow must ALWAYS mark dirty to ensure children
             // are traced during minor GC (bug583).
-
             if !(*h).is_allocated(index) {
                 return;
             }
