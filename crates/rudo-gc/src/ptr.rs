@@ -1001,6 +1001,36 @@ impl<T: Trace + 'static> GcBoxWeakRef<T> {
                 return None;
             }
 
+            // FIX bug636: Try resurrection path first (ref_count == 0).
+            // This matches upgrade() behavior - try_inc_ref_from_zero() allows
+            // resurrecting objects when ref_count drops to 0.
+            let pre_resurrection_generation = gc_box.generation();
+            if gc_box.try_inc_ref_from_zero() {
+                let post_resurrection_generation = gc_box.generation();
+
+                if gc_box.dropping_state() != 0 || gc_box.has_dead_flag() {
+                    GcBox::undo_inc_ref(ptr.as_ptr());
+                    return None;
+                }
+                if post_resurrection_generation != pre_resurrection_generation {
+                    GcBox::undo_inc_ref(ptr.as_ptr());
+                    return None;
+                }
+                if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                    let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        GcBox::undo_inc_ref(ptr.as_ptr());
+                        return None;
+                    }
+                }
+                crate::gc::notify_created_gc();
+                return Some(Gc {
+                    ptr: AtomicNullable::new(ptr),
+                    _marker: PhantomData,
+                });
+            }
+
+            // ref_count > 0: use atomic try_inc_ref_if_nonzero to avoid TOCTOU
             let pre_generation = gc_box.generation();
             if !gc_box.try_inc_ref_if_nonzero() {
                 return None;
