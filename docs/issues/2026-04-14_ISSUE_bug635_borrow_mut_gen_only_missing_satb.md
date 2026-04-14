@@ -1,7 +1,7 @@
 # [Bug]: borrow_mut_gen_only() never captures OLD GC pointers for SATB
 
-**Status:** Open
-**Tags:** Unverified
+**Status:** Fixed
+**Tags:** Verified
 
 ## 📊 威脅模型評估 (Threat Model Assessment)
 
@@ -141,3 +141,43 @@ The inconsistency between `borrow_mut()` and `borrow_mut_gen_only()` suggests th
 
 **Geohot (Exploit 觀點):**
 If an attacker can control when major GC runs without incremental, they could trigger `borrow_mut_gen_only` on a `GcCell<Vec<Gc<T>>>` containing OLD→YOUNG references. The missing SATB recording could cause the young object to be prematurely collected, creating a use-after-free that could be exploited.
+
+---
+
+## 修復紀錄 (Fix Applied)
+
+**Date:** 2026-04-14
+**Fix:** Added SATB capture to `borrow_mut_gen_only()` in `cell.rs`.
+
+**Code Change:**
+- Added `incremental_active` caching alongside `generational_active`
+- Added SATB capture block when `generational_active || incremental_active`
+- Changed `gc_cell_validate_and_barrier` call to pass `incremental_active` instead of `false`
+
+```rust
+let generational_active = crate::gc::incremental::is_generational_barrier_active();
+let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+
+// FIX bug635: Capture OLD GC pointers for SATB when any barrier is active.
+if generational_active || incremental_active {
+    unsafe {
+        let value = &*self.inner.as_ptr();
+        let mut gc_ptrs = Vec::with_capacity(32);
+        value.capture_gc_ptrs_into(&mut gc_ptrs);
+        if !gc_ptrs.is_empty() {
+            crate::heap::with_heap(|heap| {
+                for gc_ptr in gc_ptrs {
+                    let _ = heap.record_satb_old_value(gc_ptr);
+                }
+            });
+        }
+    }
+}
+
+if generational_active {
+    let ptr = std::ptr::from_ref(self).cast::<u8>();
+    crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut_gen_only", incremental_active);
+}
+```
+
+**Verification:** `./clippy.sh` passes. Library tests pass.

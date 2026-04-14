@@ -269,13 +269,41 @@ impl<T: ?Sized> GcCell<T> {
     ///
     /// Panics if the value is currently borrowed.
     #[inline]
-    pub fn borrow_mut_gen_only(&self) -> RefMut<'_, T> {
+    pub fn borrow_mut_gen_only(&self) -> RefMut<'_, T>
+    where
+        T: GcCapture,
+    {
         self.validate_thread_affinity("borrow_mut_gen_only");
 
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+
+        // FIX bug635: Capture OLD GC pointers for SATB when any barrier is active.
+        // This ensures OLD→YOUNG references are recorded even when incremental marking
+        // is not active but generational barrier is. Without this, major GC could miss
+        // references and cause UAF.
+        if generational_active || incremental_active {
+            unsafe {
+                let value = &*self.inner.as_ptr();
+                let mut gc_ptrs = Vec::with_capacity(32);
+                value.capture_gc_ptrs_into(&mut gc_ptrs);
+                if !gc_ptrs.is_empty() {
+                    crate::heap::with_heap(|heap| {
+                        for gc_ptr in gc_ptrs {
+                            let _ = heap.record_satb_old_value(gc_ptr);
+                        }
+                    });
+                }
+            }
+        }
+
         if generational_active {
             let ptr = std::ptr::from_ref(self).cast::<u8>();
-            crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut_gen_only", false);
+            crate::heap::gc_cell_validate_and_barrier(
+                ptr,
+                "borrow_mut_gen_only",
+                incremental_active,
+            );
         }
 
         // FIX bug630: Always mark page dirty when borrow_mut_gen_only is called.
