@@ -251,6 +251,31 @@ pub mod test_util {
         unsafe { crate::heap::reset_for_testing() };
         clear_test_roots();
         crate::gc::incremental::IncrementalMarkState::global().reset();
+        // Also clear the cross-thread SATB size override so tests start clean.
+        #[cfg(any(test, feature = "test-util"))]
+        crate::heap::CROSS_THREAD_SATB_SIZE_OVERRIDE.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Set the cross-thread SATB buffer capacity limit for testing.
+    ///
+    /// When set to a non-zero value, this overrides `MAX_CROSS_THREAD_SATB_SIZE`
+    /// so tests can saturate both the main and overflow buffers with far fewer entries.
+    /// Reset to 0 via `reset()` or explicitly after the test.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_cross_thread_satb_capacity(cap: usize) {
+        crate::heap::CROSS_THREAD_SATB_SIZE_OVERRIDE
+            .store(cap, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Flush and return all pending cross-thread SATB entries (main + overflow + emergency).
+    ///
+    /// This drains the global cross-thread SATB buffers, same as the GC does during
+    /// `execute_final_mark`. Useful for tests that want to inspect captured entries
+    /// without triggering a full collection.
+    #[must_use]
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn flush_cross_thread_satb() -> usize {
+        crate::heap::LocalHeap::flush_cross_thread_satb_buffer().len()
     }
 }
 

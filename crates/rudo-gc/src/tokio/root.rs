@@ -14,6 +14,11 @@ use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+/// Entry storing count and generation for slot reuse detection.
+/// Generation is read from the `GcBox` when the root is registered,
+/// and verified during snapshot to detect slot reuse.
+type RootEntry = (usize, u32);
+
 /// Process-level singleton for tracking GC roots across all tokio contexts.
 ///
 /// `GcRootSet` maintains the set of active GC roots and provides methods for
@@ -28,7 +33,7 @@ use std::sync::{Mutex, OnceLock};
 /// the core GC lock hierarchy (`LocalHeap`, `GlobalMarkState`, `GcRequest`).
 #[derive(Debug)]
 pub struct GcRootSet {
-    roots: Mutex<HashMap<usize, usize>>,
+    roots: Mutex<HashMap<usize, RootEntry>>,
     dirty: AtomicBool,
 }
 
@@ -63,9 +68,35 @@ impl GcRootSet {
     /// * `ptr` - The raw pointer address to register
     #[allow(clippy::significant_drop_tightening)]
     pub fn register(&self, ptr: usize) {
+        use std::collections::hash_map::Entry;
         let mut roots = self.roots.lock().unwrap();
-        let count = roots.entry(ptr).or_insert(0);
-        *count += 1;
+
+        match roots.entry(ptr) {
+            Entry::Vacant(v) => {
+                let generation = crate::heap::try_with_heap(|heap| unsafe {
+                    crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8)
+                        .map_or(0u32, |gc_box| gc_box.as_ref().generation())
+                })
+                .unwrap_or(0);
+                v.insert((1, generation));
+            }
+            Entry::Occupied(o) => {
+                let current_generation = crate::heap::try_with_heap(|heap| unsafe {
+                    crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8)
+                        .map_or(0u32, |gc_box| gc_box.as_ref().generation())
+                })
+                .unwrap_or(0);
+
+                let entry = o.into_mut();
+                if entry.1 == current_generation {
+                    entry.0 += 1;
+                } else {
+                    entry.0 = 1;
+                    entry.1 = current_generation;
+                }
+            }
+        }
+
         self.dirty.store(true, Ordering::Release);
     }
 
@@ -81,15 +112,21 @@ impl GcRootSet {
     ///
     /// * `ptr` - The raw pointer address to unregister
     pub fn unregister(&self, ptr: usize) {
-        let mut roots = self.roots.lock().unwrap();
-        if let Some(count) = roots.get_mut(&ptr) {
-            *count -= 1;
-            if *count == 0 {
-                roots.remove(&ptr);
+        let needs_dirty = {
+            let mut roots = self.roots.lock().unwrap();
+            if let Some(entry) = roots.get_mut(&ptr) {
+                entry.0 -= 1;
+                if entry.0 == 0 {
+                    roots.remove(&ptr);
+                }
+                true
+            } else {
+                false
             }
+        };
+        if needs_dirty {
             self.dirty.store(true, Ordering::Release);
         }
-        drop(roots);
     }
 
     /// Returns the number of currently registered roots.
@@ -108,9 +145,9 @@ impl GcRootSet {
     ///
     /// This atomically captures the current root set and clears the dirty flag.
     /// The returned vector contains all currently registered root pointers that
-    /// are valid `GcBox` pointers in the given heap.
+    /// are valid `GcBox` pointers in the given heap and have matching generation.
     ///
-    /// Invalid pointers (non-GcBox addresses) are silently filtered out.
+    /// Invalid pointers (non-GcBox addresses) or pointers to reused slots are silently filtered out.
     ///
     /// # Panics
     ///
@@ -126,13 +163,22 @@ impl GcRootSet {
     pub fn snapshot(&self, heap: &crate::heap::LocalHeap) -> Vec<usize> {
         let roots = self.roots.lock().unwrap();
         let valid_roots: Vec<usize> = roots
-            .keys()
-            .filter(|&&ptr| {
+            .iter()
+            .filter(|(&ptr, &(_, stored_generation))| {
                 // SAFETY: find_gc_box_from_ptr performs range and alignment checks.
                 // If it returns Some, ptr is a valid GcBox.
-                unsafe { crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8).is_some() }
+                let Some(gc_box) =
+                    (unsafe { crate::heap::find_gc_box_from_ptr(heap, ptr as *const u8) })
+                else {
+                    return false;
+                };
+                // FIX bug514: Check generation to detect slot reuse after sweep.
+                // If the slot was swept and reallocated to a new object, the generation
+                // will have changed and we should not treat this as a valid root.
+                let current_generation = unsafe { (*gc_box.as_ptr()).generation() };
+                current_generation == stored_generation
             })
-            .copied()
+            .map(|(&ptr, _)| ptr)
             .collect();
         // Clear dirty while still holding the lock so concurrent register/unregister
         // operations cannot have their updates overwritten.

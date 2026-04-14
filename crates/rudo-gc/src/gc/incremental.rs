@@ -17,7 +17,6 @@
 
 use crossbeam::queue::SegQueue;
 use parking_lot::Mutex;
-use std::cell::UnsafeCell;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::LazyLock;
@@ -128,18 +127,12 @@ impl Default for IncrementalConfig {
 ///
 /// # Thread Safety
 ///
-/// This type is currently designed for single-threaded access during GC mark slices.
-/// The `worklist` field is reserved for future parallel marking coordination and
-/// is currently unused.
+/// This type is accessed as a process-level singleton via `global()`.
+/// Its `worklist` uses `SegQueue`, so queue operations are synchronized without
+/// requiring interior-mutable unsafe code.
 ///
-/// **Important**: The `unsafe impl Sync` declaration was previously removed but has been
-/// restored with proper safety justification. The worklist field is accessed single-threaded
-/// from the GC thread during synchronized mark slices, and proper safety rationale is provided
-/// at the impl site (see lines 219-232).
-///
-/// When parallel marking is implemented:
-/// 1. The `worklist` field MUST be protected with proper synchronization
-/// 2. Concurrent access without synchronization is undefined behavior
+/// GC phase/state transitions are still logically coordinated by the collector;
+/// this documentation is about memory safety, not algorithmic correctness.
 ///
 /// # Usage
 ///
@@ -150,7 +143,7 @@ impl Default for IncrementalConfig {
 #[allow(dead_code)]
 pub struct IncrementalMarkState {
     phase: AtomicUsize,
-    worklist: UnsafeCell<SegQueue<*const GcBox<()>>>,
+    worklist: SegQueue<usize>,
     config: Mutex<IncrementalConfig>,
     enabled: AtomicBool,
     stats: MarkStats,
@@ -214,26 +207,6 @@ impl MarkStats {
     }
 }
 
-/// SAFETY: `IncrementalMarkState` is currently accessed only from the GC thread.
-/// If parallel marking is implemented, proper synchronization must be added.
-unsafe impl Send for IncrementalMarkState {}
-
-/// SAFETY: `IncrementalMarkState` is accessed as a process-level singleton via `global()`.
-///
-/// The `UnsafeCell<SegQueue>` in the `worklist` field is accessed single-threaded from the
-/// GC thread during mark slices via `push_work()` and `pop_work()`. All other fields are
-/// either atomic or protected by Mutex.
-///
-/// The blanket `unsafe impl Sync` is justified because:
-/// 1. All access to `worklist` occurs from the GC thread during synchronized mark slices
-/// 2. No concurrent access from mutator threads
-/// 3. Atomic fields use proper ordering (`SeqCst` for writes, default for reads)
-///
-/// When parallel marking is implemented:
-/// 1. The `worklist` field MUST be protected with proper synchronization
-/// 2. Concurrent access without synchronization is undefined behavior
-unsafe impl Sync for IncrementalMarkState {}
-
 impl Default for IncrementalMarkState {
     fn default() -> Self {
         Self::new()
@@ -246,7 +219,7 @@ impl IncrementalMarkState {
     pub fn new() -> Self {
         Self {
             phase: AtomicUsize::new(MarkPhase::Idle as usize),
-            worklist: UnsafeCell::new(SegQueue::new()),
+            worklist: SegQueue::new(),
             config: Mutex::new(IncrementalConfig::default()),
             enabled: AtomicBool::new(true),
             stats: MarkStats::new(),
@@ -351,24 +324,19 @@ impl IncrementalMarkState {
         )
     }
 
-    fn worklist(&self) -> &SegQueue<*const GcBox<()>> {
-        unsafe { &*self.worklist.get() }
-    }
-
-    #[allow(clippy::mut_from_ref)]
-    fn worklist_mut(&self) -> &mut SegQueue<*const GcBox<()>> {
-        unsafe { &mut *self.worklist.get() }
+    fn worklist(&self) -> &SegQueue<usize> {
+        &self.worklist
     }
 
     pub fn push_work(&self, ptr: NonNull<GcBox<()>>) {
-        self.worklist().push(ptr.as_ptr());
+        self.worklist().push(ptr.as_ptr() as usize);
     }
 
     #[allow(clippy::missing_panics_doc)]
     pub fn pop_work(&self) -> Option<NonNull<GcBox<()>>> {
         self.worklist()
             .pop()
-            .map(|p| NonNull::new(p as *mut GcBox<()>).unwrap())
+            .map(|addr| NonNull::new(addr as *mut GcBox<()>).unwrap())
     }
 
     pub fn worklist_is_empty(&self) -> bool {
@@ -380,7 +348,7 @@ impl IncrementalMarkState {
     }
 
     pub fn reset_worklist(&self) {
-        *self.worklist_mut() = SegQueue::new();
+        while self.worklist().pop().is_some() {}
     }
 
     pub fn request_fallback(&self, reason: FallbackReason) {
@@ -575,12 +543,18 @@ unsafe fn mark_root_for_snapshot(ptr: NonNull<GcBox<()>>, visitor: &mut crate::t
 }
 
 pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
+    let state = IncrementalMarkState::global();
+    state.reset_fallback();
+
     stop_all_mutators_for_snapshot();
 
-    let state = IncrementalMarkState::global();
+    if state.fallback_requested() {
+        resume_all_mutators();
+        return 0;
+    }
+
     state.set_phase(MarkPhase::Snapshot);
     state.stats().reset();
-    state.reset_fallback();
     state.reset_worklist();
 
     let mut visitor = crate::trace::GcVisitor::new(crate::trace::VisitorKind::Major);
@@ -617,8 +591,25 @@ pub fn execute_snapshot(heaps: &[&LocalHeap]) -> usize {
         }
     }
 
-    while let Some((ptr, _enqueue_generation)) = visitor.worklist.pop() {
-        state.push_work(ptr);
+    while let Some((ptr, enqueue_generation)) = visitor.worklist.pop() {
+        unsafe {
+            // FIX bug565: Check is_allocated BEFORE reading generation.
+            // Must verify slot is still allocated before reading any GcBox fields.
+            // Matches pattern from bug561/bug562 fixes.
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    continue; // Slot was swept - skip this entry
+                }
+            }
+
+            // Now safe to read generation from guaranteed allocated slot
+            let current_generation = (*ptr.as_ptr()).generation();
+            if current_generation != enqueue_generation {
+                continue; // Slot was reused - skip this entry
+            }
+            state.push_work(ptr);
+        }
     }
 
     let count = state.worklist_len();
@@ -786,7 +777,7 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
         return;
     }
 
-    if (*gc_box.as_ptr()).is_under_construction() {
+    if (*gc_box.as_ptr()).is_under_construction() && state.phase() != MarkPhase::FinalMark {
         return;
     }
 
@@ -801,7 +792,9 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
 
     // Verify generation hasn't changed before calling trace_fn (bug426 fix).
     // If slot was reused, trace_fn would be called on wrong object data.
+    // FIX bug556: Also clear the stale mark so it doesn't persist on the new object.
     if (*gc_box.as_ptr()).generation() != marked_generation {
+        (*header.as_ptr()).clear_mark_atomic(idx);
         return;
     }
 
@@ -817,7 +810,21 @@ unsafe fn trace_and_mark_object(gc_box: NonNull<GcBox<()>>, state: &IncrementalM
 
     ((*gc_box.as_ptr()).trace_fn)(data_ptr, &mut visitor);
 
-    while let Some((child_ptr, _enqueue_generation)) = visitor.worklist.pop() {
+    while let Some((child_ptr, enqueue_generation)) = visitor.worklist.pop() {
+        // FIX bug565: Check is_allocated BEFORE reading generation.
+        // Must verify slot is still allocated before reading any GcBox fields.
+        if let Some(idx) = crate::heap::ptr_to_object_index(child_ptr.as_ptr() as *const u8) {
+            let header = crate::heap::ptr_to_page_header(child_ptr.as_ptr() as *const u8);
+            if !(*header.as_ptr()).is_allocated(idx) {
+                continue; // Slot was swept - skip this entry
+            }
+        }
+
+        // Now safe to read generation from guaranteed allocated slot
+        let current_generation = (*child_ptr.as_ptr()).generation();
+        if current_generation != enqueue_generation {
+            continue; // Slot was reused - skip this entry
+        }
         state.push_work(child_ptr);
     }
 }
@@ -851,12 +858,26 @@ unsafe fn scan_page_for_marked_refs(
                         #[allow(clippy::unnecessary_cast)]
                         #[allow(clippy::ptr_as_ptr)]
                         let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                        // Read generation after successful mark to detect slot reuse (bug336).
+
+                        // FIX bug562: Check is_allocated BEFORE reading generation.
+                        // Must verify slot is still allocated before reading any GcBox fields.
+                        // Matches scan_page_for_unmarked_refs (bug561) pattern.
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
+
+                        // Now safe to read generation from guaranteed allocated slot
                         let marked_generation = unsafe { (*gc_box_ptr).generation() };
 
-                        // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
-                        // If slot was swept after try_mark, clear mark and skip.
+                        // FIX bug291: Re-check is_allocated to fix TOCTOU with lazy sweep.
+                        // If slot was swept after try_mark, check generation to distinguish
+                        // swept (should clear mark) from swept+reused (should not clear).
                         if !(*header).is_allocated(i) {
+                            let current_generation = unsafe { (*gc_box_ptr).generation() };
+                            if current_generation != marked_generation {
+                                break;
+                            }
                             (*header).clear_mark_atomic(i);
                             break;
                         }
@@ -873,13 +894,24 @@ unsafe fn scan_page_for_marked_refs(
                         if unsafe { (*gc_box_ptr).is_under_construction() } {
                             break;
                         }
+                        // Second is_allocated re-check to fix TOCTOU with lazy sweep (bug509).
+                        // If slot was swept after is_under_construction check but before push_work,
+                        // clear mark and skip to avoid pushing a pointer to a swept slot.
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
                         refs_found += 1;
                         if let Some(gc_box) = NonNull::new(gc_box_ptr as *mut GcBox<()>) {
                             state.push_work(gc_box);
                         }
                         break;
                     }
-                    Err(()) => {} // CAS failed, retry
+                    Err(()) => {
+                        if !(*header).is_allocated(i) {
+                            break;
+                        }
+                    } // CAS failed, retry
                 }
             }
         }
@@ -957,8 +989,30 @@ pub fn execute_final_mark(heaps: &mut [&mut LocalHeap]) -> usize {
         heap.clear_dirty_pages_snapshot();
     }
 
-    while let Some((ptr, _enqueue_generation)) = visitor.worklist.pop() {
-        state.push_work(ptr);
+    while let Some((ptr, enqueue_generation)) = visitor.worklist.pop() {
+        unsafe {
+            // FIX bug565: Check is_allocated BEFORE reading generation.
+            // Must verify slot is still allocated before reading any GcBox fields.
+            if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr() as *const u8) {
+                let header = crate::heap::ptr_to_page_header(ptr.as_ptr() as *const u8);
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    continue; // Slot was swept - skip this entry
+                }
+            }
+
+            let current_generation = (*ptr.as_ptr()).generation();
+            if current_generation != enqueue_generation {
+                continue; // Slot was reused - skip this entry
+            }
+            state.push_work(ptr);
+        }
+        total_marked += 1;
+    }
+
+    while let Some(ptr) = state.pop_work() {
+        unsafe {
+            trace_and_mark_object(ptr, state);
+        }
         total_marked += 1;
     }
 
@@ -997,12 +1051,31 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                         #[allow(clippy::unnecessary_cast)]
                         #[allow(clippy::ptr_as_ptr)]
                         let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-                        // Read generation after successful mark to detect slot reuse (bug336).
+
+                        // FIX bug561: Check is_allocated BEFORE reading generation.
+                        // Must verify slot is still allocated before reading any GcBox fields.
+                        // Matches worker_mark_loop (marker.rs:909) pattern.
+                        // If slot was swept after try_mark, we can't reliably detect reuse,
+                        // so we clear the mark to be safe.
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
+
+                        // Now safe to read generation from guaranteed allocated slot
                         let marked_generation = unsafe { (*gc_box_ptr).generation() };
 
-                        // Re-check is_allocated to fix TOCTOU with lazy sweep (bug291).
-                        // If slot was swept after try_mark, clear mark and skip.
+                        // FIX bug528: Re-check is_allocated to fix TOCTOU with lazy sweep.
+                        // If slot was swept after try_mark, check generation to distinguish
+                        // swept (should clear mark) from swept+reused (should not clear).
                         if !(*header).is_allocated(i) {
+                            // Read current generation to distinguish swept from reused
+                            let current_generation = unsafe { (*gc_box_ptr).generation() };
+                            if current_generation != marked_generation {
+                                // Slot was reused - mark belongs to new object, don't clear
+                                break;
+                            }
+                            // Slot was swept but not reused - safe to clear mark
                             (*header).clear_mark_atomic(i);
                             break;
                         }
@@ -1019,6 +1092,13 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                         if unsafe { (*gc_box_ptr).is_under_construction() } {
                             break;
                         }
+                        // Second is_allocated re-check to fix TOCTOU with lazy sweep (bug258).
+                        // If slot was swept after is_under_construction check but before push_work,
+                        // clear mark and skip to avoid pushing a pointer to a swept slot.
+                        if !(*header).is_allocated(i) {
+                            (*header).clear_mark_atomic(i);
+                            break;
+                        }
                         if let Some(gc_box) = NonNull::new(gc_box_ptr) {
                             let ptr = IncrementalMarkState::global();
                             ptr.push_work(gc_box);
@@ -1026,8 +1106,12 @@ unsafe fn scan_page_for_unmarked_refs(page: NonNull<PageHeader>, stats: &MarkSta
                         break;
                     }
                     Err(()) => {
-                        // CAS failed - another thread modified this word.
-                        // Retry the CAS to get a consistent view.
+                        // FIX bug581: Check is_allocated before retry to avoid UB from deallocated slot.
+                        // If CAS failed because lazy sweep deallocated the slot, retrying on a
+                        // deallocated slot is UB. Matches scan_page_for_marked_refs (bug576) pattern.
+                        if !(*header).is_allocated(i) {
+                            break;
+                        }
                     }
                 }
             }
@@ -1073,18 +1157,35 @@ pub fn mark_new_object_black(ptr: *const u8) -> bool {
                 return false;
             }
             if !(*header.as_ptr()).is_marked(idx) {
-                let marked_generation = (*gc_box).generation();
-                (*header.as_ptr()).set_mark(idx);
-                if !(*header.as_ptr()).is_allocated(idx) {
-                    (*header.as_ptr()).clear_mark_atomic(idx);
-                    return false;
+                // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep (bug527).
+                // This matches mark_object_black and scan_page_for_marked_refs.
+                loop {
+                    match (*header.as_ptr()).try_mark(idx) {
+                        Ok(false) => {
+                            // Already marked by another thread
+                            return true;
+                        }
+                        Ok(true) => {
+                            let marked_generation = (*gc_box).generation();
+                            // Verify slot wasn't swept+reused between try_mark and now
+                            if (*gc_box).generation() != marked_generation {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                return false;
+                            }
+                            // Verify still allocated before returning (bug527)
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                return false;
+                            }
+                            return true;
+                        }
+                        Err(()) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                return false;
+                            }
+                        }
+                    }
                 }
-                let current_generation = (*gc_box).generation();
-                if current_generation != marked_generation {
-                    (*header.as_ptr()).clear_mark_atomic(idx);
-                    return false;
-                }
-                return true;
             }
         }
     }
@@ -1142,30 +1243,25 @@ pub unsafe fn mark_object_black(ptr: *const u8) -> Option<usize> {
                 return None;
             }
             Ok(true) => {
-                // Read generation after successful mark to detect slot reuse (bug355 fix).
                 let marked_generation = (*gc_box).generation();
-                // We just marked. Re-check is_allocated to fix TOCTOU with lazy sweep.
-                if (*h).is_allocated(idx) {
-                    // bug399 fix: also check generation to detect slot reuse
-                    let current_generation = (*gc_box).generation();
-                    if current_generation != marked_generation {
-                        // Slot was reused - mark belongs to new object
-                        return None;
-                    }
-                    return Some(idx);
-                }
-                // Slot was swept between our check and try_mark.
-                // Verify generation hasn't changed to distinguish swept from swept+reused.
-                let current_generation = (*gc_box).generation();
-                if current_generation != marked_generation {
-                    // Slot was reused - the mark now belongs to the new object, don't clear.
+                if !(*h).is_allocated(idx) {
+                    (*h).clear_mark_atomic(idx);
                     return None;
                 }
-                // Slot was swept but not reused - safe to clear mark.
-                (*h).clear_mark_atomic(idx);
-                return None;
+                if (*gc_box).generation() != marked_generation {
+                    (*h).clear_mark_atomic(idx);
+                    return None;
+                }
+                return Some(idx);
             }
-            Err(()) => {} // CAS failed, retry
+            Err(()) => {
+                // FIX bug622: Check is_allocated before retry on CAS failure.
+                // If lazy sweep deallocated the slot during CAS failure,
+                // retrying on deallocated memory is UB.
+                if !(*h).is_allocated(idx) {
+                    return None;
+                }
+            } // CAS failed, retry
         }
     }
 }

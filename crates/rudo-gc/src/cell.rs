@@ -167,7 +167,10 @@ impl<T: ?Sized> GcCell<T> {
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
-        if incremental_active {
+        // FIX bug486: Always capture old GC pointers for SATB, regardless of incremental_active.
+        // If incremental becomes active between borrow_mut() and drop(),
+        // OLD values must already be recorded to preserve SATB invariant.
+        {
             unsafe {
                 let value = &*self.inner.as_ptr();
                 let mut gc_ptrs = Vec::with_capacity(32);
@@ -193,22 +196,35 @@ impl<T: ?Sized> GcCell<T> {
             crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut", incremental_active);
         }
 
+        // FIX bug583: Always mark the page dirty when borrow_mut is called.
+        // The gen_old optimization (bug71) skips recording OLD→YOUNG references when
+        // page is young (gen=0) and gen_old flag is not set. But for minor GC tracing,
+        // we need the page to be in dirty_pages so children in GcCell<Vec<Gc<T>>>
+        // are traced. Without this, children are incorrectly swept.
+        unsafe {
+            crate::heap::mark_page_dirty_for_borrow(ptr);
+        }
+
         let result = self.inner.borrow_mut();
 
-        if incremental_active {
-            unsafe {
-                let new_value = &*result;
-                let mut new_gc_ptrs = Vec::with_capacity(32);
-                new_value.capture_gc_ptrs_into(&mut new_gc_ptrs);
-                if !new_gc_ptrs.is_empty() {
-                    crate::heap::with_heap(|_heap| {
-                        for gc_ptr in new_gc_ptrs {
-                            let _ = crate::gc::incremental::mark_object_black(
-                                gc_ptr.as_ptr() as *const u8
-                            );
-                        }
-                    });
-                }
+        // FIX bug506: Always mark NEW GC pointers unconditionally, matching
+        // GcThreadSafeCell::borrow_mut() and GcRwLock::write() behavior.
+        // GcThreadSafeCell marks unconditionally when new_gc_ptrs is not empty.
+        // GcRwLock::write() passes true to mark_gc_ptrs_immediate.
+        // GcCell was using cached generational_active || incremental_active,
+        // which could cause NEW to not be marked if barrier became active
+        // between cache time and marking time.
+        unsafe {
+            let new_value = &*result;
+            let mut new_gc_ptrs = Vec::with_capacity(32);
+            new_value.capture_gc_ptrs_into(&mut new_gc_ptrs);
+            if !new_gc_ptrs.is_empty() {
+                crate::heap::with_heap(|_heap| {
+                    for gc_ptr in new_gc_ptrs {
+                        let _ =
+                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
+                    }
+                });
             }
         }
 
@@ -253,13 +269,51 @@ impl<T: ?Sized> GcCell<T> {
     ///
     /// Panics if the value is currently borrowed.
     #[inline]
-    pub fn borrow_mut_gen_only(&self) -> RefMut<'_, T> {
+    pub fn borrow_mut_gen_only(&self) -> RefMut<'_, T>
+    where
+        T: GcCapture,
+    {
         self.validate_thread_affinity("borrow_mut_gen_only");
 
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        let incremental_active = crate::gc::incremental::is_incremental_marking_active();
+
+        // FIX bug635: Capture OLD GC pointers for SATB when any barrier is active.
+        // This ensures OLD→YOUNG references are recorded even when incremental marking
+        // is not active but generational barrier is. Without this, major GC could miss
+        // references and cause UAF.
+        if generational_active || incremental_active {
+            unsafe {
+                let value = &*self.inner.as_ptr();
+                let mut gc_ptrs = Vec::with_capacity(32);
+                value.capture_gc_ptrs_into(&mut gc_ptrs);
+                if !gc_ptrs.is_empty() {
+                    crate::heap::with_heap(|heap| {
+                        for gc_ptr in gc_ptrs {
+                            let _ = heap.record_satb_old_value(gc_ptr);
+                        }
+                    });
+                }
+            }
+        }
+
         if generational_active {
             let ptr = std::ptr::from_ref(self).cast::<u8>();
-            crate::heap::gc_cell_validate_and_barrier(ptr, "borrow_mut_gen_only", false);
+            crate::heap::gc_cell_validate_and_barrier(
+                ptr,
+                "borrow_mut_gen_only",
+                incremental_active,
+            );
+        }
+
+        // FIX bug630: Always mark page dirty when borrow_mut_gen_only is called.
+        // This ensures children in GcCell<Vec<Gc<T>>> are traced during minor GC.
+        // The gen_old optimization in gc_cell_validate_and_barrier handles whether
+        // to record the OLD→YOUNG reference, but we must always mark dirty so the
+        // page is scanned. Matches borrow_mut() behavior (bug583 fix).
+        unsafe {
+            let ptr = std::ptr::from_ref(self).cast::<u8>();
+            crate::heap::mark_page_dirty_for_borrow(ptr);
         }
 
         self.inner.borrow_mut()
@@ -1065,43 +1119,36 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     {
         let guard = self.inner.lock();
 
+        let ptr = std::ptr::from_ref(self).cast::<u8>();
+
         // Cache barrier states once to avoid TOCTOU between SATB capture
         // and trigger_write_barrier (bug116, bug153)
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
-        if incremental_active {
-            let value = &*guard;
-            let mut gc_ptrs = Vec::with_capacity(32);
-            value.capture_gc_ptrs_into(&mut gc_ptrs);
-            if !gc_ptrs.is_empty() {
-                if crate::heap::try_with_heap(|heap| {
-                    for gc_ptr in &gc_ptrs {
-                        if !heap.record_satb_old_value(*gc_ptr) {
-                            crate::gc::incremental::IncrementalMarkState::global()
-                                .request_fallback(
-                                    crate::gc::incremental::FallbackReason::SatbBufferOverflow,
-                                );
-                            break;
-                        }
+        let value = &*guard;
+        let mut gc_ptrs = Vec::with_capacity(32);
+        value.capture_gc_ptrs_into(&mut gc_ptrs);
+        if !gc_ptrs.is_empty() {
+            if crate::heap::try_with_heap(|heap| {
+                for gc_ptr in &gc_ptrs {
+                    if !heap.record_satb_old_value(*gc_ptr) {
+                        crate::gc::incremental::IncrementalMarkState::global().request_fallback(
+                            crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                        );
+                        break;
                     }
-                    true
-                })
-                .is_some()
-                {
-                    // Heap available, SATB recorded in thread-local buffer
-                } else {
-                    // No GC heap on this thread, use cross-thread buffer
-                    for gc_ptr in gc_ptrs {
-                        // FIX bug330: Check return value and request fallback if buffer overflowed.
-                        // Note: push_cross_thread_satb also requests fallback internally, but
-                        // checking here ensures we don't silently drop pointers.
-                        if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
-                            crate::gc::incremental::IncrementalMarkState::global()
-                                .request_fallback(
-                                    crate::gc::incremental::FallbackReason::SatbBufferOverflow,
-                                );
-                        }
+                }
+                true
+            })
+            .is_some()
+            {
+            } else {
+                for gc_ptr in gc_ptrs {
+                    if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
+                        crate::gc::incremental::IncrementalMarkState::global().request_fallback(
+                            crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                        );
                     }
                 }
             }
@@ -1109,20 +1156,30 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 
         self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
 
+        // FIX bug610: Always mark the page dirty when borrow_mut is called.
+        // The gen_old optimization (bug71) skips recording OLD→YOUNG references when
+        // page is young (gen=0) and gen_old flag is not set. But for minor GC tracing,
+        // we need the page to be in dirty_pages so children in GcThreadSafeCell<Vec<Gc<T>>>
+        // are traced. Without this, children are incorrectly swept.
+        // This matches the fix in GcCell::borrow_mut() (bug583).
+        unsafe {
+            crate::heap::mark_page_dirty_for_borrow(ptr);
+        }
+
         // Immediate mark of GC pointers (bug192: match GcCell::borrow_mut behavior).
         // Marking only on Drop creates a race window where another thread's GC can miss
         // these pointers. Mark immediately when handing out the guard.
-        // FIX bug301: Only mark black during incremental marking, not during generational barrier.
-        if incremental_active {
-            unsafe {
-                let guard_ref = &*guard;
-                let mut new_gc_ptrs = Vec::with_capacity(32);
-                guard_ref.capture_gc_ptrs_into(&mut new_gc_ptrs);
-                if !new_gc_ptrs.is_empty() {
-                    for gc_ptr in new_gc_ptrs {
-                        let _ =
-                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
-                    }
+        // FIX bug485: Always mark NEW GC pointers black when OLD values were recorded.
+        // If incremental becomes active between entry and drop, we must mark NEW
+        // to maintain SATB consistency (OLD recorded, NEW must be marked too).
+        // This matches GcRwLock::write() behavior (bug479 fix).
+        unsafe {
+            let guard_ref = &*guard;
+            let mut new_gc_ptrs = Vec::with_capacity(32);
+            guard_ref.capture_gc_ptrs_into(&mut new_gc_ptrs);
+            if !new_gc_ptrs.is_empty() {
+                for gc_ptr in new_gc_ptrs {
+                    let _ = crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
                 }
             }
         }
@@ -1153,55 +1210,57 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
     {
         let guard = self.inner.lock();
 
-        // FIX bug174: Capture old GC pointers for SATB when incremental marking is active.
-        // This was previously missing - borrow_mut_simple would skip SATB capture even when
-        // incremental marking was active, potentially causing premature collection.
+        // FIX bug475: Always capture old GC pointers for SATB, regardless of incremental_active.
+        // If incremental marking becomes active between borrow_mut_simple() and drop(),
+        // OLD values must already be recorded to preserve SATB invariant.
+        // (Similar to bug432 fix for GcRwLock::write())
+        // FIX bug507: Cache both barrier states together to avoid TOCTOU.
+        // If incremental marking becomes active between caching and barrier,
+        // stale incremental_active would cause incorrect barrier behavior.
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
-        if incremental_active {
-            let value = &*guard;
-            let mut gc_ptrs = Vec::with_capacity(32);
-            value.capture_gc_ptrs_into(&mut gc_ptrs);
-            if !gc_ptrs.is_empty()
-                && crate::heap::try_with_heap(|heap| {
-                    for gc_ptr in &gc_ptrs {
-                        if !heap.record_satb_old_value(*gc_ptr) {
-                            crate::gc::incremental::IncrementalMarkState::global()
-                                .request_fallback(
-                                    crate::gc::incremental::FallbackReason::SatbBufferOverflow,
-                                );
-                            break;
-                        }
-                    }
-                    true
-                })
-                .is_some()
-            {
-                // Heap available, SATB recorded in thread-local buffer
-            } else {
-                // No GC heap on this thread, use cross-thread buffer (bug417)
-                for gc_ptr in gc_ptrs {
-                    if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
+        let generational_active = crate::gc::incremental::is_generational_barrier_active();
+        let value = &*guard;
+        let mut gc_ptrs = Vec::with_capacity(32);
+        value.capture_gc_ptrs_into(&mut gc_ptrs);
+        if !gc_ptrs.is_empty()
+            && crate::heap::try_with_heap(|heap| {
+                for gc_ptr in &gc_ptrs {
+                    if !heap.record_satb_old_value(*gc_ptr) {
                         crate::gc::incremental::IncrementalMarkState::global().request_fallback(
                             crate::gc::incremental::FallbackReason::SatbBufferOverflow,
                         );
+                        break;
                     }
+                }
+                true
+            })
+            .is_some()
+        {
+            // Heap available, SATB recorded in thread-local buffer
+        } else {
+            // No GC heap on this thread, use cross-thread buffer (bug417)
+            for gc_ptr in gc_ptrs {
+                if !crate::heap::LocalHeap::push_cross_thread_satb(gc_ptr) {
+                    crate::gc::incremental::IncrementalMarkState::global().request_fallback(
+                        crate::gc::incremental::FallbackReason::SatbBufferOverflow,
+                    );
                 }
             }
         }
 
-        let generational_active = crate::gc::incremental::is_generational_barrier_active();
         self.trigger_write_barrier_with_incremental(incremental_active, generational_active);
 
-        if incremental_active {
-            unsafe {
-                let guard_ref = &*guard;
-                let mut new_gc_ptrs = Vec::with_capacity(32);
-                guard_ref.capture_gc_ptrs_into(&mut new_gc_ptrs);
-                if !new_gc_ptrs.is_empty() {
-                    for gc_ptr in new_gc_ptrs {
-                        let _ =
-                            crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
-                    }
+        // FIX bug485: Always mark NEW GC pointers black when OLD values were recorded.
+        // If incremental becomes active between entry and drop, we must mark NEW
+        // to maintain SATB consistency (OLD recorded, NEW must be marked too).
+        // This matches GcRwLock::write() behavior (bug479 fix).
+        unsafe {
+            let guard_ref = &*guard;
+            let mut new_gc_ptrs = Vec::with_capacity(32);
+            guard_ref.capture_gc_ptrs_into(&mut new_gc_ptrs);
+            if !new_gc_ptrs.is_empty() {
+                for gc_ptr in new_gc_ptrs {
+                    let _ = crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8);
                 }
             }
         }
@@ -1251,7 +1310,7 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
 
     #[allow(dead_code)]
     #[inline]
-    fn incremental_write_barrier(ptr: *const u8) {
+    fn incremental_write_barrier(ptr: *const u8, incremental_active: bool) {
         if !Self::is_gc_heap_pointer(ptr) {
             return;
         }
@@ -1295,11 +1354,18 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     if !(*h_ptr).is_allocated(0) {
                         return;
                     }
+                    // Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug459).
+                    // Must verify slot is still allocated before reading any GcBox fields.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
+                    // Third is_allocated check AFTER has_gen_old read - prevents TOCTOU (bug499).
+                    // Must verify slot is still allocated before recording to remembered set.
                     if !(*h_ptr).is_allocated(0) {
                         return;
                     }
@@ -1328,20 +1394,29 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                     if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
+                    // Second is_allocated check - prevents TOCTOU race (bug376, bug459)
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
                     }
-                    // Second is_allocated check - prevents TOCTOU race (bug376)
+                    // Third is_allocated check AFTER has_gen_old read - prevents TOCTOU (bug498).
+                    // Must verify slot is still allocated before recording to remembered set.
                     if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
                     h
                 };
 
-                heap.record_in_remembered_buffer(header);
+                // FIX bug512: Only record in remembered buffer when incremental marking is active.
+                // This matches unified_write_barrier behavior (heap.rs:3185).
+                if incremental_active {
+                    heap.record_in_remembered_buffer(header);
+                }
             });
         }
     }
@@ -1373,6 +1448,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                         if !(*header).is_allocated(0) {
                             return;
                         }
+                        // Second is_allocated check - prevents TOCTOU race (bug459)
+                        if !(*header).is_allocated(0) {
+                            return;
+                        }
                         // GEN_OLD early-exit: skip if page young AND object has no gen_old_flag
                         // (bug202, matches unified_write_barrier).
                         let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
@@ -1380,6 +1459,9 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                         if (*header).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                             return;
                         }
+                        // FIX bug521: Third is_allocated check before set_dirty - prevents TOCTOU.
+                        // If slot was swept after generation check but before set_dirty,
+                        // we'd set dirty bit on wrong slot.
                         if !(*header).is_allocated(0) {
                             return;
                         }
@@ -1405,6 +1487,10 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                             if !(*header.as_ptr()).is_allocated(index) {
                                 return;
                             }
+                            // Second is_allocated check - prevents TOCTOU race (bug459)
+                            if !(*header.as_ptr()).is_allocated(index) {
+                                return;
+                            }
                             // GEN_OLD early-exit: skip if page young AND object has no gen_old_flag
                             // (bug202, matches unified_write_barrier).
                             let gc_box_addr = (header_page_addr + header_size + index * block_size)
@@ -1415,7 +1501,9 @@ impl<T: ?Sized> GcThreadSafeCell<T> {
                             {
                                 return;
                             }
-                            // Second is_allocated check - prevents TOCTOU race (bug376)
+                            // FIX bug520: Third is_allocated check before set_dirty - prevents TOCTOU.
+                            // If slot was swept after generation check but before set_dirty,
+                            // we'd set dirty bit on wrong slot.
                             if !(*header.as_ptr()).is_allocated(index) {
                                 return;
                             }
@@ -1487,9 +1575,9 @@ impl<T: GcCapture + ?Sized> Drop for GcThreadSafeRefMut<'_, T> {
         let incremental_active = crate::gc::incremental::is_incremental_marking_active();
         let generational_active = crate::gc::incremental::is_generational_barrier_active();
 
-        // Mark new GC pointers black only during incremental marking (bug302).
-        // Generational barrier should only mark page as dirty, not prevent collection.
-        if incremental_active {
+        // FIX bug487: Mark GC pointers black when either generational or incremental
+        // barrier is active, matching borrow_mut() behavior (bug486 fix).
+        if generational_active || incremental_active {
             for gc_ptr in &ptrs {
                 let _ = unsafe {
                     crate::gc::incremental::mark_object_black(gc_ptr.as_ptr() as *const u8)
@@ -1561,15 +1649,9 @@ impl<T: std::fmt::Debug> std::fmt::Debug for GcThreadSafeCell<T> {
     }
 }
 
-// SAFETY: GcThreadSafeCell uses parking_lot::Mutex internally, which handles synchronization.
-// The mutex ensures exclusive access - only one thread can access the data at a time.
-// The GC tracing uses data_ptr() during STW pauses when no mutator threads are running.
-// parking_lot::Mutex<T> requires T: Send for Mutex<T>: Send.
-unsafe impl<T: Trace + Send + ?Sized> Send for GcThreadSafeCell<T> {}
+unsafe impl<T: Trace + Send + Sync + ?Sized> Send for GcThreadSafeCell<T> {}
 
-// SAFETY: GcThreadSafeCell uses parking_lot::Mutex internally, which is Send + Sync.
-// Concurrent access is protected by the mutex, and GC tracing is safe during STW pauses.
-unsafe impl<T: Trace + ?Sized> Sync for GcThreadSafeCell<T> {}
+unsafe impl<T: Trace + Send + Sync + ?Sized> Sync for GcThreadSafeCell<T> {}
 
 #[cfg(test)]
 mod tests {

@@ -285,31 +285,47 @@ pub unsafe fn clear_registers() {
             out("r15") _,
         );
     }
-    #[cfg(all(target_arch = "aarch64", not(miri)))]
+    // On aarch64, `spill_registers_and_scan` captures x19–x28 (callee-saved GPRs),
+    // x29 (frame pointer), and x30 (link register). We must NOT zero x29/x30 because
+    // clearing the frame pointer corrupts stack unwinding and clearing the link register
+    // makes returning from this function impossible. Zero only x19–x28.
+    //
+    // The previous implementation incorrectly cleared x0–x18 (caller-saved / scratch
+    // registers), which are disjoint from the set the spill function reads — providing
+    // no protection against false roots at all.
+    // NOTE: On aarch64-apple-darwin, LLVM reserves x19 internally and rejects it as
+    // an inline-asm operand, so this exact sequence does not compile there.
+    #[cfg(all(target_arch = "aarch64", not(target_os = "macos"), not(miri)))]
     unsafe {
         std::arch::asm!(
-            "movz x0, #0",
-            "movz x1, #0",
-            "movz x2, #0",
-            "movz x3, #0",
-            "movz x4, #0",
-            "movz x5, #0",
-            "movz x6, #0",
-            "movz x7, #0",
-            "movz x8, #0",
-            "movz x9, #0",
-            "movz x10, #0",
-            "movz x11, #0",
-            "movz x12, #0",
-            "movz x13, #0",
-            "movz x14, #0",
-            "movz x15, #0",
-            "movz x16, #0",
-            "movz x17, #0",
-            "movz x18, #0",
+            "mov x19, xzr",
+            "mov x20, xzr",
+            "mov x21, xzr",
+            "mov x22, xzr",
+            "mov x23, xzr",
+            "mov x24, xzr",
+            "mov x25, xzr",
+            "mov x26, xzr",
+            "mov x27, xzr",
+            "mov x28, xzr",
+            out("x19") _,
+            out("x20") _,
+            out("x21") _,
+            out("x22") _,
+            out("x23") _,
+            out("x24") _,
+            out("x25") _,
+            out("x26") _,
+            out("x27") _,
+            out("x28") _,
         );
     }
-    // Miri/Other arch: Rely on optimization barrier or dummy work
-    #[cfg(any(not(target_arch = "x86_64"), not(target_arch = "aarch64"), miri))]
+    // aarch64 macOS fallback: keep this a no-op for now to avoid LLVM's reserved
+    // register restriction on fixed x19..x28 operands.
+    #[cfg(all(target_arch = "aarch64", target_os = "macos", not(miri)))]
+    std::hint::black_box(());
+
+    // Miri/Other arch: Rely on optimization barrier or dummy work.
+    #[cfg(any(all(not(target_arch = "x86_64"), not(target_arch = "aarch64")), miri))]
     std::hint::black_box(());
 }

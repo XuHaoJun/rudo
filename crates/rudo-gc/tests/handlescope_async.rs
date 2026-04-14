@@ -107,8 +107,8 @@ fn test_async_handle_copy_clone() {
         let scope = AsyncHandleScope::new(tcb);
         let gc = Gc::new(55i32);
         let handle1 = scope.handle(&gc);
-        let handle2 = handle1;
-        let handle3 = handle1;
+        let handle2 = handle1.clone();
+        let handle3 = handle1.clone();
 
         assert_eq!(*handle1.get(), 55);
         assert_eq!(*handle2.get(), 55);

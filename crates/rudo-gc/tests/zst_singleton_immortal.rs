@@ -80,22 +80,20 @@ fn test_zst_weak_ref_to_singleton() {
 
 #[test]
 fn test_zst_singleton_concurrent_init() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::thread;
 
-    let inits = Arc::new(AtomicUsize::new(0));
+    let gcs = Arc::new(std::sync::Mutex::new(Vec::new()));
     let barrier = Arc::new(std::sync::Barrier::new(10));
 
     let handles: Vec<_> = (0..10)
         .map(|_| {
             let barrier = barrier.clone();
-            let inits = inits.clone();
+            let gcs = gcs.clone();
             thread::spawn(move || {
                 barrier.wait();
                 let unit = Gc::new(());
-                drop(unit);
-                inits.fetch_add(1, Ordering::SeqCst);
+                gcs.lock().unwrap().push(unit);
             })
         })
         .collect();
@@ -104,7 +102,19 @@ fn test_zst_singleton_concurrent_init() {
         handle.join().unwrap();
     }
 
-    assert_eq!(inits.load(Ordering::SeqCst), 10);
+    let first_gc;
+    {
+        let gcs = gcs.lock().unwrap();
+        assert_eq!(gcs.len(), 10);
+        first_gc = gcs[0].clone();
+    }
+
+    for gc in gcs.lock().unwrap().iter() {
+        assert!(
+            Gc::ptr_eq(gc, &first_gc),
+            "All threads should get the same ZST singleton pointer"
+        );
+    }
 }
 
 #[test]

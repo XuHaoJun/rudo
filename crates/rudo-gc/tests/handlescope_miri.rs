@@ -141,8 +141,8 @@ fn miri_async_handle_copy_semantics() {
         let gc = Gc::new(MiriTestData { value: 222 });
         let handle1 = scope.handle(&gc);
 
-        let handle2 = handle1;
-        let handle3 = handle1;
+        let handle2 = handle1.clone();
+        let handle3 = handle1.clone();
 
         assert_eq!(handle1.get().value, 222);
         assert_eq!(handle2.get().value, 222);

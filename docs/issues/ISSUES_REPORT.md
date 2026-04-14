@@ -3,7 +3,8 @@
 ## Statistics
 
 ### By Status
-- **Fixed**: 414
+- **Fixed**: 430
+- **Open**: 14
 - **Invalid**: 43
 - **Closed**: 7
 - **Resolved**: 1
@@ -11,15 +12,15 @@
 - **Verified**: 21
 
 ### By Tags
-- **Verified**: 434
-- **Not Verified**: 23
+- **Verified**: 453
+- **Not Verified**: 27
 - **Not Reproduced**: 19
 - **Bug, Fixed**: 1
 - **Bug, GC, Incremental Marking, Slot Reuse, TOCTOU**: 1
 - **Duplicate**: 1
-- **Fixed**: 1
+- **Fixed**: 3
 - **Unknown**: 1
-- **Unverified**: 3
+- **Unverified**: 9
 - **Verified, Fixed**: 2
 - **Verified, Soundness**: 1
 
@@ -27,6 +28,8 @@
 
 | Issue | Title | Status | Tags |
 |---|---|---|---|
+| [2026-03-31_ISSUE_bug475_borrow_mut_simple_satb_old_value_not_recorded_when_incremental_transitions.md](./2026-03-31_ISSUE_bug475_borrow_mut_simple_satb_old_value_not_recorded_when_incremental_transitions.md) | GcThreadSafeCell::borrow_mut_simple 當 incremental_active 從 false 轉換為 true 時，SATB OLD 值未被記錄 | Open | Unverified |
+| [2026-04-01_ISSUE_bug479_gcrwlock_write_satb_inconsistent_mark_object_black.md](./2026-04-01_ISSUE_bug479_gcrwlock_write_satb_inconsistent_mark_object_black.md) | GcRwLock::write() 當 incremental_active 轉換時，SATB 記錄 OLD 值但不標記 NEW 值 | Fixed | Verified |
 | [2026-02-19_ISSUE_bug1_large_object_interior_uaf.md](./2026-02-19_ISSUE_bug1_large_object_interior_uaf.md) | 大型物件內部指標在執行緒終止後失效導致 UAF | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md](./2026-02-19_ISSUE_bug2_orphan_sweep_weak_ref.md) | 孤立物件的 Weak 參考在回收時導致記憶體錯誤 | Fixed | Not Reproduced |
 | [2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md](./2026-02-19_ISSUE_bug3_generational_barrier_gen_old_flag.md) | Generational Write Barrier 忽略 per-object GEN_OLD_FLAG 導致 OLD→YOUNG 引用遺漏 | Fixed | Not Reproduced |
@@ -138,6 +141,7 @@
 | [2026-02-25_ISSUE_bug108_gcboxweakref_clone_missing_safety_checks.md](./2026-02-25_ISSUE_bug108_gcboxweakref_clone_missing_safety_checks.md) | GcBoxWeakRef::clone 缺少安全檢查導致潛在 Use-After-Free | Invalid | Not Verified |
 | [2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md](./2026-02-25_ISSUE_bug108_mark_new_object_black_missing_is_allocated_check.md) | mark_new_object_black 缺少 is_allocated 檢查，與 mark_object_black 行為不一致 | Fixed | Verified |
 | [2026-02-25_ISSUE_bug109_gcthreadsaferefmut_drop_missing_generational_barrier.md](./2026-02-25_ISSUE_bug109_gcthreadsaferefmut_drop_missing_generational_barrier.md) | GcThreadSafeRefMut::drop 缺少 Generational Barrier 檢查 | Fixed | Verified |
+| [2026-03-29_ISSUE_bug109_generation_wraparound_slot_reuse.md](./2026-03-29_ISSUE_bug109_generation_wraparound_slot_reuse.md) | Generation Wraparound 導致 Slot Reuse 檢測失效 | Open | Unverified |
 | [2026-02-25_ISSUE_bug110_gccell_borrow_mut_triple_is_incremental_check.md](./2026-02-25_ISSUE_bug110_gccell_borrow_mut_triple_is_incremental_check.md) | GcCell::borrow_mut 三次調用 is_incremental_marking_active 導致 TOCTOU | Fixed | Verified |
 | [2026-02-25_ISSUE_bug111_gcthreadsafecell_trigger_write_barrier_toctou.md](./2026-02-25_ISSUE_bug111_gcthreadsafecell_trigger_write_barrier_toctou.md) | GcThreadSafeCell::trigger_write_barrier TOCTOU - is_incremental_marking_active called twice | Invalid | Not Verified |
 | [2026-02-25_ISSUE_bug112_try_inc_ref_from_zero_doc_mismatch.md](./2026-02-25_ISSUE_bug112_try_inc_ref_from_zero_doc_mismatch.md) | try_inc_ref_from_zero 文檔與實作不一致 - 聲稱檢查 "fully alive" 但只檢查 dead | Fixed | Verified |
@@ -176,6 +180,9 @@
 | [2026-03-23_ISSUE_bug122_tcb_unsafe_sync_unsound.md](./2026-03-23_ISSUE_bug122_tcb_unsafe_sync_unsound.md) | ThreadControlBlock unsafe impl Sync may be unsound due to UnsafeCell<LocalHeap> | Fixed | Verified, Soundness |
 | [2026-03-25_ISSUE_bug122_gchandle_resolve_incorrect_panic_tcb_alive.md](./2026-03-25_ISSUE_bug122_gchandle_resolve_incorrect_panic_tcb_alive.md) | GcHandle::resolve()  incorrect panic when TCB alive and handle removed via unregister | Fixed | Verified |
 | [2026-03-27_ISSUE_bug122_try_steal_work_loss.md](./2026-03-27_ISSUE_bug122_try_steal_work_loss.md) | Work loss in `try_steal_work` when all queues are full | Fixed | Verified |
+| [2026-03-29_ISSUE_bug122_cell_incremental_write_barrier_small_object_toctou.md](./2026-03-29_ISSUE_bug122_cell_incremental_write_barrier_small_object_toctou.md) | GcCell::incremental_write_barrier small object path has_gen_old TOCTOU | Open | Unverified |
+| [2026-03-30_ISSUE_bug122_gcthreadsafecell_inconsistent_sync_bound.md](./2026-03-30_ISSUE_bug122_gcthreadsafecell_inconsistent_sync_bound.md) | GcThreadSafeCell inconsistent Sync trait bound | Open | Verified |
+| [2026-03-30_ISSUE_bug122_thread_heap_drop_at_safepoint_gc_hang.md](./2026-03-30_ISSUE_bug122_thread_heap_drop_at_safepoint_gc_hang.md) | ThreadLocalHeap Drop at Safepoint Causes GC Hang | Open | Verified |
 | [2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug123_incremental_mark_root_for_snapshot_missing_is_allocated_check.md) | Incremental Marking `mark_root_for_snapshot` 缺少 is_allocated 檢查 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md](./2026-02-26_ISSUE_bug124_weak_cross_thread_handle_clone_missing_thread_check.md) | WeakCrossThreadHandle Clone 未驗證執行緒親和性 - 與 resolve() 不一致 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md](./2026-02-26_ISSUE_bug125_gcbox_try_inc_ref_from_zero_missing_dropping_check.md) | GcBox::try_inc_ref_from_zero 內部缺少 dropping_state 檢查 - API 設計潛在問題 | Fixed | Verified |
@@ -187,6 +194,7 @@
 | [2026-03-15_ISSUE_bug127_gccell_borrow_mut_incorrect_mark_black.md](./2026-03-15_ISSUE_bug127_gccell_borrow_mut_incorrect_mark_black.md) | GcCell/GcThreadSafeCell borrow_mut 錯誤地在僅有 generational barrier 時標記新指標為黑色 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md](./2026-02-26_ISSUE_bug128_gchandle_is_valid_toctou.md) | GcHandle::is_valid() 未驗證 Root 存在性 - TOCTOU 導致 Resolve 可能失敗 | Fixed | Verified |
 | [2026-03-23_ISSUE_bug128_incomplete_rendezvous_ack_counter.md](./2026-03-23_ISSUE_bug128_incomplete_rendezvous_ack_counter.md) | `rendezvous_ack_counter` 機制未完成 - 增加後從未被正確使用 | Fixed | Verified |
+| [2026-03-30_ISSUE_bug128_mark_and_trace_incremental_missing_clear_mark.md](./2026-03-30_ISSUE_bug128_mark_and_trace_incremental_missing_clear_mark.md) | mark_and_trace_incremental 缺少 clear_mark_atomic 導致殘留標記位元 | Fixed | Verified |
 | [2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md](./2026-02-26_ISSUE_bug129_gcvisitorconcurrent_route_reference_missing_is_allocated_check.md) | GcVisitorConcurrent::route_reference 缺少 is_allocated 檢查導致錯誤標記 | Fixed | Verified |
 | [2026-03-01_ISSUE_bug129_gchandle_is_valid_missing_gcbox_state_check.md](./2026-03-01_ISSUE_bug129_gchandle_is_valid_missing_gcbox_state_check.md) | GcHandle::is_valid() 未檢查 GcBox 存活狀態 - 導致 False Positive | Invalid | Not Reproduced |
 | [2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md](./2026-02-26_ISSUE_bug130_weakcrossthreadhandle_drop_missing_validity_check.md) | WeakCrossThreadHandle::drop 缺少有效性檢查可能導致 UAF | Fixed | Verified |
@@ -514,3 +522,30 @@
 | [2026-03-28_ISSUE_bug445_GcThreadSafeCell_borrow_mut_gen_only_lock_order.md](./2026-03-28_ISSUE_bug445_GcThreadSafeCell_borrow_mut_gen_only_lock_order.md) | GcThreadSafeCell::borrow_mut_gen_only triggers write barrier before acquiring lock (inconsistent API) | Fixed | Verified |
 | [2026-03-28_ISSUE_bug446_GcCell_borrow_mut_gen_only_inconsistent.md](./2026-03-28_ISSUE_bug446_GcCell_borrow_mut_gen_only_inconsistent.md) | GcCell::borrow_mut_gen_only inconsistent with GcThreadSafeCell - always triggers barrier | Closed | Verified, Fixed |
 | [2026-03-28_ISSUE_bug447_promote_pages_bitmap_bounds.md](./2026-03-28_ISSUE_bug447_promote_pages_bitmap_bounds.md) | promote_young_pages and promote_all_pages use BITMAP_SIZE instead of obj_count - buffer overrun | Fixed | Verified |
+| [2026-03-28_ISSUE_bug448_zst_singleton_concurrent_init_test_no_pointer_check.md](./2026-03-28_ISSUE_bug448_zst_singleton_concurrent_init_test_no_pointer_check.md) | test_zst_singleton_concurrent_init 不驗證 singleton 指標相等性 | Fixed | Verified |
+| [2026-03-28_ISSUE_bug449_stop_all_mutators_timeout_fallback_cleared.md](./2026-03-28_ISSUE_bug449_stop_all_mutators_timeout_fallback_cleared.md) | stop_all_mutators_for_snapshot timeout fallback cleared by execute_snapshot reset_fallback | Fixed | Verified |
+| [2026-03-29_ISSUE_bug450_gcboxweakref_upgrade_try_upgrade_inconsistent_dropping_state_check.md](./2026-03-29_ISSUE_bug450_gcboxweakref_upgrade_try_upgrade_inconsistent_dropping_state_check.md) | GcBoxWeakRef::upgrade 與 try_upgrade 對 is_dead_or_unrooted 與 dropping_state 檢查順序不一致 | Fixed | Verified |
+| [2026-03-29_ISSUE_bug451_gc_cross_thread_handle_missing_generation_check.md](./2026-03-29_ISSUE_bug451_gc_cross_thread_handle_missing_generation_check.md) | Gc::cross_thread_handle missing generation check before inc_ref | Fixed | Fixed |
+| [2026-03-29_ISSUE_bug452_gcboxweakref_try_upgrade_is_dead_or_unrooted_blocks_resurrection.md](./2026-03-29_ISSUE_bug452_gcboxweakref_try_upgrade_is_dead_or_unrooted_blocks_resurrection.md) | GcBoxWeakRef::try_upgrade 包含 is_dead_or_unrooted 檢查阻止 Resurrection | Open | Verified |
+| [2026-03-29_ISSUE_bug453_async_handle_get_gen_mismatch_ref_count_leak.md](./2026-03-29_ISSUE_bug453_async_handle_get_gen_mismatch_ref_count_leak.md) | AsyncHandle::get generation mismatch panic does not undo ref_count increment (ref_count leak) | Fixed | Verified |
+| [2026-03-29_ISSUE_bug454_handle_get_gen_mismatch_ref_count_leak.md](./2026-03-29_ISSUE_bug454_handle_get_gen_mismatch_ref_count_leak.md) | Handle::get generation mismatch panic does not undo ref_count increment (ref_count leak) | Fixed | Verified |
+| [2026-03-29_ISSUE_bug455_handle_to_gc_gen_mismatch_ref_count_leak.md](./2026-03-29_ISSUE_bug455_handle_to_gc_gen_mismatch_ref_count_leak.md) | Handle::to_gc() generation mismatch panic does not undo ref_count increment (ref_count leak) | Open | Unverified |
+| [2026-03-29_ISSUE_bug456_gc_try_clone_missing_generation_check.md](./2026-03-29_ISSUE_bug456_gc_try_clone_missing_generation_check.md) | Gc::try_clone 缺少 generation 檢查，與 Gc::clone 修復不一致 | Open | Unverified |
+| [2026-03-29_ISSUE_bug457_incremental_write_barrier_has_gen_old_toctou.md](./2026-03-29_ISSUE_bug457_incremental_write_barrier_has_gen_old_toctou.md) | incremental_write_barrier has_gen_old TOCTOU - second is_allocated check after flag read | Fixed | Verified |
+| [2026-03-29_ISSUE_bug458_migrate_roots_to_orphan_drain_before_lock.md](./2026-03-29_ISSUE_bug458_migrate_roots_to_orphan_drain_before_lock.md) | migrate_roots_to_orphan drains before lock risking data loss on panic | Fixed | Verified |
+| [2026-03-29_ISSUE_bug459_cell_incremental_write_barrier_large_object_toctou.md](./2026-03-29_ISSUE_bug459_cell_incremental_write_barrier_large_object_toctou.md) | cell.rs incremental_write_barrier large object path has_gen_old TOCTOU | Open | Unverified |
+| [2026-03-29_ISSUE_bug460_gccell_generational_write_barrier_has_gen_old_toctou.md](./2026-03-29_ISSUE_bug460_gccell_generational_write_barrier_has_gen_old_toctou.md) | GcCell::generational_write_barrier has_gen_old TOCTOU in both paths | Fixed | Verified, Fixed |
+| [2026-03-29_ISSUE_bug461_gchandle_resolve_impl_gen_mismatch_ref_count_leak.md](./2026-03-29_ISSUE_bug461_gchandle_resolve_impl_gen_mismatch_ref_count_leak.md) | GcHandle::resolve_impl generation mismatch panic does not undo inc_ref (ref_count leak) | Fixed | Fixed |
+| [2026-03-30_ISSUE_bug462_heap_incremental_write_barrier_small_object_toctou.md](./2026-03-30_ISSUE_bug462_heap_incremental_write_barrier_small_object_toctou.md) | heap.rs incremental_write_barrier small object path missing second is_allocated check | Fixed | Verified |
+| [2026-03-30_ISSUE_bug463_unified_write_barrier_toctou.md](./2026-03-30_ISSUE_bug463_unified_write_barrier_toctou.md) | unified_write_barrier TOCTOU - missing second is_allocated check before has_gen_old read | Fixed | Verified |
+| [2026-03-30_ISSUE_bug464_gc_cell_validate_and_barrier_second_is_allocated_missing.md](./2026-03-30_ISSUE_bug464_gc_cell_validate_and_barrier_second_is_allocated_missing.md) | gc_cell_validate_and_barrier missing second is_allocated check before has_gen_old read | Fixed | Verified |
+| [2026-03-30_ISSUE_bug465_wake_waiting_threads_toctou_race.md](./2026-03-30_ISSUE_bug465_wake_waiting_threads_toctou_race.md) | wake_waiting_threads TOCTOU Race Causes Thread to Skip GC Safepoint | Open | Verified |
+| [2026-03-30_ISSUE_bug466_sweep_large_objects_missing_is_allocated_check.md](./2026-03-30_ISSUE_bug466_sweep_large_objects_missing_is_allocated_check.md) | sweep_large_objects Missing is_allocated Check Before Dereference | Fixed | Verified |
+| [2026-03-30_ISSUE_bug467_simple_write_barrier_second_is_allocated_missing.md](./2026-03-30_ISSUE_bug467_simple_write_barrier_second_is_allocated_missing.md) | simple_write_barrier Missing Second is_allocated Check Before Reading has_gen_old_flag | Open | Not Verified |
+| [2026-03-30_ISSUE_bug468_incremental_fallback_worklist_abandon.md](./2026-03-30_ISSUE_bug468_incremental_fallback_worklist_abandon.md) | Incremental marking fallback abandons state.worklist causing reachable objects to be swept | Fixed | Verified |
+| [2026-03-30_ISSUE_bug469_worker_mark_loop_missing_is_under_construction_check.md](./2026-03-30_ISSUE_bug469_worker_mark_loop_missing_is_under_construction_check.md) | worker_mark_loop_with_registry missing is_under_construction check before trace_fn | Fixed | Verified |
+| [2026-03-31_ISSUE_bug470_gchandle_clone_downgrade_migration_panic.md](./2026-03-31_ISSUE_bug470_gchandle_clone_downgrade_migration_panic.md) | GcHandle::clone 和 GcHandle::downgrade 在 orphan migration 視窗期間不正確地 panic | Open | Not Verified |
+| [2026-03-31_ISSUE_bug473_lazy_sweep_missing_clear_flags.md](./2026-03-31_ISSUE_bug473_lazy_sweep_missing_clear_flags.md) | lazy_sweep_page 回收 slot 時未清除 UNDER_CONSTRUCTION_FLAG 和 is_dropping | Open | Not Verified |
+| [2026-04-06_ISSUE_bug510_gcscope_spawn_comments_reference_bugxxx_not_bug496.md](./2026-04-06_ISSUE_bug510_gcscope_spawn_comments_reference_bugxxx_not_bug496.md) | GcScope::spawn comments reference bugXXX instead of bug496 | Open | Unverified |
+
+(End of file - total 547 lines)

@@ -26,6 +26,25 @@ use crate::ptr::GcBox;
 /// Prevents unbounded memory growth when many threads mutate shared GC objects.
 const MAX_CROSS_THREAD_SATB_SIZE: usize = 1024 * 1024;
 
+/// Test-only override for `MAX_CROSS_THREAD_SATB_SIZE`.
+/// When non-zero, this value replaces the constant. Allows tests to saturate
+/// the buffers with far fewer entries. Reset to 0 after use.
+#[cfg(any(test, feature = "test-util"))]
+pub(crate) static CROSS_THREAD_SATB_SIZE_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[inline]
+fn max_cross_thread_satb_size() -> usize {
+    #[cfg(any(test, feature = "test-util"))]
+    {
+        let ov = CROSS_THREAD_SATB_SIZE_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+        if ov > 0 {
+            return ov;
+        }
+    }
+    MAX_CROSS_THREAD_SATB_SIZE
+}
+
 /// Global SATB buffer for cross-thread mutations.
 /// When a mutation occurs on a different thread than the allocating thread,
 /// the SATB old value is recorded here instead of the thread-local buffer.
@@ -41,6 +60,19 @@ static CROSS_THREAD_SATB_BUFFER: parking_lot::Mutex<Vec<usize>> =
 /// Retains pointers until fallback completes, preventing premature collection
 /// during the race window between overflow and fallback (bug122).
 static CROSS_THREAD_SATB_OVERFLOW_BUFFER: parking_lot::Mutex<Vec<usize>> =
+    parking_lot::Mutex::new(Vec::new());
+
+/// Emergency buffer for cross-thread SATB when both main and overflow are full.
+///
+/// When the main buffer AND overflow buffer are both at capacity the entry was
+/// previously silently dropped, breaking the SATB snapshot guarantee.
+/// This buffer captures those entries so they are never lost.
+///
+/// The buffer is unbounded by design: correctness (no premature collection) takes
+/// priority over memory pressure.  A fallback STW is always requested at the same
+/// time, so the window during which this buffer can grow is bounded by the time
+/// the collector takes to observe the fallback flag and begin a STW sweep.
+static CROSS_THREAD_SATB_EMERGENCY_BUFFER: parking_lot::Mutex<Vec<usize>> =
     parking_lot::Mutex::new(Vec::new());
 
 // Thread-local storage for the current thread's stable ID.
@@ -75,22 +107,9 @@ pub(crate) fn get_thread_id() -> u64 {
 /// - The `GcBox` must not have been deallocated
 #[must_use]
 pub(crate) unsafe fn get_allocating_thread_id(gc_box_addr: usize) -> u64 {
-    let heap_start = heap_start();
-    let heap_end = heap_end();
-
-    debug_assert!(
-        gc_box_addr >= heap_start && gc_box_addr <= heap_end,
-        "Address {gc_box_addr:#x} outside heap range [{heap_start:#x}, {heap_end:#x}]"
-    );
-
-    if gc_box_addr < heap_start || gc_box_addr > heap_end {
-        return 0;
-    }
-
     let header = unsafe { ptr_to_page_header(gc_box_addr as *const u8) };
 
     if let Some(idx) = unsafe { ptr_to_object_index(gc_box_addr as *const u8) } {
-        // Release build: avoid reading owner_thread from swept objects (bug276).
         if !unsafe { (*header.as_ptr()).is_allocated(idx) } {
             return 0;
         }
@@ -181,17 +200,15 @@ pub fn migrate_roots_to_orphan(tcb: &ThreadControlBlock, thread_id: ThreadId) {
     if roots.strong.is_empty() {
         return;
     }
-    let drained: Vec<_> = roots
-        .strong
-        .drain()
-        .map(|(k, v)| (k, v.as_ptr() as usize))
-        .collect();
 
     // Acquire orphan lock BEFORE releasing TCB roots lock to prevent race (bug325).
     // This ensures handle is either in TCB roots or orphan table at all times.
     let mut orphan = orphaned_cross_thread_roots().lock();
-    for (handle_id, ptr) in drained {
-        orphan.insert((thread_id, handle_id), ptr);
+
+    // Drain and insert one at a time while holding both locks.
+    // If insert panics, entries remain in roots (not lost).
+    for (handle_id, v) in roots.strong.drain() {
+        orphan.insert((thread_id, handle_id), v.as_ptr() as usize);
     }
 }
 
@@ -259,7 +276,10 @@ impl Drop for OrphanInsertGuard {
             .remove(&(self.thread_id, self.handle_id))
             .is_some()
         {
-            GcBox::dec_ref(self.ptr.as_ptr());
+            // FIX bug483: Use undo_inc_ref for rollback instead of dec_ref.
+            // dec_ref returns early without decrementing when DEAD_FLAG is set or
+            // is_under_construction() is true, causing ref_count leak.
+            unsafe { GcBox::undo_inc_ref(self.ptr.as_ptr()) }
         }
     }
 }
@@ -278,17 +298,11 @@ pub fn clone_orphan_root_with_inc_ref(
     }
     // SAFETY: ptr came from a live GcHandle whose orphan entry still exists in the table.
     // The orphan lock is held here, preventing concurrent removal of the entry.
-    // Order: is_allocated check -> inc_ref -> insert. If inc_ref or insert panics,
+    // Order: is_allocated check -> flags check -> inc_ref -> insert. If inc_ref or insert panics,
     // no root entry exists; the extra ref would leak but no UAF from orphaned root.
     unsafe {
-        let gc_box = &*ptr.as_ptr();
-        assert!(
-            !gc_box.has_dead_flag()
-                && gc_box.dropping_state() == 0
-                && !gc_box.is_under_construction(),
-            "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle (orphan)"
-        );
-        // Check is_allocated before inc_ref; if this panics, no root entry exists yet.
+        // FIX bug526: Check is_allocated BEFORE dereferencing to prevent UAF.
+        // If slot was swept, dereferencing would be UB.
         if let Some(idx) = ptr_to_object_index(ptr.as_ptr() as *const u8) {
             let header = ptr_to_page_header(ptr.as_ptr() as *const u8);
             assert!(
@@ -296,6 +310,14 @@ pub fn clone_orphan_root_with_inc_ref(
                 "clone_orphan_root_with_inc_ref: object slot was swept"
             );
         }
+
+        let gc_box = &*ptr.as_ptr();
+        assert!(
+            !gc_box.has_dead_flag()
+                && gc_box.dropping_state() == 0
+                && !gc_box.is_under_construction(),
+            "GcHandle::clone: cannot clone a dead, dropping, or under construction GcHandle (orphan)"
+        );
         // Get generation BEFORE inc_ref to detect slot reuse.
         // If slot is swept and reused between check and inc_ref,
         // the generation will be different after inc_ref.
@@ -307,6 +329,16 @@ pub fn clone_orphan_root_with_inc_ref(
         if pre_generation != (*ptr.as_ptr()).generation() {
             GcBox::undo_inc_ref(ptr.as_ptr());
             panic!("clone_orphan_root_with_inc_ref: slot was reused during clone (generation mismatch)");
+        }
+
+        // FIX bug515: Second is_allocated check AFTER inc_ref to catch slot reuse
+        // that bypassed the generation check (defense-in-depth).
+        if let Some(idx) = ptr_to_object_index(ptr.as_ptr() as *const u8) {
+            let header = ptr_to_page_header(ptr.as_ptr() as *const u8);
+            assert!(
+                (*header.as_ptr()).is_allocated(idx),
+                "clone_orphan_root_with_inc_ref: object slot was swept after inc_ref"
+            );
         }
     }
     let new_id = allocate_orphan_handle_id();
@@ -1935,6 +1967,9 @@ impl LocalHeap {
         self.dirty_page_history.rotate_right(1);
         self.dirty_page_history[0] = count;
         self.avg_dirty_pages = self.dirty_page_history.iter().sum::<usize>() / 4;
+        for &page_ptr in &self.dirty_pages_snapshot {
+            unsafe { (*page_ptr.as_ptr()).clear_dirty_listed() };
+        }
         self.dirty_pages_snapshot.clear();
     }
 
@@ -2029,30 +2064,47 @@ impl LocalHeap {
         }
     }
 
-    /// Flush the cross-thread SATB buffer (main + overflow).
+    /// Flush the cross-thread SATB buffers (main + overflow + emergency).
     /// Called during GC to process cross-thread mutations.
     #[must_use]
     pub fn flush_cross_thread_satb_buffer() -> Vec<NonNull<GcBox<()>>> {
         let mut main = std::mem::take(&mut *CROSS_THREAD_SATB_BUFFER.lock());
         let overflow = std::mem::take(&mut *CROSS_THREAD_SATB_OVERFLOW_BUFFER.lock());
+        let emergency = std::mem::take(&mut *CROSS_THREAD_SATB_EMERGENCY_BUFFER.lock());
         main.extend(overflow);
+        main.extend(emergency);
         main.into_iter()
             .filter_map(|addr| NonNull::new(addr as *mut GcBox<()>))
             .collect()
     }
 
     /// Push a GC pointer to the cross-thread SATB buffer.
-    /// Used when recording SATB old values from threads without a GC heap.
-    /// When main buffer is full, records to overflow buffer instead of dropping (bug122).
-    /// When overflow is also full, skips push to prevent unbounded growth (bug270).
     ///
-    /// Returns `true` if the value was stored successfully, `false` if the buffer
-    /// overflowed and fallback was requested.
+    /// Used when recording SATB old values from threads without a GC heap.
+    ///
+    /// Tier order on saturation:
+    /// 1. Main buffer — normal path.
+    /// 2. Overflow buffer — when main is full (bug122).
+    /// 3. Emergency buffer — when both main and overflow are full.
+    ///    Previously entries were silently dropped here, breaking the SATB
+    ///    snapshot guarantee (P5 / bug270-successor).  The emergency buffer is
+    ///    unbounded; a fallback STW is requested immediately so the window
+    ///    during which it can grow is bounded by collector latency.
+    ///
+    /// Returns `true` if the value landed in the main buffer (no pressure),
+    /// `false` if it was stored under overflow/emergency pressure and a STW
+    /// fallback was requested.
     pub fn push_cross_thread_satb(gc_ptr: NonNull<GcBox<()>>) -> bool {
+        let limit = max_cross_thread_satb_size();
         let mut buffer = CROSS_THREAD_SATB_BUFFER.lock();
-        if buffer.len() >= MAX_CROSS_THREAD_SATB_SIZE {
+        if buffer.len() >= limit {
             let mut overflow = CROSS_THREAD_SATB_OVERFLOW_BUFFER.lock();
-            if overflow.len() >= MAX_CROSS_THREAD_SATB_SIZE {
+            if overflow.len() >= limit {
+                // Both main and overflow are full.  Use the emergency buffer so
+                // the entry is never silently dropped.
+                CROSS_THREAD_SATB_EMERGENCY_BUFFER
+                    .lock()
+                    .push(gc_ptr.as_ptr() as usize);
                 crate::gc::incremental::IncrementalMarkState::global()
                     .request_fallback(crate::gc::incremental::FallbackReason::SatbBufferOverflow);
                 return false;
@@ -2289,6 +2341,7 @@ impl LocalHeap {
             // Clear the free list head to avoid leaving corrupt state; sweep will rebuild.
             // SAFETY: Caller guarantees header is valid.
             let _ = unsafe { (*header).compare_exchange_free_list(Some(idx), None) };
+            unsafe { (*header).clear_allocated(idx as usize) };
             return None;
         }
         // SAFETY: Caller guarantees header is valid.
@@ -2427,15 +2480,14 @@ impl LocalHeap {
                 free_list_head: 0,
             });
 
-            // Initialize all slots with no-op drop
+            // Initialize all slots with proper GcBox header
+            // This fixes the bug where weak_count was uninitialized, causing UB
+            // when clear_gen_old() reads weak_count during slot reuse (try_pop_from_page)
             for i in 0..obj_count {
                 let obj_ptr = ptr.as_ptr().add(h_size + (i * block_size));
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<crate::ptr::GcBox<()>>();
-                std::ptr::addr_of_mut!((*gc_box_ptr).drop_fn)
-                    .write(crate::ptr::GcBox::<()>::no_op_drop);
-                std::ptr::addr_of_mut!((*gc_box_ptr).trace_fn)
-                    .write(crate::ptr::GcBox::<()>::no_op_trace);
+                crate::ptr::GcBox::<()>::init_header_at(gc_box_ptr);
             }
         }
 
@@ -2712,7 +2764,16 @@ impl LocalHeap {
             let alloc_size = total_size.div_ceil(page_size()) * page_size();
 
             let gc_box_ptr = addr as *mut crate::ptr::GcBox<()>;
-            if !(*gc_box_ptr).has_dead_flag() {
+            // FIX bug515: Check is_allocated before calling drop_fn.
+            // If the slot was already swept (has_dead_flag cleared), drop_fn
+            // could be called on a reused slot with wrong drop function.
+            // Use ptr_to_object_index to verify slot is still valid.
+            let idx = unsafe { ptr_to_object_index(addr as *const u8) };
+            let is_valid = idx.is_some() && {
+                let header = unsafe { ptr_to_page_header(addr as *const u8) };
+                (*header.as_ptr()).is_allocated(idx.unwrap())
+            };
+            if is_valid && !(*gc_box_ptr).has_dead_flag() {
                 ((*gc_box_ptr).drop_fn)(addr as *mut u8);
             }
 
@@ -2841,9 +2902,22 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
 
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    // FIX bug467: Second is_allocated check BEFORE reading has_gen_old - prevents TOCTOU.
+                    // If slot was swept after first check but before reading has_gen_old,
+                    // we'd read stale data from a reused slot.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     // Cache flag to avoid TOCTOU between check and barrier (bug149).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
+                        return;
+                    }
+                    // FIX bug604: Third is_allocated check AFTER has_gen_old read - prevents TOCTOU.
+                    // If slot was swept after generation check but before returning,
+                    // we'd return a stale slot index. Matches incremental_write_barrier (bug499)
+                    // and simple_write_barrier small object path (bug535) patterns.
+                    if !(*h_ptr).is_allocated(0) {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -2866,13 +2940,21 @@ pub fn simple_write_barrier(ptr: *const u8) {
                     }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
-                    // Skip if slot was swept; avoids corrupting dirty tracking with reused slot (bug286).
+                    // FIX bug467: Second is_allocated check BEFORE reading has_gen_old - prevents TOCTOU.
+                    // If slot was swept after first check but before reading has_gen_old,
+                    // we'd read stale data from a reused slot.
                     if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
                     // Cache flag to avoid TOCTOU between check and barrier (bug149).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
+                        return;
+                    }
+                    // FIX bug535: Third is_allocated check AFTER has_gen_old read - prevents TOCTOU.
+                    // If slot was swept after generation check but before returning,
+                    // we'd return a stale slot index. Matches incremental_write_barrier pattern.
+                    if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
                     (h, index)
@@ -2932,6 +3014,10 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 }
 
                 // Skip if slot was swept; read has_gen_old_flag only after is_allocated (bug247).
+                if !(*h_ptr).is_allocated(0) {
+                    return;
+                }
+                // Second is_allocated check before reading has_gen_old - prevents TOCTOU (bug459, bug464)
                 if !(*h_ptr).is_allocated(0) {
                     return;
                 }
@@ -3009,10 +3095,20 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
 
                 // GEN_OLD early-exit: skip only if page young AND object has no gen_old_flag (bug71).
                 // Cache flag to avoid TOCTOU between check and barrier (bug114).
+                // Second is_allocated check before reading has_gen_old - prevents TOCTOU (bug459, bug464)
+                if !(*h).is_allocated(index) {
+                    return;
+                }
                 let gc_box_addr =
                     (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                 let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                 if (*h).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
+                    return;
+                }
+                // FIX bug531: Third is_allocated check AFTER has_gen_old read - prevents TOCTOU.
+                // Must verify slot is still allocated before returning to caller.
+                // Matches incremental_write_barrier (bug530) and simple_write_barrier patterns.
+                if !(*h).is_allocated(index) {
                     return;
                 }
                 (header, index)
@@ -3030,6 +3126,97 @@ pub fn gc_cell_validate_and_barrier(ptr: *const u8, context: &str, incremental_a
                 std::sync::atomic::fence(Ordering::AcqRel);
                 heap.record_in_remembered_buffer(h);
             }
+        }
+    });
+}
+
+/// Marks a page as dirty for `borrow_mut` without `gen_old` check.
+///
+/// This is used by `GcCell::borrow_mut` to ensure children are traced during minor GC.
+/// Unlike `unified_write_barrier`, this does NOT check `gen_old` - it always adds the page
+/// to `dirty_pages`. This is necessary because the `gen_old` optimization (bug71) skips
+/// recording OLD→YOUNG references for young pages, but we still need the page in `dirty_pages`
+/// so children in `GcCell<Vec<Gc<T>>>` are traced during minor GC.
+///
+/// # Safety
+///
+/// The pointer must be a valid pointer to a `GcCell` field within the GC heap.
+#[inline]
+#[allow(dead_code)]
+pub unsafe fn mark_page_dirty_for_borrow(ptr: *const u8) {
+    if ptr.is_null() {
+        return;
+    }
+
+    let ptr_addr = ptr as usize;
+    with_heap(|heap| {
+        if ptr_addr < heap.min_addr || ptr_addr >= heap.max_addr {
+            return;
+        }
+
+        let page_addr = ptr_addr & page_mask();
+
+        unsafe {
+            if let Some(&(head_addr, size, h_size)) = heap.large_object_map.get(&page_addr) {
+                if ptr_addr >= head_addr + h_size && ptr_addr < head_addr + h_size + size {
+                    let h_ptr = head_addr as *mut PageHeader;
+                    if (*h_ptr).magic != MAGIC_GC_PAGE {
+                        return;
+                    }
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
+                    (*h_ptr).set_dirty(0);
+                    heap.add_to_dirty_pages(NonNull::new_unchecked(h_ptr));
+                    return;
+                }
+            }
+
+            let header = ptr_to_page_header(ptr);
+            let h = header.as_ptr();
+
+            if (*h).magic != MAGIC_GC_PAGE {
+                return;
+            }
+
+            let block_size = (*h).block_size as usize;
+            let header_size = (*h).header_size as usize;
+            let header_page_addr = h as usize;
+
+            if ptr_addr < header_page_addr + header_size {
+                return;
+            }
+
+            let offset = ptr_addr - (header_page_addr + header_size);
+            let index = offset / block_size;
+            let obj_count = (*h).obj_count as usize;
+            if index >= obj_count {
+                return;
+            }
+
+            if !(*h).is_allocated(index) {
+                return;
+            }
+
+            let gc_box_addr =
+                (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
+            // FIX bug620: Second is_allocated check BEFORE reading has_gen_old (prevents TOCTOU).
+            if !(*h).is_allocated(index) {
+                return;
+            }
+
+            let _has_gen_old = (*gc_box_addr).has_gen_old_flag();
+
+            // FIX bug620: Third is_allocated check AFTER has_gen_old read (prevents TOCTOU).
+            // Note: Unlike gc_cell_validate_and_barrier, we do NOT check gen_old here.
+            // mark_page_dirty_for_borrow must ALWAYS mark dirty to ensure children
+            // are traced during minor GC (bug583).
+            if !(*h).is_allocated(index) {
+                return;
+            }
+
+            (*h).set_dirty(index);
+            heap.add_to_dirty_pages(header);
         }
     });
 }
@@ -3072,9 +3259,20 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                         return;
                     }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    // Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug463).
+                    // Must verify slot is still allocated before reading any GcBox fields.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     // Cache flag to avoid TOCTOU between check and barrier (bug133).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
+                        return;
+                    }
+                    // FIX bug542: Third `is_allocated` check AFTER has_gen_old read - prevents TOCTOU.
+                    // Must verify slot is still allocated before returning to caller.
+                    // Matches small object path pattern.
+                    if !(*h_ptr).is_allocated(0) {
                         return;
                     }
                     (NonNull::new_unchecked(h_ptr), 0_usize)
@@ -3099,11 +3297,22 @@ pub fn unified_write_barrier(ptr: *const u8, incremental_active: bool) {
                     if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
+                    // Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug463).
+                    // Must verify slot is still allocated before reading any GcBox fields.
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     // Cache flag to avoid TOCTOU between check and barrier (bug133).
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
+                        return;
+                    }
+                    // FIX bug542: Third `is_allocated` check AFTER has_gen_old read - prevents TOCTOU.
+                    // Must verify slot is still allocated before returning to caller.
+                    // Matches gc_cell_validate_and_barrier (bug531) and incremental_write_barrier (bug530) patterns.
+                    if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
                     (h, index)
@@ -3169,6 +3378,11 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                         return;
                     }
                     let gc_box_addr = (head_addr + h_size) as *const GcBox<()>;
+                    // Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug457).
+                    // Must verify slot is still allocated before reading any GcBox fields.
+                    if !(*h_ptr).is_allocated(0) {
+                        return;
+                    }
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h_ptr).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
                         return;
@@ -3202,11 +3416,21 @@ pub fn incremental_write_barrier(ptr: *const u8) {
                     if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
-                    // Cache flag to avoid TOCTOU between check and barrier (bug133).
+                    // Second is_allocated check BEFORE reading has_gen_old to fix TOCTOU (bug462).
+                    // Must verify slot is still allocated before reading any GcBox fields.
+                    if !(*h.as_ptr()).is_allocated(index) {
+                        return;
+                    }
                     let gc_box_addr =
                         (header_page_addr + header_size + index * block_size) as *const GcBox<()>;
                     let has_gen_old = (*gc_box_addr).has_gen_old_flag();
                     if (*h.as_ptr()).generation.load(Ordering::Acquire) == 0 && !has_gen_old {
+                        return;
+                    }
+                    // FIX bug530: Third is_allocated check AFTER has_gen_old read - prevents TOCTOU.
+                    // Must verify slot is still allocated before returning to caller.
+                    // Large object path has this check (bug499); small object path was missing it.
+                    if !(*h.as_ptr()).is_allocated(index) {
                         return;
                     }
                     (h, index)
@@ -3448,9 +3672,16 @@ impl Drop for ThreadLocalHeap {
         let mut registry = thread_registry()
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if self.tcb.state.load(Ordering::SeqCst) == THREAD_STATE_EXECUTING {
+
+        if self.tcb.state.load(Ordering::SeqCst) == THREAD_STATE_SAFEPOINT {
+            self.tcb.park_cond.notify_all();
+            self.tcb
+                .state
+                .store(THREAD_STATE_EXECUTING, Ordering::Release);
+        } else if self.tcb.state.load(Ordering::SeqCst) == THREAD_STATE_EXECUTING {
             registry.active_count.fetch_sub(1, Ordering::SeqCst);
         }
+
         registry.unregister_thread(&self.tcb);
     }
 }
@@ -3992,4 +4223,10 @@ pub unsafe fn reset_for_testing() {
 
     // Clear current thread's local heap
     clear_local_heap();
+
+    // Clear cross-thread SATB buffers (bug493)
+    // These buffers are global and retain entries between tests
+    CROSS_THREAD_SATB_BUFFER.lock().clear();
+    CROSS_THREAD_SATB_OVERFLOW_BUFFER.lock().clear();
+    CROSS_THREAD_SATB_EMERGENCY_BUFFER.lock().clear();
 }

@@ -334,7 +334,20 @@ impl AsyncHandleScope {
                     "AsyncHandleScope::handle: object slot was swept"
                 );
             }
+            // FIX bug476: Get generation BEFORE dereference to detect slot reuse.
+            // If slot is swept and reused between is_allocated check and dereference,
+            // generation will differ.
+            let pre_generation = (*gc_box_ptr).generation();
+
             let gc_box = &*gc_box_ptr;
+
+            // FIX bug476: Verify generation hasn't changed (slot was NOT reused).
+            if pre_generation != gc_box.generation() {
+                panic!(
+                    "AsyncHandleScope::handle: slot was reused between liveness check and dereference"
+                );
+            }
+
             assert!(
                 !gc_box.has_dead_flag()
                     && gc_box.dropping_state() == 0
@@ -514,10 +527,17 @@ impl<'scope> AsyncHandleGuard<'scope> {
 ///
 /// # Safety
 ///
-/// `AsyncHandle` is `Send + Sync` because:
-/// 1. The underlying data is GC-allocated and immutable
-/// 2. The scope ID check prevents use-after-free in debug builds
-/// 3. The GC can safely trace handles from any thread
+/// `AsyncHandle<T>: Send` requires `T: Send`. The handle itself is just a raw pointer
+/// and scope ID that can be safely sent to another thread. The actual data access
+/// through `get()` requires the calling thread to be a GC thread.
+///
+/// `AsyncHandle<T>: Sync` requires `T: Sync`. This ensures that shared references
+/// to the handle (`&AsyncHandle<T>`) are only available when the inner data can
+/// be safely accessed from multiple threads.
+///
+/// The underlying data is GC-allocated and immutable from the Rust type system's
+/// perspective (no &mut access), but T may contain interior mutability types
+/// (`Cell`, `RefCell`, etc.) which are accounted for in the Send/Sync bounds.
 ///
 /// # Example
 ///
@@ -546,9 +566,17 @@ impl<'scope> AsyncHandleGuard<'scope> {
 /// }
 /// ```
 pub struct AsyncHandle<T: Trace + 'static> {
-    slot: *const HandleSlot,
+    slot: *mut HandleSlot,
     scope_id: u64,
     _marker: PhantomData<*const T>,
+}
+
+impl<T: Trace + 'static> Drop for AsyncHandle<T> {
+    fn drop(&mut self) {
+        unsafe {
+            (*self.slot).set(std::ptr::null());
+        }
+    }
 }
 
 impl<T: Trace + 'static> AsyncHandle<T> {
@@ -635,11 +663,12 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("AsyncHandle::get: object is being dropped");
             }
-            assert_eq!(
-                pre_generation,
-                gc_box.generation(),
-                "AsyncHandle::get: slot was reused before value read (generation mismatch)"
-            );
+            // FIX bug453: If generation changed, undo the increment to prevent ref_count leak.
+            // This matches the pattern used in GcBoxWeakRef::upgrade (bug413 fix).
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("AsyncHandle::get: slot was reused before value read (generation mismatch)");
+            }
 
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
@@ -660,16 +689,28 @@ impl<T: Trace + 'static> AsyncHandle<T> {
                 panic!("AsyncHandle::get: object became dead/dropping after inc_ref");
             }
 
-            crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
-
-            // Second is_allocated check after dec_ref (bug379 fix).
-            // If slot was swept after dec_ref, we could read from a freed object.
+            // The temporary ref count increment from try_inc_ref_if_nonzero() protects the
+            // object during the borrow. We do NOT undo it here because:
+            // 1. get() returns &T (a reference, not a Gc), so there's no ownership transfer
+            // 2. The reference is returned to the caller who may use it beyond this call
+            // 3. The object's lifetime is protected by the handle's AsyncHandleScope
+            // 4. Unconditionally decrementing would leak ref counts on every call (bug523)
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
                 assert!(
                     (*header.as_ptr()).is_allocated(idx),
                     "AsyncHandle::get: object slot was swept after dec_ref"
                 );
+            }
+
+            // FIX bug611: Add final dead_flag/dropping_state/is_under_construction recheck.
+            // This matches Handle::get() pattern (mod.rs:362-367) and prevents reading
+            // from an object that became dead/dropping after the undo block.
+            if gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+                || gc_box.is_under_construction()
+            {
+                panic!("AsyncHandle::get: object became dead/dropping after undo block");
             }
 
             let value = gc_box.value();
@@ -741,11 +782,11 @@ impl<T: Trace + 'static> AsyncHandle<T> {
         if !gc_box.try_inc_ref_if_nonzero() {
             panic!("AsyncHandle::get_unchecked: object is being dropped");
         }
-        assert_eq!(
-            pre_generation,
-            gc_box.generation(),
-            "AsyncHandle::get_unchecked: slot was reused before value read (generation mismatch)"
-        );
+        // FIX bug453: If generation changed, undo the increment to prevent ref_count leak.
+        if pre_generation != gc_box.generation() {
+            GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+            panic!("AsyncHandle::get_unchecked: slot was reused before value read (generation mismatch)");
+        }
 
         if let Some(idx) = unsafe { crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) } {
             let header = unsafe { crate::heap::ptr_to_page_header(gc_box_ptr as *const u8) };
@@ -764,17 +805,22 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             panic!("AsyncHandle::get_unchecked: object became dead/dropping after inc_ref");
         }
 
-        crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
-
-        // Second is_allocated check after dec_ref (bug379 fix).
-        // If slot was swept after dec_ref, we could read from a freed object.
+        // FIX bug608: Add second is_allocated check after undo block.
+        // This matches the pattern in Handle::get() and prevents TOCTOU where
+        // lazy sweep could reclaim the slot between the undo block and value() call.
         if let Some(idx) = unsafe { crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) } {
             let header = unsafe { crate::heap::ptr_to_page_header(gc_box_ptr as *const u8) };
             assert!(
                 unsafe { (*header.as_ptr()).is_allocated(idx) },
-                "AsyncHandle::get_unchecked: object slot was swept after dec_ref"
+                "AsyncHandle::get_unchecked: object slot was swept after undo block"
             );
         }
+
+        // The temporary ref count increment from try_inc_ref_if_nonzero() protects the
+        // object during the borrow. We do NOT undo it here because:
+        // 1. get_unchecked() returns &T (a reference, not a Gc), so there's no ownership transfer
+        // 2. The reference is returned to the caller who may use it beyond this call
+        // 3. Unconditionally decrementing would leak ref counts on every call (bug523)
 
         let value = gc_box.value();
         value
@@ -856,11 +902,11 @@ impl<T: Trace + 'static> AsyncHandle<T> {
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("AsyncHandle::to_gc: object is being dropped by another thread");
             }
-            assert_eq!(
-                pre_generation,
-                gc_box.generation(),
-                "AsyncHandle::to_gc: slot was reused between pre-check and inc_ref (generation mismatch)"
-            );
+            // FIX bug453: If generation changed, undo the increment to prevent ref_count leak.
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("AsyncHandle::to_gc: slot was reused between pre-check and inc_ref (generation mismatch)");
+            }
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
                 assert!(
@@ -892,8 +938,6 @@ impl<T: Trace + 'static> Clone for AsyncHandle<T> {
         }
     }
 }
-
-impl<T: Trace + 'static> Copy for AsyncHandle<T> {}
 
 unsafe impl<T: Trace + Send + 'static> Send for AsyncHandle<T> {}
 unsafe impl<T: Trace + Sync + 'static> Sync for AsyncHandle<T> {}
@@ -1296,6 +1340,7 @@ impl GcScope {
                 validate_gc_in_current_heap(tracked.ptr as *const u8);
 
                 // Liveness checks: ensure tracked object was not swept or reclaimed (bug248).
+                let pre_generation: u32;
                 unsafe {
                     if let Some(idx) = crate::heap::ptr_to_object_index(tracked.ptr as *const u8) {
                         let header = crate::heap::ptr_to_page_header(tracked.ptr as *const u8);
@@ -1304,8 +1349,18 @@ impl GcScope {
                             "GcScope::spawn: tracked object was deallocated"
                         );
                     }
+                    // Get generation BEFORE dereference to detect slot reuse (bug496).
+                    // If slot is swept and reused between is_allocated check and dereference,
+                    // generation will differ.
+                    pre_generation = (*tracked.ptr).generation();
                 }
                 let gc_box = unsafe { &*tracked.ptr };
+                // FIX bug496: Verify generation hasn't changed (slot was NOT reused).
+                if pre_generation != gc_box.generation() {
+                    panic!(
+                        "GcScope::spawn: slot was reused between liveness check and dereference"
+                    );
+                }
                 assert!(
                     !gc_box.has_dead_flag()
                         && gc_box.dropping_state() == 0
@@ -1501,7 +1556,16 @@ impl AsyncGcHandle {
                     }
                 }
 
+                // FIX bug489: Get generation BEFORE dereference to detect slot reuse.
+                let pre_generation = (*gc_box_ptr).generation();
+
                 let gc_box = &*gc_box_ptr;
+
+                // FIX bug489: Verify generation hasn't changed (slot was NOT reused).
+                if pre_generation != gc_box.generation() {
+                    panic!("AsyncGcHandle::downcast_ref: slot was reused between liveness check and dereference");
+                }
+
                 if gc_box.is_under_construction()
                     || gc_box.has_dead_flag()
                     || gc_box.dropping_state() != 0

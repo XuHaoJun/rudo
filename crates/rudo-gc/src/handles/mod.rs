@@ -325,15 +325,28 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("Handle::get: object is being dropped");
             }
-            assert_eq!(
-                pre_generation,
-                gc_box.generation(),
-                "Handle::get: slot was reused before value read (generation mismatch)"
-            );
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("Handle::get: slot was reused before value read (generation mismatch)");
+            }
 
-            crate::GcBox::dec_ref(gc_box_ptr.cast_mut());
+            if gc_box.has_dead_flag()
+                || gc_box.dropping_state() != 0
+                || gc_box.is_under_construction()
+            {
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("Handle::get: object became dead/dropping after inc_ref");
+            }
 
-            // Second is_allocated check after dec_ref to fix TOCTOU with lazy sweep (bug372/bug385).
+            // The temporary ref count increment from try_inc_ref_if_nonzero() protects the
+            // object during the borrow. We do NOT undo it here because:
+            // 1. get() returns &T (a reference, not a Gc), so there's no ownership transfer
+            // 2. The reference is returned to the caller who may use it beyond this call
+            // 3. The object's lifetime is protected by the handle's HandleScope
+            // 4. Unconditionally decrementing would leak ref counts on every call (bug523)
+            // This matches AsyncHandle::get() behavior (see bug523 comment in async.rs).
+
+            // Second is_allocated check after inc_ref to fix TOCTOU with lazy sweep (bug372/bug385).
             // If slot was swept between dec_ref and value read, we could
             // access a dropped value.
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
@@ -414,11 +427,10 @@ impl<'scope, T: Trace + 'static> Handle<'scope, T> {
             if !gc_box.try_inc_ref_if_nonzero() {
                 panic!("Handle::to_gc: object is being dropped by another thread");
             }
-            assert_eq!(
-                pre_generation,
-                gc_box.generation(),
-                "Handle::to_gc: slot was reused between pre-check and inc_ref (generation mismatch)"
-            );
+            if pre_generation != gc_box.generation() {
+                GcBox::undo_inc_ref(gc_box_ptr.cast_mut());
+                panic!("Handle::to_gc: slot was reused between pre-check and inc_ref (generation mismatch)");
+            }
             if let Some(idx) = crate::heap::ptr_to_object_index(gc_box_ptr as *const u8) {
                 let header = crate::heap::ptr_to_page_header(gc_box_ptr as *const u8);
                 assert!(

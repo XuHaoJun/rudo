@@ -638,13 +638,11 @@ fn wake_waiting_threads() {
     let registry = crate::heap::thread_registry().lock().unwrap();
     let mut woken_count = 0;
     for tcb in &registry.threads {
-        // Clear gc_requested for ALL threads to prevent hangs in future GC cycles
-        tcb.gc_requested.store(false, Ordering::Release);
-
         if tcb.state.load(Ordering::Acquire) == crate::heap::THREAD_STATE_SAFEPOINT {
             tcb.park_cond.notify_all();
             tcb.state
                 .store(crate::heap::THREAD_STATE_EXECUTING, Ordering::Release);
+            tcb.gc_requested.store(false, Ordering::Release);
             woken_count += 1;
         }
     }
@@ -686,12 +684,11 @@ fn perform_single_threaded_collect_with_wake() {
         // and skip rendezvous entirely (safe since GC already completed)
         let mut woken_count = 0;
         for tcb in &registry.threads {
-            tcb.gc_requested.store(false, Ordering::SeqCst);
-
             if tcb.state.load(Ordering::Acquire) == crate::heap::THREAD_STATE_SAFEPOINT {
                 tcb.park_cond.notify_all();
                 tcb.state
                     .store(crate::heap::THREAD_STATE_EXECUTING, Ordering::Release);
+                tcb.gc_requested.store(false, Ordering::SeqCst);
                 woken_count += 1;
             }
         }
@@ -840,6 +837,10 @@ fn perform_single_threaded_collect_full() {
     });
 
     IN_COLLECT.with(|in_collect| in_collect.set(false));
+
+    // FIX bug492: Reset IncrementalMarkState after full GC completes.
+    // Without this, incremental GC may resume with stale state (phase != Idle).
+    IncrementalMarkState::global().set_phase(MarkPhase::Idle);
 }
 
 /// Perform full collection as the collector thread.
@@ -1028,6 +1029,8 @@ fn perform_multi_threaded_collect_full() {
         .set_gc_in_progress(false);
 
     IN_COLLECT.with(|in_collect| in_collect.set(false));
+
+    IncrementalMarkState::global().set_phase(MarkPhase::Idle);
 }
 
 /// Minor collection for a heap in multi-threaded context.
@@ -1220,19 +1223,34 @@ unsafe fn mark_and_push_to_worker_queue(
                             break; // Already marked by another thread, slot valid
                         }
                         Ok(true) => {
-                            let marked_generation = (*gc_box.as_ptr()).generation();
                             if !(*header.as_ptr()).is_allocated(idx) {
-                                let current_generation = (*gc_box.as_ptr()).generation();
-                                if current_generation != marked_generation {
-                                    return;
-                                }
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                return;
+                            }
+                            let marked_generation = (*gc_box.as_ptr()).generation();
+                            if (*gc_box.as_ptr()).generation() != marked_generation {
                                 (*header.as_ptr()).clear_mark_atomic(idx);
                                 return;
                             }
                             break;
                         }
-                        Err(()) => {} // CAS failed, retry
+                        Err(()) => {
+                            // FIX bug573: Check is_allocated before retry.
+                            // If CAS failed because lazy sweep deallocated the slot,
+                            // retrying on a deallocated slot is UB.
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                return;
+                            }
+                        }
                     }
+                }
+                if (*gc_box.as_ptr()).is_under_construction() {
+                    (*header.as_ptr()).clear_mark_atomic(idx);
+                    return;
+                }
+                if !(*header.as_ptr()).is_allocated(idx) {
+                    (*header.as_ptr()).clear_mark_atomic(idx);
+                    return;
                 }
             }
         }
@@ -1333,8 +1351,11 @@ fn mark_minor_roots_parallel(
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                // Add to first worker queue (will be distributed by work stealing)
-                worker_queues[0].push(gc_box_ptr);
+                #[allow(clippy::ptr_as_ptr)]
+                let gc_box = std::ptr::NonNull::new(gc_box_ptr as *mut GcBox<()>);
+                if let Some(gc_box) = gc_box {
+                    mark_and_push_to_worker_queue(obj_ptr, gc_box, &worker_queues, num_workers);
+                }
                 continue; // Large objects don't use per-object dirty tracking
             }
             dirty_pages.push(header);
@@ -1349,7 +1370,11 @@ fn mark_minor_roots_parallel(
                 let obj_ptr = header.cast::<u8>().add((*header).header_size as usize);
                 #[allow(clippy::cast_ptr_alignment)]
                 let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                worker_queues[0].push(gc_box_ptr);
+                #[allow(clippy::ptr_as_ptr)]
+                let gc_box = std::ptr::NonNull::new(gc_box_ptr as *mut GcBox<()>);
+                if let Some(gc_box) = gc_box {
+                    mark_and_push_to_worker_queue(obj_ptr, gc_box, &worker_queues, num_workers);
+                }
             } else {
                 dirty_pages.push(header);
             }
@@ -1370,7 +1395,11 @@ fn mark_minor_roots_parallel(
                     let obj_ptr = header.cast::<u8>().add(header_size + (i * block_size));
                     #[allow(clippy::cast_ptr_alignment)]
                     let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-                    worker_queues[worker_idx].push(gc_box_ptr);
+                    #[allow(clippy::ptr_as_ptr)]
+                    let gc_box = std::ptr::NonNull::new(gc_box_ptr as *mut GcBox<()>);
+                    if let Some(gc_box) = gc_box {
+                        mark_and_push_to_worker_queue(obj_ptr, gc_box, &worker_queues, num_workers);
+                    }
                 }
             }
         }
@@ -1842,14 +1871,21 @@ fn collect_major_incremental(heap: &mut LocalHeap) -> CollectResult {
     if remaining > 0 || dirty_pages > 0 {
         let heaps_mut: &mut [&mut LocalHeap; 1] = &mut [heap];
         execute_final_mark(heaps_mut);
+        // FIX bug487: execute_final_mark sets the phase based on remaining work.
+        // If remaining > 0, it sets phase to Marking (to continue marking).
+        // We should NOT overwrite this.
+        // If remaining == 0, execute_final_mark already set phase to Sweeping.
+    } else {
+        state.set_phase(MarkPhase::Sweeping);
     }
 
-    state.set_phase(MarkPhase::Sweeping);
-
     timer.start();
+    // FIX bug490: Always sweep after final_mark, even when phase is Marking.
+    // execute_final_mark leaves phase as Marking when remaining > 0 (bug487).
+    // But we're in a safepoint (all mutators stopped), so it's safe to sweep.
+    // This prevents memory leak of dead objects when fallback occurs.
     let reclaimed = sweep_segment_pages(heap, false);
     let reclaimed_large = sweep_large_objects(heap, false);
-
     promote_all_pages(heap);
     timer.end_sweep();
 
@@ -2089,19 +2125,33 @@ pub unsafe fn mark_object_minor(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor
                     return; // Already marked by another thread, slot valid
                 }
                 Ok(true) => {
-                    let marked_generation = (*ptr.as_ptr()).generation();
+                    // FIX bug559: Check is_allocated FIRST to avoid UB.
+                    // Reading generation from a deallocated slot is undefined behavior.
                     if !(*header.as_ptr()).is_allocated(index) {
-                        let current_generation = (*ptr.as_ptr()).generation();
-                        if current_generation != marked_generation {
-                            return;
-                        }
+                        // Slot was swept - ALWAYS clear stale mark.
+                        (*header.as_ptr()).clear_mark_atomic(index);
+                        return;
+                    }
+                    // Now safe to read generation from guaranteed allocated slot
+                    let marked_generation = (*ptr.as_ptr()).generation();
+                    if (*ptr.as_ptr()).generation() != marked_generation {
+                        (*header.as_ptr()).clear_mark_atomic(index);
+                        return;
+                    }
+                    // FIX bug546: Skip objects under construction (e.g. Gc::new_cyclic).
+                    // Matches worker_mark_loop (bug469), mark_object_black (bug238).
+                    if (*ptr.as_ptr()).is_under_construction() {
                         (*header.as_ptr()).clear_mark_atomic(index);
                         return;
                     }
                     visitor.objects_marked += 1;
                     break;
                 }
-                Err(()) => {} // CAS failed, retry
+                Err(()) => {
+                    if !(*header.as_ptr()).is_allocated(index) {
+                        return;
+                    }
+                }
             }
         }
 
@@ -2204,22 +2254,20 @@ fn sweep_phase1_finalize(heap: &LocalHeap, only_young: bool) {
                     let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
                     if weak_count > 0 {
-                        // Has weak refs - drop value but keep allocation
                         if !dead_flag {
                             ((*gc_box_ptr).drop_fn)(obj_ptr);
                             (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
                             (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
                             (*gc_box_ptr).set_dead();
                         }
+                        // FIX bug567: Always clear allocated bit for slots with weak_count > 0.
+                        // Even if dead_flag is already set (from a previous GC cycle),
+                        // the slot should be freed. Otherwise, when weak_count later
+                        // becomes 0, sweep_phase1 will skip the slot (dead_flag == true)
+                        // and the slot will never be reclaimed.
+                        (*header).clear_allocated(i);
                     } else {
-                        // No weak refs - will be fully reclaimed
-                        // Execute drop_fn now (phase 1)
                         ((*gc_box_ptr).drop_fn)(obj_ptr);
-
-                        // CRITICAL FIX: Mark as dead so phase 2 knows to reclaim.
-                        // Without this, has_dead_flag() returns false in phase 2,
-                        // objects are never reclaimed, and the next GC cycle will
-                        // try to drop them again - use-after-free!
                         (*gc_box_ptr).set_dead();
                     }
                 }
@@ -2398,19 +2446,40 @@ pub unsafe fn mark_object(ptr: NonNull<GcBox<()>>, visitor: &mut GcVisitor) {
                         return; // Already marked by another thread, no push needed
                     }
                     Ok(true) => {
-                        let marked_generation = (*ptr.as_ptr()).generation();
+                        // FIX bug559: Check is_allocated FIRST to avoid UB.
+                        // Reading generation from a deallocated slot is undefined behavior.
                         if !(*header.as_ptr()).is_allocated(idx) {
-                            let current_generation = (*ptr.as_ptr()).generation();
-                            if current_generation != marked_generation {
-                                return;
-                            }
+                            // Slot was swept - ALWAYS clear stale mark.
+                            (*header.as_ptr()).clear_mark_atomic(idx);
+                            return;
+                        }
+                        // Now safe to read generation from guaranteed allocated slot
+                        let marked_generation = (*ptr.as_ptr()).generation();
+                        if (*ptr.as_ptr()).generation() != marked_generation {
+                            (*header.as_ptr()).clear_mark_atomic(idx);
+                            return;
+                        }
+                        // FIX bug585: Skip objects under construction (e.g. Gc::new_cyclic).
+                        // Matches mark_and_trace_incremental (bug547), mark_object_minor (bug546),
+                        // worker_mark_loop (bug469), mark_object_black (bug238).
+                        if (*ptr.as_ptr()).is_under_construction() {
                             (*header.as_ptr()).clear_mark_atomic(idx);
                             return;
                         }
                         visitor.objects_marked += 1;
+                        // FIX bug632: Re-verify is_allocated after successful mark, before reading generation.
+                        // The slot could have been deallocated by lazy sweep between break and read.
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            (*header.as_ptr()).clear_mark_atomic(idx);
+                            return;
+                        }
                         break;
                     }
-                    Err(()) => {} // CAS failed, retry
+                    Err(()) => {
+                        if !(*header.as_ptr()).is_allocated(idx) {
+                            return;
+                        }
+                    }
                 }
             }
         } else {
@@ -2433,12 +2502,6 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
     }
 
     if let Some(idx) = crate::heap::ptr_to_object_index(ptr.as_ptr().cast()) {
-        if visitor.kind == VisitorKind::Minor
-            && (*header.as_ptr()).generation.load(Ordering::Acquire) > 0
-        {
-            return;
-        }
-
         // Skip if slot was swept and potentially reused; avoids UAF when lazy sweep
         // runs concurrently with cross-thread SATB buffer processing.
         if !(*header.as_ptr()).is_allocated(idx) {
@@ -2449,38 +2512,58 @@ unsafe fn mark_and_trace_incremental(ptr: NonNull<GcBox<()>>, visitor: &mut GcVi
             match (*header.as_ptr()).try_mark(idx) {
                 Ok(false) => {
                     if !(*header.as_ptr()).is_allocated(idx) {
+                        // FIX bug552: Slot was swept - clear stale mark before returning.
+                        // Even though another thread marked it, the mark is stale now.
+                        (*header.as_ptr()).clear_mark_atomic(idx);
                         return;
                     }
                     return; // Already marked by another thread, no push needed
                 }
                 Ok(true) => {
+                    // FIX bug557: Check is_allocated FIRST to avoid UB.
+                    // Reading generation from a deallocated slot is undefined behavior.
                     if !(*header.as_ptr()).is_allocated(idx) {
-                        return;
-                    }
-                    let marked_generation = (*ptr.as_ptr()).generation();
-                    if !(*header.as_ptr()).is_allocated(idx) {
-                        let current_generation = (*ptr.as_ptr()).generation();
-                        if current_generation != marked_generation {
-                            return;
-                        }
+                        // FIX bug552: Slot was swept - ALWAYS clear stale mark.
                         (*header.as_ptr()).clear_mark_atomic(idx);
                         return;
                     }
+                    // Now safe to read generation from guaranteed allocated slot
+                    let marked_generation = (*ptr.as_ptr()).generation();
                     if (*ptr.as_ptr()).generation() != marked_generation {
+                        // FIX bug549: Slot was reused with new object - clear stale mark.
+                        (*header.as_ptr()).clear_mark_atomic(idx);
+                        return;
+                    }
+                    // FIX bug547: Skip objects under construction (e.g. Gc::new_cyclic).
+                    // Matches mark_object_minor (bug546), worker_mark_loop (bug469), mark_object_black (bug238).
+                    if (*ptr.as_ptr()).is_under_construction() {
+                        (*header.as_ptr()).clear_mark_atomic(idx);
                         return;
                     }
                     visitor.objects_marked += 1;
+                    // FIX bug566: Re-verify is_allocated after successful mark, before reading generation.
+                    // The slot could have been deallocated by lazy sweep between break and read.
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        (*header.as_ptr()).clear_mark_atomic(idx);
+                        return;
+                    }
+                    let enqueue_generation = (*ptr.as_ptr()).generation();
+                    if visitor.kind != VisitorKind::Minor || enqueue_generation == 0 {
+                        visitor.worklist.push((ptr, enqueue_generation));
+                    }
                     break;
                 }
-                Err(()) => {} // CAS failed, retry
+                Err(()) => {
+                    if !(*header.as_ptr()).is_allocated(idx) {
+                        return;
+                    }
+                }
             }
         }
     } else {
+        #[allow(clippy::needless_return)]
         return;
     }
-
-    let enqueue_generation = (*ptr.as_ptr()).generation();
-    visitor.worklist.push((ptr, enqueue_generation));
 }
 
 /// Sweep Large Object Space.
@@ -2499,7 +2582,7 @@ fn sweep_large_objects(heap: &mut LocalHeap, only_young: bool) -> usize {
                 continue;
             }
 
-            if !(*header).is_marked(0) {
+            if !(*header).is_marked(0) && (*header).is_allocated(0) {
                 let block_size = (*header).block_size as usize;
                 let header_size = (*header).header_size as usize;
                 let obj_ptr = header.cast::<u8>().add(header_size);
@@ -2612,19 +2695,20 @@ unsafe fn lazy_sweep_page(
 
             let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
-            if weak_count > 0 {
-                if !dead_flag {
-                    ((*gc_box_ptr).drop_fn)(obj_ptr);
-                    (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
-                    (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
-                    (*gc_box_ptr).set_dead();
-                }
+            ((*gc_box_ptr).drop_fn)(obj_ptr);
+            if weak_count > 0 && !dead_flag {
+                (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
+                (*gc_box_ptr).set_dead();
+                (*header).clear_allocated(i);
+                reclaimed += 1;
                 all_dead = false;
             } else {
-                ((*gc_box_ptr).drop_fn)(obj_ptr);
-                (*gc_box_ptr).set_dead();
-                // Clear GEN_OLD_FLAG so reused slots don't inherit stale barrier state (bug135).
+                // FIX bug522: Don't set DEAD_FLAG before reuse - slot will be reused and
+                // DEAD_FLAG should not be inherited by the new object. Matches lazy_sweep_page_all_dead.
                 (*gc_box_ptr).clear_gen_old();
+                (*gc_box_ptr).clear_under_construction();
+                (*gc_box_ptr).clear_is_dropping();
 
                 #[allow(clippy::cast_ptr_alignment)]
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
@@ -2743,17 +2827,17 @@ unsafe fn lazy_sweep_page_all_dead(
 
             let (weak_count, dead_flag) = (*gc_box_ptr).weak_count_and_dead_flag();
 
-            if weak_count > 0 {
-                if !dead_flag {
-                    ((*gc_box_ptr).drop_fn)(obj_ptr);
-                    (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
-                    (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
-                    (*gc_box_ptr).set_dead();
-                }
+            ((*gc_box_ptr).drop_fn)(obj_ptr);
+            if weak_count > 0 && !dead_flag {
+                (*gc_box_ptr).drop_fn = GcBox::<()>::no_op_drop;
+                (*gc_box_ptr).trace_fn = GcBox::<()>::no_op_trace;
+                (*gc_box_ptr).set_dead();
+                (*header).clear_allocated(i);
+                reclaimed += 1;
             } else {
-                ((*gc_box_ptr).drop_fn)(obj_ptr);
-                // Clear GEN_OLD_FLAG so reused slots don't inherit stale barrier state (bug135).
                 (*gc_box_ptr).clear_gen_old();
+                (*gc_box_ptr).clear_under_construction();
+                (*gc_box_ptr).clear_is_dropping();
 
                 #[allow(clippy::cast_ptr_alignment)]
                 let obj_cast = obj_ptr.cast::<Option<u16>>();
@@ -2868,11 +2952,18 @@ pub fn sweep_pending(heap: &mut LocalHeap, num_pages: usize) -> usize {
             let header_size = PageHeader::header_size(block_size);
 
             if header.read().all_dead() {
-                lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
+                let reclaimed =
+                    lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
                 (*header).clear_all_dead();
                 std::sync::atomic::fence(Ordering::Release);
-                (*header).clear_needs_sweep();
-                (*header).set_dead_count(0);
+                if reclaimed == obj_count {
+                    (*header).clear_needs_sweep();
+                    (*header).set_dead_count(0);
+                } else {
+                    (*header).set_needs_sweep();
+                    #[allow(clippy::cast_possible_truncation)]
+                    (*header).set_dead_count((obj_count - reclaimed) as u16);
+                }
                 swept += 1;
             } else {
                 let (reclaimed, all_dead) =
@@ -2938,12 +3029,19 @@ pub unsafe fn sweep_specific_page(
         let header_size = crate::heap::PageHeader::header_size(block_size);
 
         if header.read().all_dead() {
-            lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
+            let actual_reclaimed =
+                lazy_sweep_page_all_dead(page_ptr, block_size, obj_count, header_size);
             (*header).clear_all_dead();
             std::sync::atomic::fence(Ordering::Release);
-            (*header).clear_needs_sweep();
-            (*header).set_dead_count(0);
-            reclaimed = obj_count;
+            if actual_reclaimed == obj_count {
+                (*header).clear_needs_sweep();
+                (*header).set_dead_count(0);
+            } else {
+                (*header).set_needs_sweep();
+                #[allow(clippy::cast_possible_truncation)]
+                (*header).set_dead_count((obj_count - actual_reclaimed) as u16);
+            }
+            reclaimed = actual_reclaimed;
         } else {
             let (reclaimed_count, all_dead) =
                 lazy_sweep_page(page_ptr, block_size, obj_count, header_size);

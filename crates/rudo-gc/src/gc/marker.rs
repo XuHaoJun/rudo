@@ -93,7 +93,8 @@ fn push_overflow_work(work: *const GcBox<()>) -> Result<(), *const GcBox<()>> {
                     break;
                 }
             }
-            return Err(work);
+            OVERFLOW_QUEUE_USERS.fetch_add(1, Ordering::AcqRel);
+            continue;
         }
         let current = OVERFLOW_QUEUE.load(Ordering::Acquire);
         let current_gen = gen_from_value(current);
@@ -179,9 +180,22 @@ pub fn clear_overflow_queue() {
     // By CASing first, pushers will see odd generation and abort.
     let old_gen = OVERFLOW_QUEUE_CLEAR_GEN.fetch_add(1, Ordering::AcqRel);
 
+    // FIX bug501: Add timeout to prevent deadlock if a thread crashes while
+    // holding OVERFLOW_QUEUE_USERS. If timeout expires, proceed with drain anyway
+    // since the orphaned user count will be cleaned up on next GC cycle.
+    let timeout = std::time::Duration::from_secs(5);
+    let start = std::time::Instant::now();
     loop {
         let users = OVERFLOW_QUEUE_USERS.load(Ordering::Acquire);
         if users == 0 {
+            break;
+        }
+        if start.elapsed() > timeout {
+            #[cfg(feature = "tracing")]
+            tracing::warn!(
+                "clear_overflow_queue: timeout waiting for {} users, proceeding anyway",
+                users
+            );
             break;
         }
         std::hint::spin_loop();
@@ -675,68 +689,6 @@ impl PerThreadMarkQueue {
         self.marked_count.load(Ordering::Relaxed)
     }
 
-    /// Process all objects on an owned page.
-    /// Returns the number of objects marked on this page.
-    unsafe fn process_owned_page(&self, page: NonNull<PageHeader>, kind: VisitorKind) -> usize {
-        let header = page.as_ptr();
-        let mut marked = 0;
-        let block_size = unsafe { (*header).block_size } as usize;
-        let header_size = PageHeader::header_size(block_size);
-        let obj_count = unsafe { (*header).obj_count } as usize;
-
-        for i in 0..obj_count {
-            // Only check is_marked at entry; is_allocated recheck after try_mark is sufficient.
-            // Added second is_allocated check before push to fix TOCTOU (bug260).
-            if unsafe { !(*header).is_marked(i) } {
-                if kind == VisitorKind::Minor
-                    && unsafe { (*header).generation.load(Ordering::Acquire) } > 0
-                {
-                    continue;
-                }
-
-                let obj_ptr = unsafe { page.cast::<u8>().add(header_size + i * block_size) };
-                #[allow(clippy::cast_ptr_alignment)]
-                let gc_box_ptr = obj_ptr.cast::<GcBox<()>>();
-
-                // Use try_mark + recheck pattern to fix TOCTOU with lazy sweep
-                unsafe {
-                    loop {
-                        match (*header).try_mark(i) {
-                            Ok(false) => {
-                                // Re-check is_allocated to fix TOCTOU with lazy sweep (bug292).
-                                // If slot was swept after we entered the loop, skip it.
-                                if !(*header).is_allocated(i) {
-                                    break;
-                                }
-                                break; // Already marked by another thread, slot is still valid
-                            }
-                            Ok(true) => {
-                                // Re-check is_allocated to fix TOCTOU with lazy sweep (bug292).
-                                // If slot was swept after try_mark, clear mark and skip.
-                                if !(*header).is_allocated(i) {
-                                    (*header).clear_mark_atomic(i);
-                                    break;
-                                }
-                                // Second check to fix TOCTOU (bug260): slot can be swept between
-                                // first check and push. Re-check before pushing.
-                                if !(*header).is_allocated(i) {
-                                    (*header).clear_mark_atomic(i);
-                                    break;
-                                }
-                                marked += 1;
-                                self.push(gc_box_ptr.as_ptr());
-                                break;
-                            }
-                            Err(()) => {} // CAS failed, retry
-                        }
-                    }
-                }
-            }
-        }
-
-        marked
-    }
-
     /// Increment the marked count.
     pub fn inc_marked_count(&self, count: usize) {
         self.marked_count.fetch_add(count, Ordering::Relaxed);
@@ -963,24 +915,36 @@ pub fn worker_mark_loop(
                             // If slot is swept and reused between mark and trace_fn call,
                             // generation will differ and we should skip this object.
                             let marked_generation = (*gc_box_ptr).generation();
-                            if !(*header.as_ptr()).is_allocated(idx) {
-                                let current_generation = (*gc_box_ptr).generation();
-                                if current_generation != marked_generation {
-                                    break; // Slot was reused - skip
-                                }
+                            // FIX bug553: Remove inner is_allocated re-check block.
+                            // The outer check at line 909 already handles is_allocated == false.
+                            // The inner block was dead code that could cause UB by reading generation
+                            // from a deallocated slot. Generation mismatch should always clear mark.
+                            if (*gc_box_ptr).generation() != marked_generation {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                break; // Slot was reused - skip
+                            }
+                            // FIX bug469: Skip objects under construction (e.g. Gc::new_cyclic).
+                            // Matches mark_object_black / mark_new_object_black (bug238).
+                            if (*gc_box_ptr).is_under_construction() {
                                 (*header.as_ptr()).clear_mark_atomic(idx);
                                 break;
                             }
-                            // Verify generation hasn't changed before calling trace_fn (bug427 fix).
-                            // If slot was reused, trace_fn would be called on wrong object data.
-                            if (*gc_box_ptr).generation() != marked_generation {
-                                break; // Slot was reused - skip
+                            // FIX bug529: Second is_allocated re-check before trace_fn.
+                            // If slot was swept after is_under_construction check but before trace_fn,
+                            // clear mark and skip to avoid calling trace_fn on a swept slot.
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                break;
                             }
                             marked += 1;
                             ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
                             break;
                         }
-                        Err(()) => {}
+                        Err(()) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -1119,24 +1083,36 @@ pub fn worker_mark_loop_with_registry(
                             // If slot is swept and reused between mark and trace_fn call,
                             // generation will differ and we should skip this object.
                             let marked_generation = (*gc_box_ptr).generation();
-                            if !(*header.as_ptr()).is_allocated(idx) {
-                                let current_generation = (*gc_box_ptr).generation();
-                                if current_generation != marked_generation {
-                                    break; // Slot was reused - skip
-                                }
+                            // FIX bug553: Remove inner is_allocated re-check block.
+                            // The outer check at line 909 already handles is_allocated == false.
+                            // The inner block was dead code that could cause UB by reading generation
+                            // from a deallocated slot. Generation mismatch should always clear mark.
+                            if (*gc_box_ptr).generation() != marked_generation {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                break; // Slot was reused - skip
+                            }
+                            // FIX bug469: Skip objects under construction (e.g. Gc::new_cyclic).
+                            // Matches mark_object_black / mark_new_object_black (bug238).
+                            if (*gc_box_ptr).is_under_construction() {
                                 (*header.as_ptr()).clear_mark_atomic(idx);
                                 break;
                             }
-                            // Verify generation hasn't changed before calling trace_fn (bug427 fix).
-                            // If slot was reused, trace_fn would be called on wrong object data.
-                            if (*gc_box_ptr).generation() != marked_generation {
-                                break; // Slot was reused - skip
+                            // FIX bug529: Second is_allocated re-check before trace_fn.
+                            // If slot was swept after is_under_construction check but before trace_fn,
+                            // clear mark and skip to avoid calling trace_fn on a swept slot.
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                (*header.as_ptr()).clear_mark_atomic(idx);
+                                break;
                             }
                             marked += 1;
                             ((*gc_box_ptr).trace_fn)(ptr_addr, &mut visitor);
                             break;
                         }
-                        Err(()) => {}
+                        Err(()) => {
+                            if !(*header.as_ptr()).is_allocated(idx) {
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -1157,6 +1133,12 @@ pub fn worker_mark_loop_with_registry(
                     registry.notify_work_available();
                     break;
                 }
+            }
+            // FIX bug508: Fallback to overflow queue to prevent work loss.
+            // If all queues are full, push back to overflow to ensure
+            // work is not lost (matches try_steal_work pattern).
+            while push_overflow_work(obj).is_err() {
+                std::hint::spin_loop();
             }
         }
 

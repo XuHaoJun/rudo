@@ -127,6 +127,13 @@ impl<T: Trace + Send + Sync> GcTokioExt for Gc<T> {
     }
 
     async fn yield_now(&self) {
+        if crate::gc::incremental::is_incremental_marking_active() {
+            let config = crate::get_incremental_config();
+            let budget = config.increment_size;
+            crate::heap::with_heap(|heap| {
+                let _ = crate::gc::incremental::incremental_mark_slice(heap, budget);
+            });
+        }
         task::yield_now().await;
     }
 }
